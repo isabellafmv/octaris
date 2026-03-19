@@ -1,0 +1,31 @@
+;FLAVOR:Marlin
+;TIME:847
+;Filament used: 1.234m
+;Layer height: 0.2
+;MINX:10.0
+;MINY:10.0
+;Generated with Cura_SteamEngine
+M82 ;absolute extrusion mode
+G28 ;Home
+G92 E0
+G0 F600 X10 Y10 Z0.3
+G1 F200 X20 Y10 E0.5
+G1 F200 X20 Y20 E1.0
+G1 F200 X10 Y20 E1.5
+G1 F200 X10 Y10 E2.0
+G0 F600 X10 Y10 Z0.5
+G1 F200 X20 Y10 E2.5
+G1 F1200 X20 Y20 E3.0
+G1 F200 X10 Y20 E3.5
+G1 F200 X10 Y10 E4.0
+M107
+M104 S0
+M140 S0
+;Retract the filament
+G92 E1
+G1 E-1 F300
+G28 X0 Y0
+M84
+M82 ;absolute extrusion mode
+M104 S0
+;End of Gcode
