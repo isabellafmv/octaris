@@ -1,6 +1,6 @@
 import type { PortInfo, SerialLogEntry, SyringeMode, UploadResult } from './types'
 
-const BASE = 'http://localhost:8000'
+const BASE = 'http://127.0.0.1:8000'
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, init)

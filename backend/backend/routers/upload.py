@@ -49,4 +49,5 @@ async def upload_stl(request: Request, file: UploadFile, syringe_mode: str = "le
         "lines_total": len(result.lines),
         "time_estimate_s": result.time_estimate_s,
         "feed_log_entries": len(result.feed_log),
+        "preview_lines": result.lines[:40],
     }

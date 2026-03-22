@@ -73,12 +73,15 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Header */}
-      <div className="px-3 py-2 bg-gray-800 border-b border-gray-700">
-        <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wide">Send G-code</h3>
+      <div
+        className="px-3 py-2 border-b shrink-0"
+        style={{ backgroundColor: '#EDE9DC', borderColor: '#D8D3C8' }}
+      >
+        <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#8B9090' }}>Send G-code</h3>
       </div>
 
       {/* Input area */}
-      <div className="px-3">
+      <div className="px-3 pt-3">
         <div className="flex gap-2">
           <input
             ref={inputRef}
@@ -88,32 +91,33 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
             onKeyDown={handleKeyDown}
             placeholder="e.g. G28, M114, G1 X10 F200"
             disabled={disabled || sending}
-            className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white font-mono text-sm
-              placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-              disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 rounded px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              backgroundColor: '#EDE9DC',
+              border: '1px solid #D8D3C8',
+              color: '#2D3333',
+            }}
           />
           <button
             onClick={() => sendCommand(input)}
             disabled={disabled || sending || !input.trim()}
-            className="px-4 py-2 rounded bg-blue-600 text-white font-medium text-sm
-              hover:bg-blue-500 active:bg-blue-700
-              disabled:opacity-50 disabled:cursor-not-allowed
-              min-w-[60px]"
+            className="px-4 py-2 rounded font-medium text-sm text-white transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed min-w-15"
+            style={{ backgroundColor: '#1A8B8D' }}
           >
             {sending ? '...' : 'Send'}
           </button>
         </div>
         {error && (
-          <p className="mt-2 text-sm text-red-400">{error}</p>
+          <p className="mt-2 text-sm" style={{ color: '#B5614A' }}>{error}</p>
         )}
         {disabled && (
-          <p className="mt-2 text-sm text-amber-400">Connect to the printer to send commands.</p>
+          <p className="mt-2 text-sm" style={{ color: '#A0A8A8' }}>Connect to the printer to send commands.</p>
         )}
       </div>
 
       {/* Quick commands */}
-      <div className="px-3 flex-1">
-        <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Quick Commands</p>
+      <div className="px-3 pt-4 flex-1">
+        <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#8B9090' }}>Quick Commands</p>
         <div className="grid grid-cols-2 gap-2">
           {QUICK_COMMANDS.map(({ label, gcode, style }) => (
             <button
@@ -121,12 +125,11 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
               onClick={() => sendCommand(gcode)}
               disabled={disabled || sending}
               title={gcode}
-              className={`px-3 py-3 rounded font-medium text-sm
-                disabled:opacity-50 disabled:cursor-not-allowed
-                ${style === 'danger'
-                  ? 'bg-red-700 text-white hover:bg-red-600 active:bg-red-800 col-span-2'
-                  : 'bg-gray-700 text-gray-200 hover:bg-gray-600 active:bg-gray-500'
-                }`}
+              className={`px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed${style === 'danger' ? ' col-span-2' : ''}`}
+              style={style === 'danger'
+                ? { backgroundColor: '#9B4A3A', color: 'white' }
+                : { backgroundColor: '#E8E3D8', color: '#5A6060' }
+              }
             >
               <span className="block">{label}</span>
               <span className="block text-xs opacity-60 font-mono">{gcode}</span>
