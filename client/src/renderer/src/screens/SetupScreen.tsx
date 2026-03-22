@@ -74,11 +74,11 @@ export function SetupScreen({
 
       {error && (
         <div
-          className="mx-8 mb-3 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
+          className="mx-8 mb-3 px-4 py-2 rounded-lg text-sm flex items-start justify-between gap-3"
           style={{ backgroundColor: '#FDEAEA', color: '#B54040' }}
         >
-          <span>{error}</span>
-          <button onClick={() => setError(null)} className="ml-3 font-bold text-lg leading-none">&times;</button>
+          <pre className="whitespace-pre-wrap break-all font-sans overflow-y-auto max-h-40 flex-1">{error}</pre>
+          <button onClick={() => setError(null)} className="font-bold text-lg leading-none shrink-0">&times;</button>
         </div>
       )}
 
@@ -95,31 +95,31 @@ export function SetupScreen({
           <STLUpload file={stlFile} onFile={handleFile} onError={setError} />
         </div>
 
-        {/* Right column — nav + STL preview + gcode preview + CTA */}
+        {/* Right column */}
         <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
-          {/* Manual Navigation — shrinks when file loaded */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: '#8B9090' }}>
-                Manual Navigation
-              </span>
-              <button
-                className="text-xs underline disabled:opacity-40"
-                style={{ color: '#1A8B8D' }}
-                disabled={!printerConnected}
-                onClick={() => api.jog('X', 0)}
-              >
-                Reset Origin
-              </button>
-            </div>
-            <div className={stlFile ? 'scale-75 origin-top-left' : ''}>
+          {/* Manual Navigation — hidden after slicing to give space to gcode preview */}
+          {!uploadResult && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: '#8B9090' }}>
+                  Manual Navigation
+                </span>
+                <button
+                  className="text-xs underline disabled:opacity-40"
+                  style={{ color: '#1A8B8D' }}
+                  disabled={!printerConnected}
+                  onClick={() => api.jog('X', 0)}
+                >
+                  Reset Origin
+                </button>
+              </div>
               <JogPanel syringeMode={syringeMode} disabled={!printerConnected} />
             </div>
-          </div>
+          )}
 
-          {/* STL 3D Preview */}
-          {stlFile && (
-            <div className="rounded-2xl overflow-hidden shrink-0" style={{ height: '200px', backgroundColor: '#EDE9DC' }}>
+          {/* STL 3D Preview — shown while waiting to slice */}
+          {stlFile && !uploadResult && (
+            <div className="rounded-2xl overflow-hidden shrink-0" style={{ height: '180px', backgroundColor: '#EDE9DC' }}>
               <STLPreview file={stlFile} />
             </div>
           )}
@@ -140,20 +140,15 @@ export function SetupScreen({
                   Slicing…
                 </>
               ) : (
-                <>
-                  {/* <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
-                  </svg> */}
-                  Click to Slice
-                </>
+                'Click to Slice'
               )}
             </button>
           )}
 
-          {/* G-code preview */}
+          {/* G-code preview — shown prominently after slicing */}
           {uploadResult && <GcodePreview result={uploadResult} />}
 
-          {/* Re-slice button after result */}
+          {/* Re-slice button */}
           {uploadResult && (
             <button
               onClick={handleSlice}
