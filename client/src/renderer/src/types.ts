@@ -26,4 +26,5 @@ export interface UploadResult {
   lines_total: number
   time_estimate_s: number | null
   feed_log_entries: number
+  preview_lines: string[]
 }

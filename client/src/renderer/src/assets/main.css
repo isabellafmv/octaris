@@ -1,5 +1,64 @@
 @import "tailwindcss";
 
+* {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  box-sizing: border-box;
+}
+
 #root {
   height: 100vh;
+}
+
+/* ─── Range slider reset ─────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  background-color: #D8D3C8;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  margin-top: -6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"].slider-primary::-webkit-slider-thumb {
+  background: #1A8B8D;
+}
+
+input[type="range"].slider-terra::-webkit-slider-thumb {
+  background: #B5614A;
+}
+
+input[type="range"].slider-flow::-webkit-slider-thumb {
+  background: white;
+  border: 2px solid #1A8B8D;
+  width: 20px;
+  height: 20px;
+  margin-top: -8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+/* ─── Dot-grid background ────────────────────────────── */
+.dot-grid {
+  background-color: #262929;
+  background-image: radial-gradient(circle, #3D4040 1.2px, transparent 1.2px);
+  background-size: 22px 22px;
+}
+
+/* ─── Drag region for Electron ───────────────────────── */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
 }
