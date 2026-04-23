@@ -1,6 +1,6 @@
 # Octaris
 
-Desktop control software for a 6-axis extrusion-based bioprinter. Upload an STL or a pre-sliced G-code file, configure your syringe mode, and manage the full print workflow — slicing, previewing, and live monitoring — from a single Electron app.
+Control software for the printess bioprinter. Upload an STL or a pre-sliced G-code file, configure your syringe mode, and manage the full print workflow — slicing, previewing, and live monitoring — from a single Electron app.
 
 ---
 
@@ -101,60 +101,3 @@ Accessible from the sidebar during a print or when idle:
 - **Jog panel** — move individual axes by fixed increments.
 - **Emergency STOP** — sends `M410` and flushes the queue immediately.
 
----
-
-## Backend API
-
-The backend exposes a REST + WebSocket API on `http://127.0.0.1:8000`.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/ports` | List available serial ports |
-| `POST` | `/connect` | Connect to a serial port |
-| `POST` | `/disconnect` | Disconnect |
-| `POST` | `/upload?syringe_mode=` | Upload and slice an STL file |
-| `POST` | `/upload/gcode?syringe_mode=` | Upload a pre-sliced G-code file |
-| `POST` | `/print/start` | Start the print queue |
-| `POST` | `/print/stop` | Stop and flush the queue |
-| `POST` | `/print/pause` | Pause queue processing |
-| `POST` | `/print/resume` | Resume queue processing |
-| `POST` | `/extrusion` | Set extrusion rate (`{ rate: 50–150 }`) |
-| `POST` | `/jog` | Jog an axis (`{ axis, distance, feed_rate }`) |
-| `POST` | `/gcode/send` | Send a raw G-code line |
-| `GET` | `/gcode/log` | Retrieve serial log entries |
-| `WS` | `/ws` | Real-time event stream |
-
-### WebSocket events
-
-```json
-{ "type": "progress", "lines_sent": 123, "lines_total": 5000 }
-{ "type": "time_remaining_s", "value": 420 }
-{ "type": "status", "value": "printing" }
-{ "type": "extrusion_rate", "value": 100 }
-{ "type": "serial_log", "entry": { "timestamp": "…", "direction": "sent", "content": "G1 X10" } }
-```
-
----
-
-## Project Structure
-
-```
-octaris/
-├── backend/               # FastAPI backend
-│   └── backend/
-│       ├── main.py        # App setup and lifespan
-│       ├── routers/       # API endpoints
-│       ├── gcode_processor.py  # G-code post-processing pipeline
-│       ├── slicer.py      # CuraEngine integration
-│       ├── serial_manager.py   # Serial communication
-│       ├── queue_worker.py     # Async print queue
-│       └── events.py      # WebSocket event bus
-├── client/                # Electron + React frontend
-│   └── src/renderer/src/
-│       ├── screens/       # SetupScreen, PrintScreen, TakeOverScreen
-│       ├── components/    # UI components
-│       ├── hooks/         # useWebSocket
-│       └── api.ts         # HTTP client
-├── context/               # CuraEngine slicer profile and printer definition
-└── config.json            # Runtime configuration
-```
