@@ -6,7 +6,10 @@ import { JogPanel } from '../components/JogPanel'
 import { STLUpload } from '../components/STLUpload'
 import { STLPreview } from '../components/STLPreview'
 import { GcodePreview } from '../components/GcodePreview'
+import { GcodeUpload } from '../components/GcodeUpload'
 import { SyringeModuleViz } from '../components/SyringeSelector'
+
+type UploadMode = 'stl' | 'gcode'
 
 interface SetupScreenProps {
   printerConnected: boolean
@@ -21,11 +24,21 @@ export function SetupScreen({
   onDisconnect,
   onStartPrint,
 }: SetupScreenProps) {
+  const [uploadMode, setUploadMode] = useState<UploadMode>('stl')
   const [syringeMode, setSyringeMode] = useState<SyringeMode>('left')
   const [stlFile, setStlFile] = useState<File | null>(null)
+  const [gcodeFile, setGcodeFile] = useState<File | null>(null)
   const [slicing, setSlicing] = useState(false)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const handleModeChange = (mode: UploadMode): void => {
+    setUploadMode(mode)
+    setUploadResult(null)
+    setError(null)
+    setStlFile(null)
+    setGcodeFile(null)
+  }
 
   const handleFile = (f: File): void => {
     setStlFile(f)
@@ -46,6 +59,26 @@ export function SetupScreen({
       setSlicing(false)
     }
   }, [stlFile, syringeMode])
+
+  const handleGcodeFile = useCallback(async (f: File) => {
+    setGcodeFile(f)
+    setUploadResult(null)
+    setError(null)
+    setSlicing(true)
+    try {
+      const result = await api.uploadGcode(f, syringeMode)
+      setUploadResult(result)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Processing failed.')
+    } finally {
+      setSlicing(false)
+    }
+  }, [syringeMode])
+
+  const handleGcodeReprocess = useCallback(async () => {
+    if (!gcodeFile) return
+    await handleGcodeFile(gcodeFile)
+  }, [gcodeFile, handleGcodeFile])
 
   const canSlice = stlFile !== null && !slicing
   const canStartPrint = uploadResult !== null && !slicing
@@ -84,7 +117,7 @@ export function SetupScreen({
 
       {/* ── Two-column body ── */}
       <div className="flex flex-1 min-h-0 px-8 pb-6 gap-6">
-        {/* Left column — syringe viz + STL upload */}
+        {/* Left column — syringe viz + upload */}
         <div className="flex flex-col gap-4 w-[48%]">
           <div
             className="flex-1 rounded-2xl flex flex-col items-center justify-center p-6 min-h-0"
@@ -92,7 +125,33 @@ export function SetupScreen({
           >
             <SyringeModuleViz selected={syringeMode} onSelect={setSyringeMode} />
           </div>
-          <STLUpload file={stlFile} onFile={handleFile} onError={setError} />
+
+          {/* Upload mode toggle */}
+          <div
+            className="flex rounded-xl p-1 gap-1"
+            style={{ backgroundColor: '#EDE9DC' }}
+          >
+            {(['stl', 'gcode'] as UploadMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => handleModeChange(mode)}
+                className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                style={
+                  uploadMode === mode
+                    ? { backgroundColor: 'white', color: '#1A8B8D', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }
+                    : { color: '#8B9090' }
+                }
+              >
+                {mode === 'stl' ? 'STL File' : 'G-Code File'}
+              </button>
+            ))}
+          </div>
+
+          {uploadMode === 'stl' ? (
+            <STLUpload file={stlFile} onFile={handleFile} onError={setError} />
+          ) : (
+            <GcodeUpload file={gcodeFile} loading={slicing} onFile={handleGcodeFile} onError={setError} />
+          )}
         </div>
 
         {/* Right column */}
@@ -118,14 +177,14 @@ export function SetupScreen({
           )}
 
           {/* STL 3D Preview — shown while waiting to slice */}
-          {stlFile && !uploadResult && (
+          {uploadMode === 'stl' && stlFile && !uploadResult && (
             <div className="rounded-2xl overflow-hidden shrink-0" style={{ height: '180px', backgroundColor: '#EDE9DC' }}>
               <STLPreview file={stlFile} />
             </div>
           )}
 
-          {/* Slice Now button */}
-          {stlFile && !uploadResult && (
+          {/* Slice Now button — STL path only */}
+          {uploadMode === 'stl' && stlFile && !uploadResult && (
             <button
               onClick={handleSlice}
               disabled={!canSlice}
@@ -145,18 +204,18 @@ export function SetupScreen({
             </button>
           )}
 
-          {/* G-code preview — shown prominently after slicing */}
+          {/* G-code preview — shown after upload/slicing */}
           {uploadResult && <GcodePreview result={uploadResult} />}
 
-          {/* Re-slice button */}
+          {/* Re-slice / Re-process button */}
           {uploadResult && (
             <button
-              onClick={handleSlice}
-              disabled={!canSlice}
+              onClick={uploadMode === 'stl' ? handleSlice : handleGcodeReprocess}
+              disabled={uploadMode === 'stl' ? !canSlice : !gcodeFile || slicing}
               className="w-full py-2 rounded-xl text-xs font-medium transition-opacity active:opacity-60 disabled:opacity-40"
               style={{ backgroundColor: '#EDE9DC', color: '#8B9090' }}
             >
-              Re-slice
+              {uploadMode === 'stl' ? 'Re-slice' : 'Re-process'}
             </button>
           )}
 
@@ -173,7 +232,11 @@ export function SetupScreen({
             <span className="text-lg">→</span>
           </button>
           <p className="text-center text-xs -mt-2" style={{ color: '#A0A8A8' }}>
-            {uploadResult ? 'Ready to print' : stlFile ? 'Slice the file to continue' : 'Upload an STL to get started'}
+            {uploadResult
+              ? 'Ready to print'
+              : uploadMode === 'stl'
+                ? stlFile ? 'Slice the file to continue' : 'Upload an STL to get started'
+                : gcodeFile ? 'Processing…' : 'Upload a pre-sliced G-code file'}
           </p>
         </div>
       </div>
