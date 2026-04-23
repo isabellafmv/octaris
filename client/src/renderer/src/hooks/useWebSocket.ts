@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrintStatus, SerialLogEntry, WsEvent } from '../types'
 
-const WS_URL = 'ws://localhost:8000/ws'
+const WS_URL = 'ws://127.0.0.1:8000/ws'
 const RECONNECT_DELAY = 2000
 const MAX_LOG_ENTRIES = 200
 

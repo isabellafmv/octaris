@@ -306,7 +306,7 @@ export function PrintScreen({
 
         {/* Pause / Stop buttons */}
         <div className="flex gap-4 px-7 pb-4 shrink-0">
-          {status === 'printing' && (
+          {status !== 'paused' && (
             <button
               onClick={handlePause}
               className="flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl text-white font-semibold text-sm tracking-wide transition-all active:scale-95"

@@ -33,6 +33,19 @@ export const api = {
     }
     return res.json()
   },
+  uploadGcode: async (file: File, syringeMode: SyringeMode): Promise<UploadResult> => {
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch(`${BASE}/upload/gcode?syringe_mode=${syringeMode}`, {
+      method: 'POST',
+      body: form
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(body.detail || res.statusText)
+    }
+    return res.json()
+  },
   printStart: () => json<{ status: string }>('/print/start', { method: 'POST' }),
   printStop: () => json<{ status: string }>('/print/stop', { method: 'POST' }),
   printPause: () => json<{ status: string }>('/print/pause', { method: 'POST' }),
