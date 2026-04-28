@@ -8,6 +8,7 @@ build/
 .venv/
 venv/
 *.db
+*.md
 
 # Node
 node_modules/
