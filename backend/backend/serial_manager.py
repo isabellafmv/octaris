@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
-import sys
 from collections import deque
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -14,8 +13,8 @@ import serial.tools.list_ports
 
 logger = logging.getLogger(__name__)
 
-RECONNECT_ATTEMPTS = 3
-RECONNECT_DELAY_S = 1.0
+RECONNECT_ATTEMPTS = 5
+RECONNECT_DELAY_S = 2.0
 SERIAL_TIMEOUT_S = 5.0
 SERIAL_LOG_MAX_ENTRIES = 500
 
@@ -77,20 +76,19 @@ class SerialManager:
         ports = serial.tools.list_ports.comports()
         system = platform.system()
 
-        result = []
-        for p in ports:
-            result.append({"device": p.device, "description": p.description})
-
         if system == "Darwin":
-            preferred = [r for r in result if "tty.usbmodem" in r["device"] or "tty.usbserial" in r["device"]]
-            other = [r for r in result if r not in preferred]
-            result = preferred + other
-        elif system == "Linux":
-            preferred = [r for r in result if "ttyUSB" in r["device"] or "ttyACM" in r["device"]]
-            other = [r for r in result if r not in preferred]
-            result = preferred + other
-
-        return result
+            return [
+                {"device": p.device, "description": p.description}
+                for p in ports
+                if "tty.usbmodem" in p.device or "tty.usbserial" in p.device
+            ]
+        if system == "Linux":
+            return [
+                {"device": p.device, "description": p.description}
+                for p in ports
+                if "ttyUSB" in p.device or "ttyACM" in p.device
+            ]
+        return [{"device": p.device, "description": p.description} for p in ports]
 
     async def connect(self, port: str, baud_rate: int) -> None:
         async with self._lock:
@@ -102,7 +100,7 @@ class SerialManager:
                     serial.Serial,
                     port=port,
                     baudrate=baud_rate,
-                    timeout=2,
+                    timeout=SERIAL_TIMEOUT_S,
                 )
                 self._serial = ser
                 self._port = port
@@ -121,7 +119,8 @@ class SerialManager:
 
     async def send_line(self, line: str) -> str:
         if not self.is_connected:
-            raise SerialError("Not connected")
+            if not await self.reconnect():
+                raise SerialError("Not connected")
 
         try:
             response = await asyncio.to_thread(self._send_and_receive, line)
@@ -129,6 +128,13 @@ class SerialManager:
         except (serial.SerialException, OSError) as exc:
             logger.error("Serial error sending line: %s", exc)
             await self._handle_disconnect()
+            logger.info("Attempting reconnect after serial error…")
+            if await self.reconnect():
+                try:
+                    return await asyncio.to_thread(self._send_and_receive, line)
+                except (serial.SerialException, OSError) as exc2:
+                    await self._handle_disconnect()
+                    raise SerialError(f"Send failed after reconnect: {exc2}") from exc2
             raise SerialError(f"Send failed: {exc}") from exc
 
     def _send_and_receive(self, line: str) -> str:
@@ -154,10 +160,14 @@ class SerialManager:
 
     async def _handle_disconnect(self) -> None:
         self._serial = None
-        self._port_at_disconnect = self._port
-
         if self._on_disconnect:
             self._on_disconnect()
+
+    async def reconnect(self) -> bool:
+        """Reconnect using the last-known port and baud rate."""
+        if not self._port:
+            return False
+        return await self.try_reconnect(self._port, self._baud_rate)
 
     async def try_reconnect(self, port: str, baud_rate: int) -> bool:
         for attempt in range(1, RECONNECT_ATTEMPTS + 1):
