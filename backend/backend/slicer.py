@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import shutil
+import struct
 import tempfile
 from pathlib import Path
 
@@ -15,9 +16,62 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PROFILE_PATH = PROJECT_ROOT / "context" / "octaris_settings.json"
 
+PRINT_BED_MM = (60.0, 60.0, 60.0)  # X, Y, Z limits
+
 
 class SlicingError(Exception):
     pass
+
+
+def _check_stl_dimensions(stl_path: Path) -> None:
+    """Raise SlicingError if the STL bounding box exceeds the print bed."""
+    data = stl_path.read_bytes()
+
+    vertices: list[tuple[float, float, float]] = []
+
+    # Binary STL: 80-byte header + 4-byte triangle count + N * 50-byte triangles
+    # ASCII STL starts with "solid" (but some binary files also start with "solid",
+    # so check the size matches the binary layout first).
+    is_binary = False
+    if len(data) >= 84:
+        num_triangles = struct.unpack_from("<I", data, 80)[0]
+        expected_size = 84 + num_triangles * 50
+        if expected_size == len(data):
+            is_binary = True
+
+    if is_binary:
+        offset = 84
+        for _ in range(num_triangles):
+            # skip 12-byte normal, then read 3 vertices of 3 floats each
+            offset += 12
+            for _ in range(3):
+                x, y, z = struct.unpack_from("<fff", data, offset)
+                vertices.append((x, y, z))
+                offset += 12
+            offset += 2  # attribute byte count
+    else:
+        # ASCII STL: parse "vertex x y z" lines
+        for line in data.decode("utf-8", errors="replace").splitlines():
+            parts = line.strip().split()
+            if len(parts) == 4 and parts[0] == "vertex":
+                try:
+                    vertices.append((float(parts[1]), float(parts[2]), float(parts[3])))
+                except ValueError:
+                    pass
+
+    if not vertices:
+        raise SlicingError("Could not read any vertices from the STL file.")
+
+    xs, ys, zs = zip(*vertices)
+    dims = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+    labels = ("X", "Y", "Z")
+    for dim, limit, label in zip(dims, PRINT_BED_MM, labels):
+        if dim > limit:
+            raise SlicingError(
+                f"Model is too large for the print bed: "
+                f"{label} dimension is {dim:.1f} mm (limit {limit:.0f} mm). "
+                f"Print bed is {PRINT_BED_MM[0]:.0f} × {PRINT_BED_MM[1]:.0f} × {PRINT_BED_MM[2]:.0f} mm."
+            )
 
 
 async def slice_stl(
@@ -33,6 +87,8 @@ async def slice_stl(
 
     if not profile_path.exists():
         raise SlicingError(f"Slicer profile not found: {profile_path}")
+
+    _check_stl_dimensions(stl_path)
 
     config = load_config()
     bin_dir = PROJECT_ROOT / "resources" / "bin" / config.target
