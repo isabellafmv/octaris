@@ -80,7 +80,7 @@ class SerialManager:
             return [
                 {"device": p.device, "description": p.description}
                 for p in ports
-                if "tty.usbmodem" in p.device or "tty.usbserial" in p.device
+                if "cu.usbmodem" in p.device or "cu.usbserial" in p.device
             ]
         if system == "Linux":
             return [

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.queue_worker import QueueWorker
+from backend.serial_manager import SerialError, SerialManager
 
 router = APIRouter()
 
@@ -16,7 +16,7 @@ AXES_BY_MODE = {
 class JogRequest(BaseModel):
     axis: str
     distance: float
-    feed_rate: float = 200
+    feed_rate: float = 300
 
 
 @router.post("/jog")
@@ -33,9 +33,14 @@ async def jog(request: Request, body: JogRequest):
             detail=f"Axis {axis} not available in {current_mode} syringe mode",
         )
 
-    worker: QueueWorker = request.app.state.queue_worker
-    # Send as relative move
-    worker.enqueue_priority("G91")
-    worker.enqueue_priority(f"G0 {axis}{body.distance} F{body.feed_rate}")
+    serial: SerialManager = request.app.state.serial_manager
+    if not serial.is_connected:
+        raise HTTPException(status_code=400, detail="Printer not connected")
+
+    try:
+        await serial.send_line("G91")
+        await serial.send_line(f"G1 {axis}{body.distance} F{body.feed_rate}")
+    except SerialError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {"status": "ok", "axis": axis, "distance": body.distance}

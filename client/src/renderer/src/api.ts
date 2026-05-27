@@ -56,7 +56,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rate })
     }),
-  jog: (axis: string, distance: number, feedRate = 200) =>
+  jog: (axis: string, distance: number, feedRate = 300) =>
     json<{ status: string }>('/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
