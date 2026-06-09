@@ -16,6 +16,12 @@ async def start_print(request: Request):
     if not request.app.state.serial_manager.is_connected:
         raise HTTPException(status_code=400, detail="Printer not connected")
 
+    if not getattr(request.app.state, "is_calibrated", False):
+        raise HTTPException(
+            status_code=400,
+            detail="Printer not calibrated. Jog the nozzle to position and call /calibration/zero first.",
+        )
+
     worker.load_gcode(processed.lines)
     worker.start()
 

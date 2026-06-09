@@ -13,12 +13,28 @@ DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
 
 
 @router.post("/upload")
-async def upload_stl(request: Request, file: UploadFile, syringe_mode: str = "left"):
+async def upload_stl(
+    request: Request,
+    file: UploadFile,
+    syringe_mode: str = "left",
+    nozzle_diameter: float | None = None,
+    syringe_diameter: float | None = None,
+    layer_height: float | None = None,
+):
     if not file.filename or not file.filename.lower().endswith(".stl"):
         raise HTTPException(status_code=400, detail="Only .stl files are accepted")
 
     if syringe_mode not in ("left", "right", "both"):
         raise HTTPException(status_code=400, detail="Invalid syringe_mode")
+
+    if nozzle_diameter is not None and nozzle_diameter <= 0:
+        raise HTTPException(status_code=400, detail="nozzle_diameter must be positive")
+
+    if syringe_diameter is not None and syringe_diameter <= 0:
+        raise HTTPException(status_code=400, detail="syringe_diameter must be positive")
+
+    if layer_height is not None and layer_height <= 0:
+        raise HTTPException(status_code=400, detail="layer_height must be positive")
 
     mode: SyringeMode = syringe_mode  # type: ignore
 
@@ -31,7 +47,12 @@ async def upload_stl(request: Request, file: UploadFile, syringe_mode: str = "le
     stl_path.write_bytes(content)
 
     try:
-        result = await slice_stl(stl_path, mode)
+        result = await slice_stl(
+            stl_path, mode,
+            nozzle_diameter=nozzle_diameter,
+            syringe_diameter=syringe_diameter,
+            layer_height=layer_height,
+        )
     except (SlicingError, GcodeValidationError) as exc:
         event_bus.publish({"type": "status", "value": "idle"})
         raise HTTPException(status_code=500, detail=str(exc))

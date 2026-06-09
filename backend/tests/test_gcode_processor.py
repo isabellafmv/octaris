@@ -4,10 +4,11 @@ import pytest
 
 from backend.gcode_processor import (
     GcodeValidationError,
+    build_footer,
+    build_preamble,
     clamp_feed_rates,
     extract_time_metadata,
-    insert_g91,
-    prepend_g92,
+    insert_layer_depressurize,
     process_gcode,
     strip_footer,
     strip_header,
@@ -65,14 +66,14 @@ def test_strip_footer():
 def test_substitute_extrusion_left():
     lines = ["G1 X10 E0.5 F200", "G1 X20 E1.0 F200"]
     result = substitute_extrusion(lines, "left")
-    assert result[0] == "G1 X10 B-0.5 F200"
-    assert result[1] == "G1 X20 B-1.0 F200"
+    assert result[0] == "G1 X10 B0.5 F200"
+    assert result[1] == "G1 X20 B1.0 F200"
 
 
 def test_substitute_extrusion_right():
     lines = ["G1 X10 E0.5 F200"]
     result = substitute_extrusion(lines, "right")
-    assert result[0] == "G1 X10 C-0.5 F200"
+    assert result[0] == "G1 X10 C0.5 F200"
 
 
 def test_substitute_extrusion_both():
@@ -84,11 +85,18 @@ def test_substitute_extrusion_both():
         "G1 X30 E1.5",
     ]
     result = substitute_extrusion(lines, "both")
-    assert "B-0.5" in result[0]
+    assert "B0.5" in result[0]
     assert result[1] == "T1"
-    assert "C-1.0" in result[2]
+    assert "C1.0" in result[2]
     assert result[3] == "T0"
-    assert "B-1.5" in result[4]
+    assert "B1.5" in result[4]
+
+
+def test_substitute_extrusion_negative_e():
+    """Negative E values (retractions) should not produce double-negative."""
+    lines = ["G1 X10 E-0.5 F200"]
+    result = substitute_extrusion(lines, "left")
+    assert result[0] == "G1 X10 B-0.5 F200"
 
 
 def test_clamp_feed_rates():
@@ -107,39 +115,46 @@ def test_clamp_feed_rates_no_change():
     assert len(log) == 0
 
 
-def test_prepend_g92_left():
-    lines = ["G1 X10"]
-    result = prepend_g92(lines, "left")
-    assert result[1] == "G92 X0 Y0 Z0 B0"
+def test_build_preamble_left():
+    preamble = build_preamble("left")
+    non_comment = [l for l in preamble if not l.strip().startswith(";")]
+    assert non_comment[0] == "G90 ; absolute positioning"
+    assert "B0.2" in "".join(preamble)
 
 
-def test_prepend_g92_both():
-    result = prepend_g92(["G1 X10"], "both")
-    assert result[1] == "G92 X0 Y0 Z0 A0 B0 C0"
+def test_build_preamble_right():
+    preamble = build_preamble("right")
+    assert "C0.2" in "".join(preamble)
 
 
-def test_insert_g91():
-    lines = ["; comment", "G92 X0 Y0 Z0 B0", "G1 X10"]
-    result = insert_g91(lines)
-    assert result[2] == "G91 ; relative positioning"
-    assert result[3] == "G1 X10"
+def test_build_footer_left():
+    footer = build_footer("left")
+    joined = "".join(footer)
+    assert "B-0.2" in joined  # depressurize
+    assert "Z5" in joined  # clearance
+    assert "X0 Y0" in joined  # return to origin
+
+
+def test_build_footer_right():
+    footer = build_footer("right")
+    joined = "".join(footer)
+    assert "C-0.2" in joined
+    assert "A5" in joined  # right mode uses A axis for Z
 
 
 def test_validate_passes():
     lines = [
-        "; Octaris — axis zero",
-        "G92 X0 Y0 Z0 B0",
-        "G91 ; relative positioning",
-        "G1 X10 B-0.5 F200",
+        "; Octaris — preamble",
+        "G90 ; absolute positioning",
+        "G1 X10 B0.5 F200",
     ]
     validate(lines)  # should not raise
 
 
 def test_validate_fails_leftover_e():
     lines = [
-        "; Octaris — axis zero",
-        "G92 X0 Y0 Z0 B0",
-        "G91 ; relative positioning",
+        "; Octaris — preamble",
+        "G90 ; absolute positioning",
         "G1 X10 E0.5 F200",
     ]
     with pytest.raises(GcodeValidationError, match="Unsubstituted E command"):
@@ -148,19 +163,62 @@ def test_validate_fails_leftover_e():
 
 def test_validate_fails_high_f():
     lines = [
-        "; Octaris — axis zero",
-        "G92 X0 Y0 Z0 B0",
-        "G91 ; relative positioning",
-        "G1 X10 B-0.5 F600",
+        "; Octaris — preamble",
+        "G90 ; absolute positioning",
+        "G1 X10 B0.5 F600",
     ]
     with pytest.raises(GcodeValidationError, match="exceeds 400"):
         validate(lines)
 
 
-def test_validate_fails_no_g92():
+def test_validate_fails_no_g90():
     lines = ["G91", "G1 X10"]
-    with pytest.raises(GcodeValidationError, match="G92"):
+    with pytest.raises(GcodeValidationError, match="G90"):
         validate(lines)
+
+
+def test_insert_layer_depressurize_skips_first():
+    """First G0 Z is initial positioning — no depressurize."""
+    lines = [
+        "G0 F300 X10 Y10 Z0.3",
+        "G1 F200 X20 Y10 B0.5",
+    ]
+    result = insert_layer_depressurize(lines, "left")
+    assert result[0] == "G0 F300 X10 Y10 Z0.3"
+    assert "depressurize" not in " ".join(result)
+
+
+def test_insert_layer_depressurize_wraps_second():
+    """Second G0 Z is a layer change — should be wrapped."""
+    lines = [
+        "G0 F300 X10 Y10 Z0.3",
+        "G1 F200 X20 Y10 B0.5",
+        "G0 F300 X10 Y10 Z0.5",
+        "G1 F200 X20 Y10 B1.0",
+    ]
+    result = insert_layer_depressurize(lines, "left")
+    joined = "\n".join(result)
+    assert "depressurize" in joined
+    assert "repressurize" in joined
+    # The G0 Z0.5 should still be present
+    assert "G0 F300 X10 Y10 Z0.5" in joined
+    # Should have B-0.2 (depressurize) and B0.2 (repressurize)
+    assert "B-0.2" in joined
+    assert "B0.2" in joined
+
+
+def test_insert_layer_depressurize_right_mode():
+    """Right mode uses A axis for Z — should detect G0 with A."""
+    lines = [
+        "G0 F300 X10 Y10 A0.3",
+        "G1 F200 X20 Y10 C0.5",
+        "G0 F300 X10 Y10 A0.5",
+        "G1 F200 X20 Y10 C1.0",
+    ]
+    result = insert_layer_depressurize(lines, "right")
+    joined = "\n".join(result)
+    assert "C-0.2" in joined  # depressurize with C axis
+    assert "C0.2" in joined   # repressurize with C axis
 
 
 def test_process_gcode_integration():
@@ -168,33 +226,46 @@ def test_process_gcode_integration():
     result = process_gcode(raw, "left")
 
     assert result.time_estimate_s == 847
-    assert result.lines[1].startswith("G92")
-    assert "G91" in result.lines[2]
+
+    # Preamble should start with G90
+    non_comment = [l for l in result.lines if not l.strip().startswith(";")]
+    assert non_comment[0].startswith("G90")
 
     # No E commands should remain
     for line in result.lines:
-        if not line.strip().startswith(";"):
-            assert "E" not in line or "E" in "Octaris"
+        stripped = line.strip()
+        if stripped.startswith(";"):
+            continue
+        assert "E" not in stripped, f"Unsubstituted E found: {stripped}"
 
     # F clamping log should have entries (F600 and F1200 in raw)
     assert len(result.feed_log) > 0
 
-    # All B substitutions should be negative
+    # B substitutions should be positive (no negation)
+    found_b = False
     for line in result.lines:
-        if "B-" in line:
-            assert True
+        if "B0." in line or "B1." in line or "B2." in line:
+            found_b = True
             break
-    else:
-        pytest.fail("No B- substitution found")
+    assert found_b, "No positive B substitution found"
+
+    # Footer should return to origin
+    last_lines = "\n".join(result.lines[-5:])
+    assert "X0 Y0" in last_lines
 
 
 def test_process_gcode_right():
     raw = (FIXTURES / "raw_sample.gcode").read_text()
     result = process_gcode(raw, "right")
 
-    assert result.lines[1] == "G92 X0 Y0 A0 C0"
+    # Should use C axis for extrusion
+    found_c = False
     for line in result.lines:
-        if "C-" in line:
+        if "C0." in line or "C1." in line or "C2." in line:
+            found_c = True
             break
-    else:
-        pytest.fail("No C- substitution found")
+    assert found_c, "No positive C substitution found"
+
+    # Footer should use A axis for Z
+    last_lines = "\n".join(result.lines[-5:])
+    assert "A5" in last_lines

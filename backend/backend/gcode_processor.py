@@ -23,6 +23,14 @@ MARLIN_FOOTER = [
 
 _E_PATTERN = re.compile(r"E(-?\d+\.?\d*)")
 _F_PATTERN = re.compile(r"F(\d+\.?\d*)")
+_Z_IN_G0 = re.compile(r"^G0\b.*[ZA]", re.IGNORECASE)
+
+# Pressurization distance (mm) to prime/deprime the syringe
+PRESSURIZE_MM = 0.2
+PRESSURIZE_FEED = 400
+# Nozzle clearance height (mm) to raise before returning to origin
+CLEARANCE_Z_MM = 5
+TRAVEL_FEED = 300
 
 
 class GcodeValidationError(Exception):
@@ -84,7 +92,7 @@ def substitute_extrusion(lines: list[str], mode: SyringeMode) -> list[str]:
 def _replace_e_with(line: str, axis: str) -> str:
     def replacer(m):
         val = m.group(1)
-        return f"{axis}-{val}"
+        return f"{axis}{val}"
     return _E_PATTERN.sub(replacer, line)
 
 
@@ -122,18 +130,72 @@ def clamp_feed_rates(lines: list[str], max_f: float = 400) -> tuple[list[str], l
     return result, log_entries
 
 
-def prepend_g92(lines: list[str], mode: SyringeMode) -> list[str]:
-    axes = {
-        "left": "G92 X0 Y0 Z0 B0",
-        "right": "G92 X0 Y0 A0 C0",
-        "both": "G92 X0 Y0 Z0 A0 B0 C0",
-    }
-    return ["; Octaris — axis zero", axes[mode]] + lines
+def build_preamble(mode: SyringeMode) -> list[str]:
+    """G90 absolute positioning + syringe pressurization."""
+    extrusion_axis = {"left": "B", "right": "C", "both": "B"}[mode]
+    return [
+        "; Octaris — preamble",
+        "G90 ; absolute positioning",
+        f"; pressurize syringe",
+        f"G91 ; switch to relative for pressurization",
+        f"G1 {extrusion_axis}{PRESSURIZE_MM} F{PRESSURIZE_FEED}",
+        f"G90 ; back to absolute",
+    ]
 
 
-def insert_g91(lines: list[str]) -> list[str]:
-    # Insert G91 after the G92 line (which is at index 1, after the comment)
-    return lines[:2] + ["G91 ; relative positioning"] + lines[2:]
+def build_footer(mode: SyringeMode) -> list[str]:
+    """Depressurize syringe, raise nozzle, return to origin."""
+    extrusion_axis = {"left": "B", "right": "C", "both": "B"}[mode]
+    z_axis = {"left": "Z", "right": "A", "both": "Z"}[mode]
+    return [
+        "; Octaris — footer",
+        f"; depressurize syringe",
+        f"G91 ; switch to relative for depressurization",
+        f"G1 {extrusion_axis}-{PRESSURIZE_MM} F{PRESSURIZE_FEED}",
+        f"G90 ; back to absolute",
+        f"; raise nozzle and return to origin",
+        f"G91 ; relative for Z clearance",
+        f"G1 {z_axis}{CLEARANCE_Z_MM} F{TRAVEL_FEED}",
+        f"G90 ; back to absolute",
+        f"G1 X0 Y0 F{TRAVEL_FEED} ; return to origin",
+    ]
+
+
+def insert_layer_depressurize(lines: list[str], mode: SyringeMode) -> list[str]:
+    """Wrap layer-change travel moves (G0 with Z/A) with depressurize/repressurize.
+
+    Skips the very first G0-with-Z since that's the initial positioning before
+    any extrusion has happened (the preamble handles the first pressurization).
+    """
+    extrusion_axis = {"left": "B", "right": "C", "both": "B"}[mode]
+    z_axis = {"left": "Z", "right": "A", "both": "Z"}[mode]
+    pattern = re.compile(rf"^G0\b.*{z_axis}", re.IGNORECASE)
+
+    result: list[str] = []
+    seen_first = False
+
+    for line in lines:
+        stripped = line.strip()
+        if pattern.match(stripped):
+            if not seen_first:
+                # First layer positioning — no depressurize needed
+                seen_first = True
+                result.append(line)
+            else:
+                # Layer change — depressurize before, repressurize after
+                result.append(f"; layer change — depressurize")
+                result.append(f"G91")
+                result.append(f"G1 {extrusion_axis}-{PRESSURIZE_MM} F{PRESSURIZE_FEED}")
+                result.append(f"G90")
+                result.append(line)
+                result.append(f"; repressurize")
+                result.append(f"G91")
+                result.append(f"G1 {extrusion_axis}{PRESSURIZE_MM} F{PRESSURIZE_FEED}")
+                result.append(f"G90")
+        else:
+            result.append(line)
+
+    return result
 
 
 def validate(lines: list[str]) -> None:
@@ -141,11 +203,8 @@ def validate(lines: list[str]) -> None:
     if not non_comment:
         raise GcodeValidationError("Empty G-code")
 
-    if not non_comment[0].strip().startswith("G92"):
-        raise GcodeValidationError("G-code must start with G92 axis zeroing")
-
-    if len(non_comment) < 2 or not non_comment[1].strip().startswith("G91"):
-        raise GcodeValidationError("G91 relative positioning must follow G92")
+    if not non_comment[0].strip().startswith("G90"):
+        raise GcodeValidationError("G-code must start with G90 absolute positioning")
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -169,7 +228,7 @@ def process_gcode(raw: str, mode: SyringeMode) -> ProcessedGcode:
     lines = strip_footer(lines)
     lines = substitute_extrusion(lines, mode)
     lines, feed_log = clamp_feed_rates(lines)
-    lines = prepend_g92(lines, mode)
-    lines = insert_g91(lines)
+    lines = insert_layer_depressurize(lines, mode)
+    lines = build_preamble(mode) + lines + build_footer(mode)
     validate(lines)
     return ProcessedGcode(lines=lines, time_estimate_s=time_estimate, feed_log=feed_log)

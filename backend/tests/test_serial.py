@@ -6,15 +6,16 @@ from backend.serial_manager import SerialError, SerialManager
 
 
 def test_list_ports_returns_list():
-    with patch("backend.serial_manager.serial.tools.list_ports.comports") as mock_comports:
+    with patch("backend.serial_manager.serial.tools.list_ports.comports") as mock_comports, \
+         patch("backend.serial_manager.platform.system", return_value="Darwin"):
         mock_port = MagicMock()
-        mock_port.device = "/dev/tty.usbmodem1234"
+        mock_port.device = "/dev/cu.usbmodem1234"
         mock_port.description = "USB Modem"
         mock_comports.return_value = [mock_port]
 
         ports = SerialManager.list_ports()
         assert len(ports) == 1
-        assert ports[0]["device"] == "/dev/tty.usbmodem1234"
+        assert ports[0]["device"] == "/dev/cu.usbmodem1234"
 
 
 async def test_connect_failure_raises():

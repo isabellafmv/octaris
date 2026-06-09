@@ -12,4 +12,4 @@ async def test_cors_headers(client):
             "Access-Control-Request-Method": "GET",
         },
     )
-    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert resp.headers.get("access-control-allow-origin") == "*"

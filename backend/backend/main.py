@@ -7,6 +7,7 @@ from backend.config import load_config
 from backend.database import init_db
 from backend.events import EventBus
 from backend.queue_worker import QueueWorker
+from backend.routers.calibration import router as calibration_router
 from backend.routers.extrusion import router as extrusion_router
 from backend.routers.gcode import router as gcode_router
 from backend.routers.jog import router as jog_router
@@ -21,8 +22,13 @@ from backend.serial_manager import SerialManager
 async def lifespan(app: FastAPI):
     app.state.config = load_config()
     app.state.event_bus = EventBus()
+    def _on_disconnect():
+        app.state.is_calibrated = False
+        app.state.event_bus.publish({"type": "disconnected"})
+        app.state.event_bus.publish({"type": "calibration", "value": "uncalibrated"})
+
     app.state.serial_manager = SerialManager(
-        on_disconnect=lambda: app.state.event_bus.publish({"type": "disconnected"}),
+        on_disconnect=_on_disconnect,
         on_serial_log=lambda entry: app.state.event_bus.publish(entry),
     )
     app.state.queue_worker = QueueWorker(
@@ -33,6 +39,7 @@ async def lifespan(app: FastAPI):
     app.state.processed_gcode = None
     app.state.current_filename = None
     app.state.current_syringe_mode = "left"
+    app.state.is_calibrated = False
     yield
     if app.state.serial_manager.is_connected:
         await app.state.serial_manager.disconnect()
@@ -42,6 +49,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Octaris Bioprinter", version="0.1.0", lifespan=lifespan)
 
 app.include_router(serial_router)
+app.include_router(calibration_router)
 app.include_router(upload_router)
 app.include_router(print_router)
 app.include_router(extrusion_router)

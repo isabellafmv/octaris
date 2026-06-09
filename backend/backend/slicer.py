@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PROFILE_PATH = PROJECT_ROOT / "context" / "octaris_settings.json"
 
-PRINT_BED_MM = (60.0, 60.0, 60.0)  # X, Y, Z limits
+PRINT_BED_MM = (60.0, 60.0, 60.0)  # X, Y, Z limits (must match octaris_settings.json)
+
+# Layer height as a fraction of nozzle diameter
+DEFAULT_LAYER_HEIGHT_RATIO = 0.8
 
 
 class SlicingError(Exception):
@@ -77,6 +80,9 @@ def _check_stl_dimensions(stl_path: Path) -> None:
 async def slice_stl(
     stl_path: Path,
     syringe_mode: SyringeMode,
+    nozzle_diameter: float | None = None,
+    syringe_diameter: float | None = None,
+    layer_height: float | None = None,
     profile_path: Path | None = None,
 ) -> ProcessedGcode:
     if profile_path is None:
@@ -117,6 +123,10 @@ async def slice_stl(
     with tempfile.NamedTemporaryFile(suffix=".gcode", delete=False) as tmp:
         output_path = Path(tmp.name)
 
+    # Derive layer height from nozzle diameter if not explicitly set
+    if nozzle_diameter is not None and layer_height is None:
+        layer_height = round(nozzle_diameter * DEFAULT_LAYER_HEIGHT_RATIO, 3)
+
     cmd = [
         cura_bin,
         "slice",
@@ -125,6 +135,18 @@ async def slice_stl(
     ]
     if syringe_mode == "both":
         cmd.append("-e1")
+
+    # Override nozzle/layer settings on the command line so the static
+    # profile doesn't need to be regenerated for each nozzle tip.
+    if nozzle_diameter is not None:
+        cmd.extend(["-s", f"machine_nozzle_size={nozzle_diameter}"])
+        cmd.extend(["-s", f"line_width={nozzle_diameter}"])
+    if syringe_diameter is not None:
+        cmd.extend(["-s", f"material_diameter={syringe_diameter}"])
+    if layer_height is not None:
+        cmd.extend(["-s", f"layer_height={layer_height}"])
+        cmd.extend(["-s", f"layer_height_0={layer_height}"])
+
     cmd.extend(["-o", str(output_path), "-l", str(stl_path)])
 
     logger.info("Running CuraEngine: %s", " ".join(cmd))
