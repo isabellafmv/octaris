@@ -20,6 +20,8 @@ async def upload_stl(
     nozzle_diameter: float | None = None,
     syringe_diameter: float | None = None,
     layer_height: float | None = None,
+    pressurize_mm: float | None = None,
+    flow_multiplier: float | None = None,
 ):
     if not file.filename or not file.filename.lower().endswith(".stl"):
         raise HTTPException(status_code=400, detail="Only .stl files are accepted")
@@ -35,6 +37,12 @@ async def upload_stl(
 
     if layer_height is not None and layer_height <= 0:
         raise HTTPException(status_code=400, detail="layer_height must be positive")
+
+    if pressurize_mm is not None and pressurize_mm <= 0:
+        raise HTTPException(status_code=400, detail="pressurize_mm must be positive")
+
+    if flow_multiplier is not None and flow_multiplier <= 0:
+        raise HTTPException(status_code=400, detail="flow_multiplier must be positive")
 
     mode: SyringeMode = syringe_mode  # type: ignore
 
@@ -52,6 +60,8 @@ async def upload_stl(
             nozzle_diameter=nozzle_diameter,
             syringe_diameter=syringe_diameter,
             layer_height=layer_height,
+            pressurize_mm=pressurize_mm,
+            flow_multiplier=flow_multiplier,
         )
     except (SlicingError, GcodeValidationError) as exc:
         event_bus.publish({"type": "status", "value": "idle"})

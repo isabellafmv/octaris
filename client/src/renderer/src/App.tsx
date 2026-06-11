@@ -74,13 +74,17 @@ function App(): React.JSX.Element {
     setConnectedPort(null)
   }, [])
 
+  const [startError, setStartError] = useState<string | null>(null)
+
   const handleStartPrint = useCallback(async () => {
+    setStartError(null)
     try {
       await api.printStart()
+      setScreen('print')
     } catch (e) {
-      console.error('Failed to start print:', e)
+      const msg = e instanceof Error ? e.message : 'Failed to start print'
+      setStartError(msg)
     }
-    setScreen('print')
   }, [])
 
   const handleBack = useCallback(() => {
@@ -180,6 +184,8 @@ function App(): React.JSX.Element {
               onConnect={handleConnect}
               onDisconnect={handleDisconnect}
               onStartPrint={handleStartPrint}
+              externalError={startError}
+              onClearExternalError={() => setStartError(null)}
             />
           ) : screen === 'print' ? (
             <PrintScreen

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { SyringeMode, UploadResult } from '../types'
 import { api } from '../api'
 import { PortSelector } from '../components/PortSelector'
@@ -16,6 +16,8 @@ interface SetupScreenProps {
   onConnect: (port: string) => void
   onDisconnect: () => void
   onStartPrint: () => void
+  externalError?: string | null
+  onClearExternalError?: () => void
 }
 
 export function SetupScreen({
@@ -23,6 +25,8 @@ export function SetupScreen({
   onConnect,
   onDisconnect,
   onStartPrint,
+  externalError,
+  onClearExternalError,
 }: SetupScreenProps) {
   const [uploadMode, setUploadMode] = useState<UploadMode>('stl')
   const [syringeMode, setSyringeMode] = useState<SyringeMode>('left')
@@ -31,6 +35,38 @@ export function SetupScreen({
   const [slicing, setSlicing] = useState(false)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [calibrated, setCalibrated] = useState(false)
+  const [nozzleDiameter, setNozzleDiameter] = useState<string>('')
+  const [syringeDiameter, setSyringeDiameter] = useState<string>('')
+  const [layerHeight, setLayerHeight] = useState<string>('')
+  const [pressurizeMm, setPressurizeMm] = useState<string>('')
+  const [flowMultiplier, setFlowMultiplier] = useState<string>('')
+
+  // Merge external errors (from failed print start) into local error state
+  useEffect(() => {
+    if (externalError) {
+      setError(externalError)
+      onClearExternalError?.()
+    }
+  }, [externalError, onClearExternalError])
+
+  // Check calibration status when printer connects
+  useEffect(() => {
+    if (printerConnected) {
+      api.calibrationStatus().then(r => setCalibrated(r.calibrated)).catch(() => {})
+    } else {
+      setCalibrated(false)
+    }
+  }, [printerConnected])
+
+  const handleSetOrigin = useCallback(async () => {
+    try {
+      await api.calibrationZero()
+      setCalibrated(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Calibration failed')
+    }
+  }, [])
 
   const handleModeChange = (mode: UploadMode): void => {
     setUploadMode(mode)
@@ -51,14 +87,20 @@ export function SetupScreen({
     setUploadResult(null)
     setError(null)
     try {
-      const result = await api.upload(stlFile, syringeMode)
+      const result = await api.upload(stlFile, syringeMode, {
+        nozzleDiameter: nozzleDiameter ? parseFloat(nozzleDiameter) : undefined,
+        syringeDiameter: syringeDiameter ? parseFloat(syringeDiameter) : undefined,
+        layerHeight: layerHeight ? parseFloat(layerHeight) : undefined,
+        pressurizeMm: pressurizeMm ? parseFloat(pressurizeMm) : undefined,
+        flowMultiplier: flowMultiplier ? parseFloat(flowMultiplier) : undefined,
+      })
       setUploadResult(result)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Slicing failed. Check that CuraEngine is installed.')
     } finally {
       setSlicing(false)
     }
-  }, [stlFile, syringeMode])
+  }, [stlFile, syringeMode, nozzleDiameter, syringeDiameter, layerHeight, pressurizeMm, flowMultiplier])
 
   const handleGcodeFile = useCallback(async (f: File) => {
     setGcodeFile(f)
@@ -81,7 +123,7 @@ export function SetupScreen({
   }, [gcodeFile, handleGcodeFile])
 
   const canSlice = stlFile !== null && !slicing
-  const canStartPrint = uploadResult !== null && !slicing
+  const canStartPrint = uploadResult !== null && !slicing && calibrated
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ color: '#2D3333' }}>
@@ -126,6 +168,88 @@ export function SetupScreen({
             <SyringeModuleViz selected={syringeMode} onSelect={setSyringeMode} />
           </div>
 
+          {/* Nozzle / Syringe parameters */}
+          <div
+            className="rounded-2xl p-4 flex flex-col gap-2"
+            style={{ backgroundColor: '#EDE9DC' }}
+          >
+            <span className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: '#8B9090' }}>
+              Print Parameters
+            </span>
+            <div className="flex gap-2">
+              <label className="flex-1">
+                <span className="text-[10px] block mb-1" style={{ color: '#8B9090' }}>Nozzle ⌀ (mm)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="e.g. 0.41"
+                  value={nozzleDiameter}
+                  onChange={e => setNozzleDiameter(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: '#F5F1E6', color: '#2D3333', border: '1px solid #D8D3C8' }}
+                />
+              </label>
+              <label className="flex-1">
+                <span className="text-[10px] block mb-1" style={{ color: '#8B9090' }}>Syringe ⌀ (mm)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="e.g. 4.7"
+                  value={syringeDiameter}
+                  onChange={e => setSyringeDiameter(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: '#F5F1E6', color: '#2D3333', border: '1px solid #D8D3C8' }}
+                />
+              </label>
+              <label className="flex-1">
+                <span className="text-[10px] block mb-1" style={{ color: '#8B9090' }}>Layer H (mm)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="auto"
+                  value={layerHeight}
+                  onChange={e => setLayerHeight(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: '#F5F1E6', color: '#2D3333', border: '1px solid #D8D3C8' }}
+                />
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <label className="flex-1">
+                <span className="text-[10px] block mb-1" style={{ color: '#8B9090' }}>Pressurize (mm)</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  placeholder="0.2"
+                  value={pressurizeMm}
+                  onChange={e => setPressurizeMm(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: '#F5F1E6', color: '#2D3333', border: '1px solid #D8D3C8' }}
+                />
+              </label>
+              <label className="flex-1">
+                <span className="text-[10px] block mb-1" style={{ color: '#8B9090' }}>Flow multiplier</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  placeholder="1.0"
+                  value={flowMultiplier}
+                  onChange={e => setFlowMultiplier(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: '#F5F1E6', color: '#2D3333', border: '1px solid #D8D3C8' }}
+                />
+              </label>
+            </div>
+            <span className="text-[9px]" style={{ color: '#A0A8A8' }}>
+              Layer height defaults to 80% of nozzle diameter.
+            </span>
+          </div>
+
           {/* Upload mode toggle */}
           <div
             className="flex rounded-xl p-1 gap-1"
@@ -156,25 +280,48 @@ export function SetupScreen({
 
         {/* Right column */}
         <div className="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
-          {/* Manual Navigation — hidden after slicing to give space to gcode preview */}
-          {!uploadResult && (
-            <div>
-              <div className="flex items-center justify-between mb-3">
+          {/* Calibration + Jog */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold tracking-widest uppercase" style={{ color: '#8B9090' }}>
-                  Manual Navigation
+                  {uploadResult ? 'Calibration' : 'Manual Navigation'}
                 </span>
+                {calibrated && (
+                  <span
+                    className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                    style={{ backgroundColor: '#D4EAE9', color: '#1A8B8D' }}
+                  >
+                    Origin set
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
                 <button
-                  className="text-xs underline disabled:opacity-40"
-                  style={{ color: '#1A8B8D' }}
+                  className="text-xs font-semibold px-3 py-1 rounded-lg transition-all active:scale-95 disabled:opacity-40"
+                  style={{ backgroundColor: '#E8E3D8', color: '#8B9090' }}
                   disabled={!printerConnected}
-                  onClick={() => api.jog('X', 0)}
+                  onClick={() => api.sendGcode('G1 X0 Y0 F300')}
                 >
-                  Reset Origin
+                  Go to Origin
+                </button>
+                <button
+                  className="text-xs font-semibold px-3 py-1 rounded-lg transition-all active:scale-95 disabled:opacity-40"
+                  style={{
+                    backgroundColor: calibrated ? '#E8E3D8' : '#1A8B8D',
+                    color: calibrated ? '#8B9090' : 'white',
+                  }}
+                  disabled={!printerConnected}
+                  onClick={handleSetOrigin}
+                >
+                  {calibrated ? 'Re-zero Origin' : 'Set Origin'}
                 </button>
               </div>
-              <JogPanel syringeMode={syringeMode} disabled={!printerConnected} />
             </div>
-          )}
+            {!uploadResult && (
+              <JogPanel syringeMode={syringeMode} disabled={!printerConnected} />
+            )}
+          </div>
 
           {/* STL 3D Preview — shown while waiting to slice */}
           {uploadMode === 'stl' && stlFile && !uploadResult && (
@@ -232,11 +379,13 @@ export function SetupScreen({
             <span className="text-lg">→</span>
           </button>
           <p className="text-center text-xs -mt-2" style={{ color: '#A0A8A8' }}>
-            {uploadResult
-              ? 'Ready to print'
-              : uploadMode === 'stl'
-                ? stlFile ? 'Slice the file to continue' : 'Upload an STL to get started'
-                : gcodeFile ? 'Processing…' : 'Upload a pre-sliced G-code file'}
+            {uploadResult && !calibrated
+              ? 'Jog to position and set origin to continue'
+              : uploadResult
+                ? 'Ready to print'
+                : uploadMode === 'stl'
+                  ? stlFile ? 'Slice the file to continue' : 'Upload an STL to get started'
+                  : gcodeFile ? 'Processing…' : 'Upload a pre-sliced G-code file'}
           </p>
         </div>
       </div>

@@ -57,6 +57,18 @@ export function SerialLog({ entries, onClear }: SerialLogProps) {
             </button>
           )}
           <button
+            onClick={() => {
+              const text = entries
+                .map(e => `${formatTime(e.timestamp)} ${e.direction === 'sent' ? '>' : '<'} ${e.content}`)
+                .join('\n')
+              navigator.clipboard.writeText(text)
+            }}
+            className="text-xs px-2 py-1 rounded transition-opacity active:opacity-60"
+            style={{ backgroundColor: '#D8D3C8', color: '#5A6060' }}
+          >
+            Copy All
+          </button>
+          <button
             onClick={onClear}
             className="text-xs px-2 py-1 rounded transition-opacity active:opacity-60"
             style={{ backgroundColor: '#D8D3C8', color: '#5A6060' }}
@@ -68,15 +80,15 @@ export function SerialLog({ entries, onClear }: SerialLogProps) {
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-3 font-mono text-sm leading-relaxed"
-        style={{ backgroundColor: '#F5F1E6' }}
+        className="flex-1 overflow-y-auto p-3 font-mono text-sm leading-relaxed select-text cursor-text"
+        style={{ backgroundColor: '#F5F1E6', userSelect: 'text', WebkitUserSelect: 'text' }}
       >
         {entries.length === 0 ? (
           <p className="italic" style={{ color: '#A0A8A8' }}>No serial activity yet...</p>
         ) : (
           entries.map((entry, i) => (
             <div key={i} className="flex gap-2">
-              <span className="shrink-0 select-none" style={{ color: '#A0A8A8' }}>{formatTime(entry.timestamp)}</span>
+              <span className="shrink-0" style={{ color: '#A0A8A8' }}>{formatTime(entry.timestamp)}</span>
               <span style={{ color: entry.direction === 'sent' ? '#1A8B8D' : '#B5614A' }}>
                 {entry.direction === 'sent' ? '›' : '‹'}
               </span>

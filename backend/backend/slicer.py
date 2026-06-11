@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from backend.config import load_config
-from backend.gcode_processor import ProcessedGcode, SyringeMode, process_gcode
+from backend.gcode_processor import PRESSURIZE_MM, ProcessedGcode, SyringeMode, process_gcode
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,8 @@ async def slice_stl(
     nozzle_diameter: float | None = None,
     syringe_diameter: float | None = None,
     layer_height: float | None = None,
+    pressurize_mm: float | None = None,
+    flow_multiplier: float | None = None,
     profile_path: Path | None = None,
 ) -> ProcessedGcode:
     if profile_path is None:
@@ -143,6 +145,9 @@ async def slice_stl(
         cmd.extend(["-s", f"line_width={nozzle_diameter}"])
     if syringe_diameter is not None:
         cmd.extend(["-s", f"material_diameter={syringe_diameter}"])
+        # Ensure material_flow is 100% — the volumetric calculation via
+        # material_diameter already accounts for syringe cross-section.
+        cmd.extend(["-s", "material_flow=100"])
     if layer_height is not None:
         cmd.extend(["-s", f"layer_height={layer_height}"])
         cmd.extend(["-s", f"layer_height_0={layer_height}"])
@@ -176,4 +181,9 @@ async def slice_stl(
                 len(raw_gcode.splitlines()),
                 raw_gcode.splitlines()[:3])
 
-    return process_gcode(raw_gcode, syringe_mode)
+    return process_gcode(
+        raw_gcode,
+        syringe_mode,
+        pressurize_mm=pressurize_mm or PRESSURIZE_MM,
+        flow_multiplier=flow_multiplier or 1.0,
+    )

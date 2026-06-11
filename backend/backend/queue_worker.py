@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from enum import Enum
 from typing import Callable
 
 from backend.serial_manager import SerialError, SerialManager
+
+_BC_RUNTIME = re.compile(r"([BC])(-?\d+\.?\d*)")
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,7 @@ class QueueWorker:
         self._paused.set()  # not paused initially
         self._task: asyncio.Task | None = None
         self._on_event = on_event
+        self._flow_rate: float = 100.0  # percentage, same semantics as M221
 
     @property
     def status(self) -> PrintStatus:
@@ -46,6 +50,14 @@ class QueueWorker:
     @property
     def lines_total(self) -> int:
         return self._lines_total
+
+    @property
+    def flow_rate(self) -> float:
+        return self._flow_rate
+
+    def set_flow_rate(self, rate: float) -> None:
+        """Set runtime flow rate as percentage (100 = normal)."""
+        self._flow_rate = max(0, rate)
 
     def _emit(self, event: dict) -> None:
         if self._on_event:
@@ -132,7 +144,7 @@ class QueueWorker:
                         break
                     continue
 
-                await self._send(line)
+                await self._send(self._apply_flow_rate(line))
                 self._lines_sent += 1
                 self._emit({
                     "type": "progress",
@@ -149,6 +161,19 @@ class QueueWorker:
                 self._lines_sent,
                 self._lines_total,
             )
+
+    def _apply_flow_rate(self, line: str) -> str:
+        """Scale B/C values by the current flow rate percentage."""
+        if self._flow_rate == 100.0:
+            return line
+        multiplier = self._flow_rate / 100.0
+
+        def scale(m):
+            axis = m.group(1)
+            val = float(m.group(2)) * multiplier
+            return f"{axis}{val:g}"
+
+        return _BC_RUNTIME.sub(scale, line)
 
     async def _send(self, line: str) -> None:
         try:

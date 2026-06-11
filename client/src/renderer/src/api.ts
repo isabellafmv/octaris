@@ -20,10 +20,20 @@ export const api = {
       body: JSON.stringify({ port })
     }),
   disconnect: () => json<{ status: string }>('/disconnect', { method: 'POST' }),
-  upload: async (file: File, syringeMode: SyringeMode): Promise<UploadResult> => {
+  upload: async (
+    file: File,
+    syringeMode: SyringeMode,
+    opts?: { nozzleDiameter?: number; syringeDiameter?: number; layerHeight?: number; pressurizeMm?: number; flowMultiplier?: number }
+  ): Promise<UploadResult> => {
     const form = new FormData()
     form.append('file', file)
-    const res = await fetch(`${BASE}/upload?syringe_mode=${syringeMode}`, {
+    const params = new URLSearchParams({ syringe_mode: syringeMode })
+    if (opts?.nozzleDiameter) params.set('nozzle_diameter', String(opts.nozzleDiameter))
+    if (opts?.syringeDiameter) params.set('syringe_diameter', String(opts.syringeDiameter))
+    if (opts?.layerHeight) params.set('layer_height', String(opts.layerHeight))
+    if (opts?.pressurizeMm) params.set('pressurize_mm', String(opts.pressurizeMm))
+    if (opts?.flowMultiplier) params.set('flow_multiplier', String(opts.flowMultiplier))
+    const res = await fetch(`${BASE}/upload?${params}`, {
       method: 'POST',
       body: form
     })
@@ -69,5 +79,11 @@ export const api = {
       body: JSON.stringify({ line })
     }),
   getSerialLog: (limit = 200) =>
-    json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`)
+    json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
+  calibrationStatus: () =>
+    json<{ calibrated: boolean }>('/calibration/status'),
+  calibrationZero: () =>
+    json<{ status: string; command: string }>('/calibration/zero', { method: 'POST' }),
+  calibrationReset: () =>
+    json<{ status: string }>('/calibration/reset', { method: 'POST' }),
 }

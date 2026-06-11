@@ -64,16 +64,18 @@ def test_strip_footer():
 
 
 def test_substitute_extrusion_left():
+    """Left mode: E values should be negated for B axis."""
     lines = ["G1 X10 E0.5 F200", "G1 X20 E1.0 F200"]
     result = substitute_extrusion(lines, "left")
-    assert result[0] == "G1 X10 B0.5 F200"
-    assert result[1] == "G1 X20 B1.0 F200"
+    assert result[0] == "G1 X10 B-0.5 F200"
+    assert result[1] == "G1 X20 B-1 F200"
 
 
 def test_substitute_extrusion_right():
+    """Right mode: E values should also be negated for C axis."""
     lines = ["G1 X10 E0.5 F200"]
     result = substitute_extrusion(lines, "right")
-    assert result[0] == "G1 X10 C0.5 F200"
+    assert result[0] == "G1 X10 C-0.5 F200"
 
 
 def test_substitute_extrusion_both():
@@ -85,18 +87,18 @@ def test_substitute_extrusion_both():
         "G1 X30 E1.5",
     ]
     result = substitute_extrusion(lines, "both")
-    assert "B0.5" in result[0]
+    assert "B-0.5" in result[0]  # B is negated
     assert result[1] == "T1"
-    assert "C1.0" in result[2]
+    assert "C-1" in result[2]    # C is also negated
     assert result[3] == "T0"
-    assert "B1.5" in result[4]
+    assert "B-1.5" in result[4]  # B is negated
 
 
 def test_substitute_extrusion_negative_e():
-    """Negative E values (retractions) should not produce double-negative."""
+    """Negative E values (retractions) become positive B (retract = opposite of extrude)."""
     lines = ["G1 X10 E-0.5 F200"]
     result = substitute_extrusion(lines, "left")
-    assert result[0] == "G1 X10 B-0.5 F200"
+    assert result[0] == "G1 X10 B0.5 F200"
 
 
 def test_clamp_feed_rates():
@@ -118,19 +120,21 @@ def test_clamp_feed_rates_no_change():
 def test_build_preamble_left():
     preamble = build_preamble("left")
     non_comment = [l for l in preamble if not l.strip().startswith(";")]
-    assert non_comment[0] == "G90 ; absolute positioning"
-    assert "B0.2" in "".join(preamble)
+    assert non_comment[0] == "G90"
+    joined = "".join(preamble)
+    assert "B-0.2" in joined  # B pressurizes in negative direction
+    assert "G92 B0" in joined  # reset after pressurization
 
 
 def test_build_preamble_right():
     preamble = build_preamble("right")
-    assert "C0.2" in "".join(preamble)
+    assert "C-0.2" in "".join(preamble)  # C pressurizes in negative direction
 
 
 def test_build_footer_left():
     footer = build_footer("left")
     joined = "".join(footer)
-    assert "B-0.2" in joined  # depressurize
+    assert "B0.2" in joined  # depressurize (positive = retract for B)
     assert "Z5" in joined  # clearance
     assert "X0 Y0" in joined  # return to origin
 
@@ -138,7 +142,7 @@ def test_build_footer_left():
 def test_build_footer_right():
     footer = build_footer("right")
     joined = "".join(footer)
-    assert "C-0.2" in joined
+    assert "C0.2" in joined  # depressurize (positive = retract for C)
     assert "A5" in joined  # right mode uses A axis for Z
 
 
@@ -192,9 +196,9 @@ def test_insert_layer_depressurize_wraps_second():
     """Second G0 Z is a layer change — should be wrapped."""
     lines = [
         "G0 F300 X10 Y10 Z0.3",
-        "G1 F200 X20 Y10 B0.5",
+        "G1 F200 X20 Y10 B-0.5",
         "G0 F300 X10 Y10 Z0.5",
-        "G1 F200 X20 Y10 B1.0",
+        "G1 F200 X20 Y10 B-1.0",
     ]
     result = insert_layer_depressurize(lines, "left")
     joined = "\n".join(result)
@@ -202,23 +206,23 @@ def test_insert_layer_depressurize_wraps_second():
     assert "repressurize" in joined
     # The G0 Z0.5 should still be present
     assert "G0 F300 X10 Y10 Z0.5" in joined
-    # Should have B-0.2 (depressurize) and B0.2 (repressurize)
-    assert "B-0.2" in joined
+    # B0.2 = depressurize (retract), B-0.2 = repressurize (push)
     assert "B0.2" in joined
+    assert "B-0.2" in joined
 
 
 def test_insert_layer_depressurize_right_mode():
     """Right mode uses A axis for Z — should detect G0 with A."""
     lines = [
         "G0 F300 X10 Y10 A0.3",
-        "G1 F200 X20 Y10 C0.5",
+        "G1 F200 X20 Y10 C-0.5",
         "G0 F300 X10 Y10 A0.5",
-        "G1 F200 X20 Y10 C1.0",
+        "G1 F200 X20 Y10 C-1.0",
     ]
     result = insert_layer_depressurize(lines, "right")
     joined = "\n".join(result)
-    assert "C-0.2" in joined  # depressurize with C axis
-    assert "C0.2" in joined   # repressurize with C axis
+    assert "C0.2" in joined   # depressurize (retract = positive for C)
+    assert "C-0.2" in joined  # repressurize (push = negative for C)
 
 
 def test_process_gcode_integration():
@@ -241,13 +245,13 @@ def test_process_gcode_integration():
     # F clamping log should have entries (F600 and F1200 in raw)
     assert len(result.feed_log) > 0
 
-    # B substitutions should be positive (no negation)
+    # B substitutions should be negative (extrusion direction)
     found_b = False
     for line in result.lines:
-        if "B0." in line or "B1." in line or "B2." in line:
+        if "B-0." in line or "B-1." in line or "B-2." in line:
             found_b = True
             break
-    assert found_b, "No positive B substitution found"
+    assert found_b, "No negative B substitution found"
 
     # Footer should return to origin
     last_lines = "\n".join(result.lines[-5:])
@@ -258,13 +262,13 @@ def test_process_gcode_right():
     raw = (FIXTURES / "raw_sample.gcode").read_text()
     result = process_gcode(raw, "right")
 
-    # Should use C axis for extrusion
+    # Should use C axis for extrusion (negated)
     found_c = False
     for line in result.lines:
-        if "C0." in line or "C1." in line or "C2." in line:
+        if "C-0." in line or "C-1." in line or "C-2." in line:
             found_c = True
             break
-    assert found_c, "No positive C substitution found"
+    assert found_c, "No negative C substitution found"
 
     # Footer should use A axis for Z
     last_lines = "\n".join(result.lines[-5:])

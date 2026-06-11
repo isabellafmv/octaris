@@ -83,15 +83,22 @@ def substitute_extrusion(lines: list[str], mode: SyringeMode) -> list[str]:
         return _substitute_both(lines)
 
     axis = "B" if mode == "left" else "C"
+    negate = True  # both B and C extrude in negative direction
     result = []
     for line in lines:
-        result.append(_replace_e_with(line, axis))
+        result.append(_replace_e_with(line, axis, negate=negate))
     return result
 
 
-def _replace_e_with(line: str, axis: str) -> str:
+def _replace_e_with(line: str, axis: str, negate: bool = False) -> str:
     def replacer(m):
         val = m.group(1)
+        if negate:
+            num = float(val)
+            num = -num
+            # Format without trailing zeros but keep decimal for non-integers
+            formatted = f"{num:g}"
+            return f"{axis}{formatted}"
         return f"{axis}{val}"
     return _E_PATTERN.sub(replacer, line)
 
@@ -109,8 +116,24 @@ def _substitute_both(lines: list[str]) -> list[str]:
             current_axis = "C"
             result.append(line)
             continue
-        result.append(_replace_e_with(line, current_axis))
+        result.append(_replace_e_with(line, current_axis, negate=True))
     return result
+
+
+_BC_PATTERN = re.compile(r"([BC])(-?\d+\.?\d*)")
+
+
+def apply_flow_multiplier(lines: list[str], multiplier: float) -> list[str]:
+    """Scale all B/C extrusion values by the given multiplier."""
+    if multiplier == 1.0:
+        return lines
+
+    def scale(m):
+        axis = m.group(1)
+        val = float(m.group(2)) * multiplier
+        return f"{axis}{val:g}"
+
+    return [_BC_PATTERN.sub(scale, line) for line in lines]
 
 
 def clamp_feed_rates(lines: list[str], max_f: float = 400) -> tuple[list[str], list[str]]:
@@ -130,38 +153,41 @@ def clamp_feed_rates(lines: list[str], max_f: float = 400) -> tuple[list[str], l
     return result, log_entries
 
 
-def build_preamble(mode: SyringeMode) -> list[str]:
+def _extrude_sign(axis: str) -> int:
+    """Return -1 for B/C axes (both extrude in negative direction)."""
+    return -1 if axis in ("B", "C") else 1
+
+
+def build_preamble(mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> list[str]:
     """G90 absolute positioning + syringe pressurization."""
     extrusion_axis = {"left": "B", "right": "C", "both": "B"}[mode]
+    sign = _extrude_sign(extrusion_axis)
+    pressurize_val = sign * pressurize_mm
     return [
         "; Octaris — preamble",
-        "G90 ; absolute positioning",
-        f"; pressurize syringe",
-        f"G91 ; switch to relative for pressurization",
-        f"G1 {extrusion_axis}{PRESSURIZE_MM} F{PRESSURIZE_FEED}",
-        f"G90 ; back to absolute",
+        "G90",
+        f"G1 {extrusion_axis}{pressurize_val} F{PRESSURIZE_FEED} ; pressurize",
+        f"G92 {extrusion_axis}0 ; reset after pressurization",
     ]
 
 
-def build_footer(mode: SyringeMode) -> list[str]:
+def build_footer(mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> list[str]:
     """Depressurize syringe, raise nozzle, return to origin."""
     extrusion_axis = {"left": "B", "right": "C", "both": "B"}[mode]
     z_axis = {"left": "Z", "right": "A", "both": "Z"}[mode]
+    sign = _extrude_sign(extrusion_axis)
+    depressurize_val = -sign * pressurize_mm  # opposite of extrusion direction
     return [
         "; Octaris — footer",
-        f"; depressurize syringe",
-        f"G91 ; switch to relative for depressurization",
-        f"G1 {extrusion_axis}-{PRESSURIZE_MM} F{PRESSURIZE_FEED}",
-        f"G90 ; back to absolute",
-        f"; raise nozzle and return to origin",
-        f"G91 ; relative for Z clearance",
-        f"G1 {z_axis}{CLEARANCE_Z_MM} F{TRAVEL_FEED}",
-        f"G90 ; back to absolute",
+        f"G91",
+        f"G1 {extrusion_axis}{depressurize_val} F{PRESSURIZE_FEED} ; depressurize",
+        f"G1 {z_axis}{CLEARANCE_Z_MM} F{TRAVEL_FEED} ; raise nozzle",
+        f"G90",
         f"G1 X0 Y0 F{TRAVEL_FEED} ; return to origin",
     ]
 
 
-def insert_layer_depressurize(lines: list[str], mode: SyringeMode) -> list[str]:
+def insert_layer_depressurize(lines: list[str], mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> list[str]:
     """Wrap layer-change travel moves (G0 with Z/A) with depressurize/repressurize.
 
     Skips the very first G0-with-Z since that's the initial positioning before
@@ -185,12 +211,15 @@ def insert_layer_depressurize(lines: list[str], mode: SyringeMode) -> list[str]:
                 # Layer change — depressurize before, repressurize after
                 result.append(f"; layer change — depressurize")
                 result.append(f"G91")
-                result.append(f"G1 {extrusion_axis}-{PRESSURIZE_MM} F{PRESSURIZE_FEED}")
+                sign = _extrude_sign(extrusion_axis)
+                depressurize_val = -sign * pressurize_mm
+                repressurize_val = sign * pressurize_mm
+                result.append(f"G1 {extrusion_axis}{depressurize_val} F{PRESSURIZE_FEED}")
                 result.append(f"G90")
                 result.append(line)
                 result.append(f"; repressurize")
                 result.append(f"G91")
-                result.append(f"G1 {extrusion_axis}{PRESSURIZE_MM} F{PRESSURIZE_FEED}")
+                result.append(f"G1 {extrusion_axis}{repressurize_val} F{PRESSURIZE_FEED}")
                 result.append(f"G90")
         else:
             result.append(line)
@@ -221,14 +250,21 @@ def validate(lines: list[str]) -> None:
                 )
 
 
-def process_gcode(raw: str, mode: SyringeMode) -> ProcessedGcode:
+def process_gcode(
+    raw: str,
+    mode: SyringeMode,
+    pressurize_mm: float = PRESSURIZE_MM,
+    flow_multiplier: float = 1.0,
+) -> ProcessedGcode:
     time_estimate = extract_time_metadata(raw)
     lines = raw.splitlines()
     lines = strip_header(lines)
     lines = strip_footer(lines)
     lines = substitute_extrusion(lines, mode)
+    if flow_multiplier != 1.0:
+        lines = apply_flow_multiplier(lines, flow_multiplier)
     lines, feed_log = clamp_feed_rates(lines)
-    lines = insert_layer_depressurize(lines, mode)
-    lines = build_preamble(mode) + lines + build_footer(mode)
+    lines = insert_layer_depressurize(lines, mode, pressurize_mm=pressurize_mm)
+    lines = build_preamble(mode, pressurize_mm=pressurize_mm) + lines + build_footer(mode, pressurize_mm=pressurize_mm)
     validate(lines)
     return ProcessedGcode(lines=lines, time_estimate_s=time_estimate, feed_log=feed_log)
