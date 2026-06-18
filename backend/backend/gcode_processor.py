@@ -37,7 +37,7 @@ TRAVEL_FEED = 300
 # The right nozzle is this far in the +X direction from the left nozzle.
 # Always zero/calibrate at the LEFT nozzle — the software applies this offset
 # automatically when using the right nozzle or both nozzles.
-NOZZLE_OFFSET_X = 20.0  # TODO: measure and update
+NOZZLE_OFFSET_X = 31.0  # TODO: measure and update
 
 
 class GcodeValidationError(Exception):
