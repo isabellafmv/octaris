@@ -1,10 +1,10 @@
 {
-  "name": "client",
+  "name": "octaris",
   "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "description": "Octaris 6-axis bioprinter control software",
   "main": "./out/main/index.js",
-  "author": "example.com",
-  "homepage": "https://electron-vite.org",
+  "author": "Isabella Mueller-Vogt",
+  "homepage": "https://github.com/isabellamv/octaris",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -25,6 +25,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@tailwindcss/vite": "^4.2.2",
     "@types/three": "^0.183.1",
+    "electron-updater": "^6.8.9",
     "react-router-dom": "^7.13.1",
     "tailwindcss": "^4.2.2",
     "three": "^0.183.2"

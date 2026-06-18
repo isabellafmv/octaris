@@ -8,12 +8,11 @@ import struct
 import tempfile
 from pathlib import Path
 
-from backend.config import load_config
+from backend.config import PROJECT_ROOT, load_config
 from backend.gcode_processor import PRESSURIZE_MM, ProcessedGcode, SyringeMode, process_gcode
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 PROFILE_PATH = PROJECT_ROOT / "context" / "octaris_settings.json"
 
 PRINT_BED_MM = (60.0, 60.0, 60.0)  # X, Y, Z limits (must match octaris_settings.json)

@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "octaris_log.db"
+
+def _default_db_path() -> Path:
+    """Put the database in a writable location (not inside the frozen bundle)."""
+    if getattr(sys, "frozen", False):
+        # Bundled app: use ~/Library/Application Support/Octaris/
+        app_data = Path.home() / "Library" / "Application Support" / "Octaris"
+        app_data.mkdir(parents=True, exist_ok=True)
+        return app_data / "octaris_log.db"
+    # Dev: store in backend/
+    return Path(__file__).resolve().parent.parent / "octaris_log.db"
+
+
+DB_PATH = _default_db_path()
 
 _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS sessions (

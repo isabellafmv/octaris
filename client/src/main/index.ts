@@ -1,10 +1,135 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
+import { spawn, ChildProcess } from 'child_process'
 import icon from '../../resources/icon.png?asset'
 
+// ---------------------------------------------------------------------------
+// Backend process management
+// ---------------------------------------------------------------------------
+
+const BACKEND_PORT = 8000
+const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`
+let backendProcess: ChildProcess | null = null
+
+function getBackendPath(): string {
+  // In production the backend binary is bundled as an extraResource
+  const resourcesPath = process.resourcesPath
+  return join(resourcesPath, 'backend', 'octaris-backend', 'octaris-backend')
+}
+
+function startBackend(): void {
+  if (is.dev) {
+    // In development, assume the backend is started manually
+    console.log('[main] Dev mode — skipping backend spawn (start it manually)')
+    return
+  }
+
+  const backendPath = getBackendPath()
+  console.log(`[main] Starting backend: ${backendPath}`)
+
+  backendProcess = spawn(backendPath, [], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+  })
+
+  backendProcess.stdout?.on('data', (data) => {
+    console.log(`[backend] ${data.toString().trimEnd()}`)
+  })
+
+  backendProcess.stderr?.on('data', (data) => {
+    console.error(`[backend] ${data.toString().trimEnd()}`)
+  })
+
+  backendProcess.on('exit', (code, signal) => {
+    console.log(`[main] Backend exited: code=${code} signal=${signal}`)
+    backendProcess = null
+  })
+}
+
+function stopBackend(): void {
+  if (!backendProcess) return
+  console.log('[main] Stopping backend...')
+  backendProcess.kill('SIGTERM')
+
+  // Force kill after 3 seconds if it doesn't exit gracefully
+  const forceKillTimeout = setTimeout(() => {
+    if (backendProcess) {
+      console.log('[main] Force killing backend')
+      backendProcess.kill('SIGKILL')
+    }
+  }, 3000)
+
+  backendProcess.on('exit', () => {
+    clearTimeout(forceKillTimeout)
+  })
+}
+
+async function waitForBackend(timeoutMs = 15000): Promise<boolean> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`${BACKEND_URL}/`)
+      if (response.ok) {
+        console.log('[main] Backend is ready')
+        return true
+      }
+    } catch {
+      // Backend not ready yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  }
+  console.error('[main] Backend failed to start within timeout')
+  return false
+}
+
+// ---------------------------------------------------------------------------
+// Auto-updater
+// ---------------------------------------------------------------------------
+
+function setupAutoUpdater(): void {
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-available', (info) => {
+    console.log(`[updater] Update available: ${info.version}`)
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    // Prompt user to restart
+    const mainWindow = BrowserWindow.getAllWindows()[0]
+    if (mainWindow) {
+      dialog
+        .showMessageBox(mainWindow, {
+          type: 'info',
+          title: 'Update Ready',
+          message: `Octaris ${info.version} has been downloaded. Restart to apply the update.`,
+          buttons: ['Restart Now', 'Later']
+        })
+        .then(({ response }) => {
+          if (response === 0) {
+            autoUpdater.quitAndInstall()
+          }
+        })
+    }
+  })
+
+  autoUpdater.on('error', (err) => {
+    console.error('[updater] Error:', err.message)
+  })
+
+  // Check for updates (silently — no error dialogs)
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.log('[updater] Update check failed (offline?):', err.message)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Window
+// ---------------------------------------------------------------------------
+
 function createWindow(): void {
-  // Create the browser window.
   const mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
@@ -27,8 +152,6 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -36,40 +159,53 @@ function createWindow(): void {
   }
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+// ---------------------------------------------------------------------------
+// App lifecycle
+// ---------------------------------------------------------------------------
 
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
+app.whenReady().then(async () => {
+  electronApp.setAppUserModelId('com.octaris.bioprinter')
+
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+
+  // Start the backend
+  startBackend()
+
+  // Wait for backend before showing the window
+  if (!is.dev) {
+    const ready = await waitForBackend()
+    if (!ready) {
+      dialog.showErrorBox(
+        'Octaris Backend Error',
+        'The backend failed to start. Please check the logs and try again.'
+      )
+      app.quit()
+      return
+    }
+  }
 
   createWindow()
 
+  // Check for updates (production only)
+  if (!is.dev) {
+    setupAutoUpdater()
+  }
+
   app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+app.on('will-quit', () => {
+  stopBackend()
+})

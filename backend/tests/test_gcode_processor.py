@@ -9,6 +9,7 @@ from backend.gcode_processor import (
     clamp_feed_rates,
     extract_time_metadata,
     insert_layer_depressurize,
+    insert_travel_retract,
     process_gcode,
     strip_footer,
     strip_header,
@@ -75,7 +76,7 @@ def test_substitute_extrusion_right():
     """Right mode: E values should also be negated for C axis."""
     lines = ["G1 X10 E0.5 F200"]
     result = substitute_extrusion(lines, "right")
-    assert result[0] == "G1 X10 C-0.5 F200"
+    assert result[0] == "G1 X30 C-0.5 F200"  # X10 + 20mm nozzle offset
 
 
 def test_substitute_extrusion_both():
@@ -273,3 +274,46 @@ def test_process_gcode_right():
     # Footer should use A axis for Z
     last_lines = "\n".join(result.lines[-5:])
     assert "A5" in last_lines
+
+
+def test_insert_travel_retract_wraps_g0():
+    """In-layer G0 travel moves should get retract/prime brackets."""
+    lines = [
+        "G1 X10 Y10 B-0.5 F200",
+        "G0 X50 Y50 F300",          # travel move — should trigger retract
+        "G1 X60 Y60 B-1.0 F200",
+    ]
+    result = insert_travel_retract(lines, "left")
+    joined = "\n".join(result)
+    # Should have retract before travel and prime after
+    assert "; retract" in joined
+    assert "; prime" in joined
+    # B0.2 = retract (opposite of extrude), B-0.2 = prime
+    assert "B0.2" in joined
+    assert "B-0.2" in joined
+
+
+def test_insert_travel_retract_skips_layer_change():
+    """G0 moves with Z (layer changes) should NOT get retract brackets."""
+    lines = [
+        "G1 X10 Y10 B-0.5 F200",
+        "G0 X50 Y50 Z0.5 F300",     # layer change — skip
+        "G1 X60 Y60 B-1.0 F200",
+    ]
+    result = insert_travel_retract(lines, "left")
+    joined = "\n".join(result)
+    assert "; retract" not in joined
+    assert "; prime" not in joined
+
+
+def test_insert_travel_retract_consecutive_g0():
+    """Consecutive G0 moves should only retract once."""
+    lines = [
+        "G1 X10 Y10 B-0.5 F200",
+        "G0 X30 Y30 F300",
+        "G0 X50 Y50 F300",          # second travel — already retracted
+        "G1 X60 Y60 B-1.0 F200",
+    ]
+    result = insert_travel_retract(lines, "left")
+    assert result.count("G1 B0.2 F400 ; retract") == 1
+    assert result.count("G1 B-0.2 F400 ; prime") == 1

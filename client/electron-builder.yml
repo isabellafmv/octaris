@@ -1,8 +1,10 @@
-appId: com.electron.app
-productName: client
+appId: com.octaris.bioprinter
+productName: Octaris
 icon: resources/icon.png
+
 directories:
   buildResources: build
+
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -10,41 +12,38 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+
 extraResources:
-  - from: "../resources/bin"
-    to: "bin"
+  # PyInstaller-built backend (the whole folder)
+  - from: "../backend/dist/octaris-backend"
+    to: "backend/octaris-backend"
     filter:
       - "**/*"
+
 asarUnpack:
   - resources/**
-  - "**/bin/**/*"
-win:
-  executableName: client
-nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+
 mac:
-  entitlementsInherit: build/entitlements.mac.plist
+  identity: null              # skip code signing (run xattr -cr on the .app to open)
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    - NSMicrophoneUsageDescription: Application requests access to the device's camera for vision calibration.
   notarize: false
+
 dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
-  target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
-  category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: Octaris-${version}-mac.${ext}
+
 npmRebuild: false
+
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: isabellamv        # ← update to your GitHub username
+  repo: octaris            # ← update to your repo name
+  releaseType: release

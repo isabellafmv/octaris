@@ -44,6 +44,7 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
       setError(e.message || 'Command failed. Check the connection.')
     } finally {
       setSending(false)
+      inputRef.current?.focus()
     }
   }, [])
 

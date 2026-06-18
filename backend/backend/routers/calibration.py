@@ -24,9 +24,12 @@ async def calibrate_zero(request: Request, body: CalibrateRequest | None = None)
     """
     Set the current nozzle position as the origin.
 
-    The user should jog the nozzle to the center of the print area at the
-    correct Z height (~0.2 mm above surface) before calling this endpoint.
-    Sends G92 to zero the selected axes.
+    IMPORTANT: Always zero using the LEFT nozzle, even when printing with
+    the right nozzle or both. The software automatically applies the nozzle
+    offset (NOZZLE_OFFSET_X) for the right nozzle.
+
+    Jog the LEFT nozzle to the center of the print area at the correct Z
+    height (~0.2 mm above surface) before calling this endpoint.
     """
     serial: SerialManager = request.app.state.serial_manager
     if not serial.is_connected:

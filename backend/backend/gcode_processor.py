@@ -23,6 +23,7 @@ MARLIN_FOOTER = [
 
 _E_PATTERN = re.compile(r"E(-?\d+\.?\d*)")
 _F_PATTERN = re.compile(r"F(\d+\.?\d*)")
+_X_PATTERN = re.compile(r"X(-?\d+\.?\d*)")
 _Z_IN_G0 = re.compile(r"^G0\b.*[ZA]", re.IGNORECASE)
 
 # Pressurization distance (mm) to prime/deprime the syringe
@@ -31,6 +32,12 @@ PRESSURIZE_FEED = 400
 # Nozzle clearance height (mm) to raise before returning to origin
 CLEARANCE_Z_MM = 5
 TRAVEL_FEED = 300
+
+# Distance between left (B) and right (C) nozzle tips in mm.
+# The right nozzle is this far in the +X direction from the left nozzle.
+# Always zero/calibrate at the LEFT nozzle — the software applies this offset
+# automatically when using the right nozzle or both nozzles.
+NOZZLE_OFFSET_X = 20.0  # TODO: measure and update
 
 
 class GcodeValidationError(Exception):
@@ -78,6 +85,21 @@ def strip_footer(lines: list[str]) -> list[str]:
     return lines
 
 
+def _shift_x(line: str, offset: float) -> str:
+    """Add offset to any X coordinate in a G0/G1 line."""
+    if offset == 0:
+        return line
+    stripped = line.strip()
+    if not (stripped.startswith("G0") or stripped.startswith("G1")):
+        return line
+
+    def shift(m):
+        val = float(m.group(1)) + offset
+        return f"X{val:g}"
+
+    return _X_PATTERN.sub(shift, line)
+
+
 def substitute_extrusion(lines: list[str], mode: SyringeMode) -> list[str]:
     if mode == "both":
         return _substitute_both(lines)
@@ -86,7 +108,12 @@ def substitute_extrusion(lines: list[str], mode: SyringeMode) -> list[str]:
     negate = True  # both B and C extrude in negative direction
     result = []
     for line in lines:
-        result.append(_replace_e_with(line, axis, negate=negate))
+        new_line = _replace_e_with(line, axis, negate=negate)
+        # Right nozzle: shift all X coordinates by the nozzle offset
+        # (user always zeros at the left nozzle)
+        if mode == "right":
+            new_line = _shift_x(new_line, NOZZLE_OFFSET_X)
+        result.append(new_line)
     return result
 
 
@@ -96,7 +123,6 @@ def _replace_e_with(line: str, axis: str, negate: bool = False) -> str:
         if negate:
             num = float(val)
             num = -num
-            # Format without trailing zeros but keep decimal for non-integers
             formatted = f"{num:g}"
             return f"{axis}{formatted}"
         return f"{axis}{val}"
@@ -104,19 +130,30 @@ def _replace_e_with(line: str, axis: str, negate: bool = False) -> str:
 
 
 def _substitute_both(lines: list[str]) -> list[str]:
+    """Substitute E→B/C based on tool changes, with X offset for the right nozzle.
+
+    T0 = left nozzle (B axis, no X offset)
+    T1 = right nozzle (C axis, X shifted by NOZZLE_OFFSET_X)
+    """
     result = []
     current_axis = "B"  # default to left extruder (T0)
+    right_active = False
     for line in lines:
         stripped = line.strip()
         if stripped == "T0":
             current_axis = "B"
+            right_active = False
             result.append(line)
             continue
         if stripped == "T1":
             current_axis = "C"
+            right_active = True
             result.append(line)
             continue
-        result.append(_replace_e_with(line, current_axis, negate=True))
+        new_line = _replace_e_with(line, current_axis, negate=True)
+        if right_active:
+            new_line = _shift_x(new_line, NOZZLE_OFFSET_X)
+        result.append(new_line)
     return result
 
 
@@ -227,6 +264,57 @@ def insert_layer_depressurize(lines: list[str], mode: SyringeMode, pressurize_mm
     return result
 
 
+def insert_travel_retract(lines: list[str], mode: SyringeMode, retract_mm: float = PRESSURIZE_MM) -> list[str]:
+    """Wrap in-layer G0 travel moves with retract/prime to prevent oozing.
+
+    When a G0 (travel) follows a G1 (extrusion), insert a retract before the
+    G0 and a prime after the last consecutive G0. This prevents material from
+    stringing between print segments (e.g. star corners).
+
+    Skips G0 moves that contain Z/A (layer changes — handled by insert_layer_depressurize).
+    """
+    extrusion_axis = {"left": "B", "right": "C", "both": "B"}[mode]
+    z_axis = {"left": "Z", "right": "A", "both": "Z"}[mode]
+    layer_change = re.compile(rf"^G0\b.*{z_axis}", re.IGNORECASE)
+    g0_pattern = re.compile(r"^G0\b", re.IGNORECASE)
+    g1_pattern = re.compile(r"^G1\b", re.IGNORECASE)
+
+    sign = _extrude_sign(extrusion_axis)
+    retract_val = -sign * retract_mm   # opposite of extrude = retract
+    prime_val = sign * retract_mm       # same as extrude = prime
+
+    result: list[str] = []
+    retracted = False  # track whether we've already retracted
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(";"):
+            result.append(line)
+            continue
+
+        is_g0 = g0_pattern.match(stripped) is not None
+        is_layer_change = layer_change.match(stripped) is not None
+
+        if is_g0 and not is_layer_change and not retracted:
+            # Travel move after extrusion — retract first
+            result.append(f"G91")
+            result.append(f"G1 {extrusion_axis}{retract_val} F{PRESSURIZE_FEED} ; retract")
+            result.append(f"G90")
+            result.append(line)
+            retracted = True
+        elif retracted and not is_g0:
+            # First non-travel line after retraction — prime
+            result.append(f"G91")
+            result.append(f"G1 {extrusion_axis}{prime_val} F{PRESSURIZE_FEED} ; prime")
+            result.append(f"G90")
+            result.append(line)
+            retracted = False
+        else:
+            result.append(line)
+
+    return result
+
+
 def validate(lines: list[str]) -> None:
     non_comment = [l for l in lines if not l.strip().startswith(";")]
     if not non_comment:
@@ -265,6 +353,7 @@ def process_gcode(
         lines = apply_flow_multiplier(lines, flow_multiplier)
     lines, feed_log = clamp_feed_rates(lines)
     lines = insert_layer_depressurize(lines, mode, pressurize_mm=pressurize_mm)
+    lines = insert_travel_retract(lines, mode, retract_mm=pressurize_mm)
     lines = build_preamble(mode, pressurize_mm=pressurize_mm) + lines + build_footer(mode, pressurize_mm=pressurize_mm)
     validate(lines)
     return ProcessedGcode(lines=lines, time_estimate_s=time_estimate, feed_log=feed_log)

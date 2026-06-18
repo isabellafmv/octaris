@@ -6,9 +6,15 @@ from dataclasses import dataclass
 
 @dataclass
 class CalibrationResult:
-    px_per_mm_x: float
-    px_per_mm_y: float
+    homography: np.ndarray  # 3x3 pixel-to-mm transform
     center_px: tuple[int, int]  # center of the 4 screws in pixel coords
+
+    def px_to_mm(self, px_x: int, px_y: int) -> tuple[float, float]:
+        """Convert a pixel coordinate to mm relative to platform center."""
+        pt = np.array([px_x, px_y, 1.0])
+        mapped = self.homography @ pt
+        mapped /= mapped[2]
+        return (float(mapped[0]), float(mapped[1]))
 
 
 def _find_screw_centers(frame, threshold=180, min_area=80, max_area=5000):
@@ -24,7 +30,6 @@ def _find_screw_centers(frame, threshold=180, min_area=80, max_area=5000):
         area = cv2.contourArea(c)
         if area < min_area or area > max_area:
             continue
-        # filter by circularity — screws are roughly round
         perimeter = cv2.arcLength(c, True)
         if perimeter == 0:
             continue
@@ -42,10 +47,7 @@ def _find_screw_centers(frame, threshold=180, min_area=80, max_area=5000):
 
 
 def _sort_grid(points):
-    """Sort 4 points into [top-left, top-right, bottom-left, bottom-right].
-
-    Works regardless of camera rotation by using the centroid as reference.
-    """
+    """Sort 4 points into [top-left, top-right, bottom-left, bottom-right]."""
     pts = np.array(points, dtype=np.float32)
     centroid = pts.mean(axis=0)
 
@@ -60,16 +62,26 @@ def _sort_grid(points):
 
 
 def auto_calibrate(cap, screw_spacing_mm=20, threshold=180, duration=3) -> CalibrationResult | None:
-    """Detect 4 screw heads and compute px/mm in X and Y separately.
+    """Detect 4 screw heads and compute a perspective transform (pixel -> mm).
 
-    Averages detections over `duration` seconds to reduce noise.
     The 4 screws form a square grid with `screw_spacing_mm` between
-    adjacent screws in both X and Y.
+    adjacent screws. The center of the 4 screws is defined as (0, 0) mm.
+
+    Uses cv2.getPerspectiveTransform to handle camera angle distortion,
+    so both X and Y are accurate regardless of perspective.
 
     Returns CalibrationResult or None if detection failed.
     """
-    px_x_samples = []
-    px_y_samples = []
+    half = screw_spacing_mm / 2.0
+    # Real-world coordinates: TL, TR, BL, BR relative to center
+    world_pts = np.array([
+        [-half, -half],
+        [half, -half],
+        [-half, half],
+        [half, half],
+    ], dtype=np.float32)
+
+    homography_samples = []
     center_samples = []
     start = time.time()
 
@@ -90,41 +102,34 @@ def auto_calibrate(cap, screw_spacing_mm=20, threshold=180, duration=3) -> Calib
             cv2.waitKey(1)
             continue
 
-        tl, tr, bl, br = grid
+        pixel_pts = np.array(grid, dtype=np.float32)
+        H = cv2.getPerspectiveTransform(pixel_pts, world_pts)
+        homography_samples.append(H)
 
-        # X distances: top pair and bottom pair
-        dx_top = abs(tr[0] - tl[0])
-        dx_bot = abs(br[0] - bl[0])
-        # Y distances: left pair and right pair
-        dy_left = abs(bl[1] - tl[1])
-        dy_right = abs(br[1] - tr[1])
-
-        px_per_mm_x = ((dx_top + dx_bot) / 2) / screw_spacing_mm
-        px_per_mm_y = ((dy_left + dy_right) / 2) / screw_spacing_mm
-
-        px_x_samples.append(px_per_mm_x)
-        px_y_samples.append(px_per_mm_y)
-
-        # center = midpoint of all 4 screws
         cx = int(np.mean([p[0] for p in grid]))
         cy = int(np.mean([p[1] for p in grid]))
         center_samples.append((cx, cy))
 
-        # draw feedback
-        for p in grid:
+        # draw feedback with labels
+        labels = ["TL", "TR", "BL", "BR"]
+        for p, lbl in zip(grid, labels):
             cv2.circle(frame, p, 6, (0, 255, 0), 2)
+            cv2.putText(frame, lbl, (p[0]+8, p[1]-8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
         cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
-        cv2.putText(frame, f"px/mm X={px_per_mm_x:.1f}  Y={px_per_mm_y:.1f}",
+        cv2.putText(frame, f"Detected 4 screws ({len(homography_samples)} samples)",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         cv2.imshow("Calibration", frame)
         cv2.waitKey(1)
 
-    if not px_x_samples:
+    if not homography_samples:
         return None
 
+    # Average the homography matrices
+    H_avg = np.median(np.stack(homography_samples), axis=0)
+
     return CalibrationResult(
-        px_per_mm_x=float(np.median(px_x_samples)),
-        px_per_mm_y=float(np.median(px_y_samples)),
+        homography=H_avg,
         center_px=(
             int(np.median([c[0] for c in center_samples])),
             int(np.median([c[1] for c in center_samples])),
@@ -135,8 +140,8 @@ def auto_calibrate(cap, screw_spacing_mm=20, threshold=180, duration=3) -> Calib
 def detect_offset(cap, cal: CalibrationResult, duration=5) -> tuple[float, float] | None:
     """Detect the nozzle-to-center offset in mm.
 
-    Finds the nozzle tip (orange/copper color via HSV) and computes its
-    offset from the platform center (from calibration).
+    Finds the nozzle tip via HSV and uses the homography to convert
+    the pixel position to mm coordinates (where platform center = 0,0).
 
     Returns (dx_mm, dy_mm) or None if detection failed.
     """
@@ -148,9 +153,12 @@ def detect_offset(cap, cal: CalibrationResult, duration=5) -> tuple[float, float
         if not ret:
             continue
 
-        # nozzle detection via HSV (orange/copper tip)
+        # nozzle detection via HSV
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, np.array([2, 200, 130]), np.array([11, 255, 200]))
+        mask = cv2.inRange(hsv, np.array([170, 130, 110]), np.array([176, 190, 225]))
+        # mask = cv2.inRange(hsv, np.array([70, 120, 140]), np.array([80, 175, 180]))
+
+        # [70, 120, 140]
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -163,8 +171,7 @@ def detect_offset(cap, cal: CalibrationResult, duration=5) -> tuple[float, float
                     nozzle = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
 
         if nozzle:
-            dx_mm = (nozzle[0] - cal.center_px[0]) / cal.px_per_mm_x
-            dy_mm = (nozzle[1] - cal.center_px[1]) / cal.px_per_mm_y
+            dx_mm, dy_mm = cal.px_to_mm(nozzle[0], nozzle[1])
             offsets.append((dx_mm, dy_mm))
 
             # draw feedback
@@ -218,6 +225,9 @@ if __name__ == "__main__":
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
+    print("Press q in HSV Inspector to continue to calibration...")
+    inspect_hsv(cap)
+
     print("Calibrating with 4 screw heads (20mm spacing)...")
     cal = auto_calibrate(cap, screw_spacing_mm=20)
 
@@ -228,8 +238,9 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
         exit(1)
 
-    print(f"Calibrated: {cal.px_per_mm_x:.2f} px/mm (X), {cal.px_per_mm_y:.2f} px/mm (Y)")
     print(f"Platform center: {cal.center_px}")
+    # Verify by mapping each screw — should read ±10mm
+    print("Verification (should be ±10mm at each screw):")
 
     print("\nDetecting nozzle offset...")
     offset = detect_offset(cap, cal)

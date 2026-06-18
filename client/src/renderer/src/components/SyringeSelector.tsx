@@ -1,8 +1,9 @@
-import type { SyringeMode } from '../types'
+import type { SyringeMode } from "../types";
 
 interface SyringeModuleVizProps {
-  selected: SyringeMode
-  onSelect: (mode: SyringeMode) => void
+  selected: SyringeMode;
+  onSelect: (mode: SyringeMode) => void;
+  compact?: boolean;
 }
 
 function SyringeModule({
@@ -10,29 +11,32 @@ function SyringeModule({
   mode,
   selected,
   fillLevel,
-  onSelect
+  onSelect,
 }: {
-  label: string
-  mode: SyringeMode
-  selected: SyringeMode
-  fillLevel: number
-  onSelect: (m: SyringeMode) => void
+  label: string;
+  mode: SyringeMode;
+  selected: SyringeMode;
+  fillLevel: number;
+  onSelect: (m: SyringeMode) => void;
 }) {
-  const isActive = selected === mode || selected === 'both'
+  const isActive = selected === mode || selected === "both";
 
   return (
     <button
-      onClick={() => onSelect(selected === mode ? 'both' : mode)}
+      onClick={() => onSelect(selected === mode ? "both" : mode)}
       className="flex flex-col items-center gap-2 transition-all active:scale-95 group"
     >
       {/* Syringe SVG */}
       <svg viewBox="0 0 52 120" className="w-10 h-24">
         {/* Outer tube */}
         <rect
-          x="10" y="10" width="32" height="88"
+          x="10"
+          y="10"
+          width="32"
+          height="88"
           rx="16"
-          fill={isActive ? '#1A8B8D' : 'none'}
-          stroke={isActive ? '#1A8B8D' : '#C8C3B8'}
+          fill={isActive ? "#1A8B8D" : "none"}
+          stroke={isActive ? "#1A8B8D" : "#C8C3B8"}
           strokeWidth="2"
         />
         {/* Inner fill */}
@@ -43,7 +47,7 @@ function SyringeModule({
             width="28"
             height={fillLevel * 80}
             rx="14"
-            fill={isActive ? '#127A7C' : '#D8D3C8'}
+            fill={isActive ? "#127A7C" : "#D8D3C8"}
           />
         )}
         {!isActive && (
@@ -63,100 +67,118 @@ function SyringeModule({
         )}
         {/* Tip */}
         <rect
-          x="20" y="98" width="12" height="14"
+          x="20"
+          y="98"
+          width="12"
+          height="14"
           rx="6"
-          fill={isActive ? '#1A8B8D' : '#C8C3B8'}
+          fill={isActive ? "#1A8B8D" : "#C8C3B8"}
         />
         {/* Cap ring */}
         <rect
-          x="8" y="8" width="36" height="8"
+          x="8"
+          y="8"
+          width="36"
+          height="8"
           rx="4"
-          fill={isActive ? '#127A7C' : '#B8B3A8'}
+          fill={isActive ? "#127A7C" : "#B8B3A8"}
         />
       </svg>
 
       {/* Dot indicator */}
       <div
         className="w-2 h-2 rounded-full transition-all"
-        style={{ backgroundColor: isActive ? '#1A8B8D' : '#C8C3B8' }}
+        style={{ backgroundColor: isActive ? "#1A8B8D" : "#C8C3B8" }}
       />
 
       {/* Label */}
       <span
         className="text-[10px] font-semibold tracking-widest uppercase"
-        style={{ color: isActive ? '#1A8B8D' : '#8B9090' }}
+        style={{ color: isActive ? "#1A8B8D" : "#8B9090" }}
       >
         {label} Syringe
       </span>
     </button>
-  )
+  );
 }
 
-export function SyringeModuleViz({ selected, onSelect }: SyringeModuleVizProps) {
+export function SyringeModuleViz({
+  selected,
+  onSelect,
+  compact = false,
+}: SyringeModuleVizProps) {
   return (
     <div className="flex flex-col items-center gap-4 w-full">
-      {/* Modules row */}
-      <div className="flex items-end justify-center gap-12">
-        <SyringeModule
-          label="Left"
-          mode="left"
-          selected={selected}
-          fillLevel={0.75}
-          onSelect={onSelect}
-        />
+      {!compact && (
+        <>
+          {/* Modules row */}
+          <div className="flex items-end justify-center gap-12">
+            <SyringeModule
+              label="Left"
+              mode="left"
+              selected={selected}
+              fillLevel={0.75}
+              onSelect={onSelect}
+            />
+            <SyringeModule
+              label="Right"
+              mode="right"
+              selected={selected}
+              fillLevel={0.35}
+              onSelect={onSelect}
+            />
+          </div>
 
-        {/* Platform bar */}
-        {/* <div className="absolute h-0.5 w-28 rounded-full" style={{ backgroundColor: '#C8C3B8' }} /> */}
+          {/* Platform rail */}
+          <div className="flex items-center gap-3 mt-1">
+            <div
+              className="h-0.5 w-32 rounded-full"
+              style={{ backgroundColor: "#C8C3B8" }}
+            />
+          </div>
+        </>
+      )}
 
-        <SyringeModule
-          label="Right"
-          mode="right"
-          selected={selected}
-          fillLevel={0.35}
-          onSelect={onSelect}
-        />
-      </div>
-
-      {/* Platform rail */}
-      <div className="flex items-center gap-3 mt-1">
-        <div className="h-0.5 w-32 rounded-full" style={{ backgroundColor: '#C8C3B8' }} />
-      </div>
-
-      {/* Toggle hint */}
-      <p className="text-center text-xs leading-relaxed max-w-50" style={{ color: '#8B9090' }}>
-        Tap a module to toggle{' '}
-        <span className="font-semibold" style={{ color: '#2D3333' }}>dual-ink mode</span>
-        {' '}or single extrusion.
-      </p>
-
-      {/* Mode indicator pills */}
-      <div className="flex gap-2">
-        {(['left', 'right', 'both'] as SyringeMode[]).map((m) => (
-          <button
-            key={m}
-            onClick={() => onSelect(m)}
-            className="px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide uppercase transition-all"
-            style={
-              selected === m
-                ? { backgroundColor: '#1A8B8D', color: 'white' }
-                : { backgroundColor: '#D8D3C8', color: '#8B9090' }
-            }
-          >
-            {m}
-          </button>
-        ))}
+      {/* Mode indicator pills + hint — always visible */}
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex gap-2">
+          {(["left", "right", "both"] as SyringeMode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => onSelect(m)}
+              className="px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide uppercase transition-all"
+              style={
+                selected === m
+                  ? { backgroundColor: "#1A8B8D", color: "white" }
+                  : { backgroundColor: "#D8D3C8", color: "#8B9090" }
+              }
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <p
+          className="text-center text-xs leading-relaxed"
+          style={{ color: "#8B9090" }}
+        >
+          Tap to toggle{" "}
+          <span className="font-semibold" style={{ color: "#2D3333" }}>
+            dual-ink mode
+          </span>{" "}
+          or single extrusion.
+        </p>
       </div>
     </div>
-  )
+  );
 }
 
 // Keep backward-compatible export
 export function SyringeSelector({
   selected,
-  onSelect
+  onSelect,
 }: {
-  selected: SyringeMode
-  onSelect: (m: SyringeMode) => void
+  selected: SyringeMode;
+  onSelect: (m: SyringeMode) => void;
 }) {
-  return <SyringeModuleViz selected={selected} onSelect={onSelect} />
+  return <SyringeModuleViz selected={selected} onSelect={onSelect} />;
 }
