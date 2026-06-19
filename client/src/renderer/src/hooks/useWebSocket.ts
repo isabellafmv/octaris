@@ -100,5 +100,16 @@ export function useWebSocket() {
     setState((s) => ({ ...s, serialLog: entries }))
   }, [])
 
-  return { ...state, clearSerialLog, setSerialLog }
+  const resetPrintState = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      status: 'idle',
+      linesSent: 0,
+      linesTotal: 0,
+      timeRemainingS: null,
+      extrusionRate: 100,
+    }))
+  }, [])
+
+  return { ...state, clearSerialLog, setSerialLog, resetPrintState }
 }

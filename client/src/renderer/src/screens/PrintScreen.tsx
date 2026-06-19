@@ -4,18 +4,6 @@ import { PrintOverlay } from '../components/PrintOverlay'
 import { api } from '../api'
 import type { PrintStatus } from '../types'
 
-interface PrintScreenProps {
-  status: PrintStatus
-  linesSent: number
-  linesTotal: number
-  timeRemainingS: number | null
-  extrusionRate: number
-  filename: string | null
-  onBack: () => void
-  onTakeOver: () => void
-  printerConnected: boolean
-}
-
 function SetupIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-5 h-5">
@@ -40,22 +28,20 @@ function LibraryIcon() {
   )
 }
 
-function GearIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-4 h-4">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-    </svg>
-  )
+interface PrintScreenProps {
+  status: PrintStatus
+  linesSent: number
+  linesTotal: number
+  timeRemainingS: number | null
+  extrusionRate: number
+  filename: string | null
+  onBack: () => void
+  onRestart: () => void
+  onTakeOver: () => void
+  printerConnected: boolean
 }
 
-function formatTime(s: number): string {
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const hh = String(h).padStart(2, '0')
-  const mm = String(m).padStart(2, '0')
-  return `${hh}:${mm}`
-}
+
 
 function CircularProgress({ percentage }: { percentage: number }) {
   const r = 88
@@ -133,10 +119,11 @@ export function PrintScreen({
   status,
   linesSent,
   linesTotal,
-  timeRemainingS,
+  timeRemainingS: _timeRemainingS,
   extrusionRate,
   filename,
   onBack,
+  onRestart,
   onTakeOver
 }: PrintScreenProps) {
   const [error, setError] = useState<string | null>(null)
@@ -166,8 +153,7 @@ export function PrintScreen({
   }, [])
 
   const percentage = linesTotal > 0 ? Math.round((linesSent / linesTotal) * 100) : 0
-  const timeFormatted = timeRemainingS !== null ? formatTime(timeRemainingS) : '--:--'
-  const vesselName = filename ?? 'Printing Vessel_Alpha'
+  const vesselName = filename ?? 'Printing File'
   const isStabilized = status === 'printing'
 
   return (
@@ -191,7 +177,7 @@ export function PrintScreen({
         {[
           { icon: <SetupIcon />, label: 'SETUP', action: onBack },
           { icon: <MonitorIcon />, label: 'MONITOR', active: true, action: () => {} },
-          { icon: <LibraryIcon />, label: 'LIBRARY', action: onTakeOver },
+          { icon: <LibraryIcon />, label: 'LOGS', action: onTakeOver },
         ].map((item) => (
           <div key={item.label} className="flex flex-col items-center gap-0.5 w-full">
             <button
@@ -213,18 +199,6 @@ export function PrintScreen({
             </span>
           </div>
         ))}
-
-        <div className="flex-1" />
-
-        {/* Settings at bottom */}
-        <button
-          onClick={onTakeOver}
-          className="w-9 h-9 rounded-full flex items-center justify-center"
-          style={{ color: '#8B9090' }}
-          title="Manual Control"
-        >
-          <GearIcon />
-        </button>
       </div>
 
       {/* ── Main content ── */}
@@ -247,12 +221,15 @@ export function PrintScreen({
             </p>
             <h2 className="text-2xl font-bold mt-0.5">{vesselName}</h2>
           </div>
-          <button
-            className="w-8 h-8 rounded-full flex items-center justify-center mt-1"
-            style={{ color: '#8B9090', backgroundColor: '#E8E3D8' }}
-          >
-            <GearIcon />
-          </button>
+          <div className="flex items-center gap-1.5 mt-2">
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: isStabilized ? '#1A8B8D' : '#B5614A' }}
+            />
+            <span className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: '#8B9090' }}>
+              {isStabilized ? 'READY' : status.toUpperCase()}
+            </span>
+          </div>
         </div>
 
         {/* Circular progress */}
@@ -270,11 +247,11 @@ export function PrintScreen({
           <div className="flex">
             <div className="flex-1 px-5 py-4 border-r" style={{ borderColor: '#C8C3B4' }}>
               <p className="text-[9px] font-semibold tracking-widest uppercase" style={{ color: '#5A7070' }}>
-                Time Remaining
+                Lines Sent
               </p>
               <p className="text-2xl font-bold mt-1" style={{ color: '#2D3333' }}>
-                {timeFormatted}
-                <span className="text-xs font-medium ml-1" style={{ color: '#5A7070' }}>HRS</span>
+                {linesSent.toLocaleString()}
+                <span className="text-xs font-medium ml-1" style={{ color: '#5A7070' }}>/ {linesTotal.toLocaleString()}</span>
               </p>
             </div>
             <div className="flex-1 px-5 py-4">
@@ -342,45 +319,10 @@ export function PrintScreen({
           </button>
         </div>
 
-        {/* Bottom status bar */}
-        <div
-          className="flex items-center justify-between px-7 py-3 mt-auto shrink-0 border-t"
-          style={{ borderColor: '#E8E3D8' }}
-        >
-          <div className="flex items-center gap-3">
-            {/* Layer avatar placeholder */}
-            <div
-              className="w-9 h-9 rounded-full overflow-hidden flex items-center justify-center shrink-0"
-              style={{ backgroundColor: '#D8D3C8' }}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="#8B9090" strokeWidth="1.5" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-[9px] font-semibold tracking-widest uppercase" style={{ color: '#A0A8A8' }}>
-                Current Layer
-              </p>
-              <p className="text-sm font-bold" style={{ color: '#2D3333' }}>
-                {linesSent.toLocaleString()} / {linesTotal.toLocaleString()}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <div
-              className="w-1.5 h-1.5 rounded-full"
-              style={{ backgroundColor: isStabilized ? '#1A8B8D' : '#B5614A' }}
-            />
-            <span className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: '#8B9090' }}>
-              {isStabilized ? 'System Stabilized' : status}
-            </span>
-          </div>
-        </div>
       </div>
 
       {(status === 'stopped' || status === 'completed') && (
-        <PrintOverlay status={status} onResume={handleResume} onBack={onBack} />
+        <PrintOverlay status={status} onResume={handleResume} onRestart={onRestart} onBack={onBack} />
       )}
     </div>
   )

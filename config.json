@@ -1,5 +1,5 @@
 {
   "target": "macos",
   "touch_mode": false,
-  "baud_rate": 250000
+  "baud_rate": 115200
 }

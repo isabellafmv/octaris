@@ -18,6 +18,18 @@ interface SetupScreenProps {
   onStartPrint: () => void;
   externalError?: string | null;
   onClearExternalError?: () => void;
+  syringeMode: SyringeMode;
+  onSyringeModeChange: (mode: SyringeMode) => void;
+  nozzleDiameter: string;
+  onNozzleDiameterChange: (v: string) => void;
+  syringeDiameter: string;
+  onSyringeDiameterChange: (v: string) => void;
+  layerHeight: string;
+  onLayerHeightChange: (v: string) => void;
+  pressurizeMm: string;
+  onPressurizeMmChange: (v: string) => void;
+  flowMultiplier: string;
+  onFlowMultiplierChange: (v: string) => void;
 }
 
 export function SetupScreen({
@@ -27,20 +39,26 @@ export function SetupScreen({
   onStartPrint,
   externalError,
   onClearExternalError,
+  syringeMode,
+  onSyringeModeChange: setSyringeMode,
+  nozzleDiameter,
+  onNozzleDiameterChange: setNozzleDiameter,
+  syringeDiameter,
+  onSyringeDiameterChange: setSyringeDiameter,
+  layerHeight,
+  onLayerHeightChange: setLayerHeight,
+  pressurizeMm,
+  onPressurizeMmChange: setPressurizeMm,
+  flowMultiplier,
+  onFlowMultiplierChange: setFlowMultiplier,
 }: SetupScreenProps) {
   const [uploadMode, setUploadMode] = useState<UploadMode>("stl");
-  const [syringeMode, setSyringeMode] = useState<SyringeMode>("left");
   const [stlFile, setStlFile] = useState<File | null>(null);
   const [gcodeFile, setGcodeFile] = useState<File | null>(null);
   const [slicing, setSlicing] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [calibrated, setCalibrated] = useState(false);
-  const [nozzleDiameter, setNozzleDiameter] = useState<string>("");
-  const [syringeDiameter, setSyringeDiameter] = useState<string>("");
-  const [layerHeight, setLayerHeight] = useState<string>("");
-  const [pressurizeMm, setPressurizeMm] = useState<string>("");
-  const [flowMultiplier, setFlowMultiplier] = useState<string>("");
   const [syringeCardCompact, setSyringeCardCompact] = useState(false);
   const syringeCardRef = useRef<HTMLDivElement>(null);
 
