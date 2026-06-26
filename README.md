@@ -34,7 +34,7 @@ currently only available for mac users
 
 1. **Connect the printer**: use the port selector in the top-right corner. Click *Connect*.
 
-2. **Select syringe mode**: choose *Left*, *Right*, or *Both* syringes. This controls which axes receive extrusion commands. Always zero/calibrate at the left nozzle (the software applies the right nozzle offset automatically).
+2. **Select syringe mode**: choose *Left*, *Right*, or *Both* (both mode is not fully functional yet) syringes. This controls which axes receive extrusion commands. Always zero/calibrate at the left nozzle (the software applies the right nozzle offset automatically).
 
 3. **Upload a file** (two modes are available via the toggle below the syringe selector):
    - **STL File**: upload a `.stl` model, then click *Click to Slice*. The backend runs CuraEngine and post-processes the G-code (extrusion substitution, feed-rate clamping, travel retraction). Requires UltiMaker Cura to be installed.
