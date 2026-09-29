@@ -1,14 +1,23 @@
-import type { PrintStatus } from '../types'
+import type { PrintStatus, StopInfo } from '../types'
 
 interface PrintOverlayProps {
   status: PrintStatus
+  stopInfo: StopInfo
   onResume: () => void
   onRestart: () => void
   onBack: () => void
 }
 
-export function PrintOverlay({ status, onResume, onRestart, onBack }: PrintOverlayProps) {
+function stoppedMessage(stopInfo: StopInfo): string {
+  if (stopInfo === null) return 'Checking where the print stopped…'
+  if (stopInfo.resumable) return 'The print can continue from where it stopped.'
+  if (stopInfo.reason) return `It can't be resumed: ${stopInfo.reason}.`
+  return 'The print job was interrupted.'
+}
+
+export function PrintOverlay({ status, stopInfo, onResume, onRestart, onBack }: PrintOverlayProps) {
   const isCompleted = status === 'completed'
+  const canResume = !isCompleted && stopInfo?.resumable === true
 
   return (
     <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(40,43,43,0.7)' }}>
@@ -36,13 +45,11 @@ export function PrintOverlay({ status, onResume, onRestart, onBack }: PrintOverl
           {isCompleted ? 'Print Complete!' : 'Print Stopped'}
         </h2>
         <p className="text-sm mb-7" style={{ color: '#8B9090' }}>
-          {isCompleted
-            ? 'Your bioprint has finished successfully.'
-            : 'The print job was interrupted.'}
+          {isCompleted ? 'Your bioprint has finished successfully.' : stoppedMessage(stopInfo)}
         </p>
 
         <div className="flex flex-col gap-2.5" style={{ minWidth: '240px' }}>
-          {!isCompleted && (
+          {canResume && (
             <button
               onClick={onResume}
               className="flex items-center justify-center gap-2 w-full py-3.5 rounded-2xl text-white font-semibold text-sm tracking-wide transition-all active:scale-[0.97]"

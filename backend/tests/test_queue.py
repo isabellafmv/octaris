@@ -1,9 +1,11 @@
 import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from backend.queue_worker import PrintStatus, QueueWorker
+from backend.serial_manager import SerialManager
 
 
 def make_worker(events: list | None = None, send_delay: float = 0.0):
@@ -15,6 +17,7 @@ def make_worker(events: list | None = None, send_delay: float = 0.0):
         return "ok"
 
     serial.send_line = AsyncMock(side_effect=slow_send)
+    serial.emergency_write = AsyncMock()
     serial.is_connected = True
 
     captured = events if events is not None else []
@@ -37,7 +40,7 @@ async def test_load_and_print():
 
     assert worker.status == PrintStatus.COMPLETED
     assert worker.lines_sent == 3
-    assert serial.send_line.call_count == 3
+    assert sent_lines(serial) == ["M114", "M84 S0", "G1 X10 F200", "G1 Y5 F200", "G1 Z1 F100"]
 
     progress_events = [e for e in events if e["type"] == "progress"]
     assert len(progress_events) == 3
@@ -60,20 +63,140 @@ async def test_priority_bypass():
     assert "M221 S80" in calls
 
 
-async def test_stop_flushes_queue():
+def sent_lines(serial) -> list[str]:
+    return [c.args[0] if c.args else "" for c in serial.send_line.call_args_list]
+
+
+async def test_estop_flushes_queue():
     worker, serial, events = make_worker(send_delay=0.01)
     gcode = [f"G1 X{i}" for i in range(200)]
     worker.load_gcode(gcode)
     worker.start()
 
     await asyncio.sleep(0.05)
-    await worker.stop()
+    await worker.estop()
     await asyncio.sleep(0.2)
 
     assert worker.status == PrintStatus.STOPPED
-    calls = [c.args[0] if c.args else "" for c in serial.send_line.call_args_list]
-    assert "M410" in calls
+    serial.emergency_write.assert_awaited_once_with("M410")
+    assert "M410" not in sent_lines(serial)
     assert worker.lines_sent < 200
+
+
+async def test_estop_while_idle_leaves_nothing_queued():
+    worker, serial, events = make_worker()
+
+    await worker.estop()
+
+    serial.emergency_write.assert_awaited_once_with("M410")
+    assert worker._priority_queue.empty()
+
+    worker.load_gcode(["G1 X1", "G1 X2"])
+    worker.start()
+    await asyncio.sleep(0.3)
+
+    assert worker.status == PrintStatus.COMPLETED
+    assert sent_lines(serial) == ["M114", "M84 S0", "G1 X1", "G1 X2"]
+
+
+async def test_load_gcode_drains_priority_queue():
+    worker, serial, events = make_worker()
+    worker.enqueue_priority("M221 S80")
+
+    worker.load_gcode(["G1 X1"])
+    worker.start()
+    await asyncio.sleep(0.3)
+
+    assert sent_lines(serial) == ["M114", "M84 S0", "G1 X1"]
+
+
+async def test_estop_mid_print_bypasses_in_flight_send():
+    worker, serial, events = make_worker()
+    release = asyncio.Event()
+    in_flight = asyncio.Event()
+
+    async def blocked_send(line):
+        if line == "M114":
+            return "ok"  # print-start seed: answers immediately, doesn't parse
+        in_flight.set()
+        await release.wait()  # printer hasn't answered "ok" yet
+        return "ok"
+
+    serial.send_line = AsyncMock(side_effect=blocked_send)
+    worker.load_gcode([f"G1 X{i}" for i in range(10)])
+    worker.start()
+    await asyncio.wait_for(in_flight.wait(), timeout=1)
+
+    await asyncio.wait_for(worker.estop(), timeout=1)
+
+    serial.emergency_write.assert_awaited_once_with("M410")
+    assert not release.is_set()  # the in-flight send is still waiting
+    release.set()
+    await asyncio.sleep(0.1)
+
+
+async def test_no_lines_sent_after_estop():
+    worker, serial, events = make_worker(send_delay=0.01)
+    worker.load_gcode([f"G1 X{i}" for i in range(200)])
+    worker.start()
+    await asyncio.sleep(0.05)
+
+    await worker.estop()
+    sent_at_estop = serial.send_line.call_count
+    await asyncio.sleep(0.3)
+
+    assert serial.send_line.call_count == sent_at_estop
+    assert worker.status == PrintStatus.STOPPED
+    assert worker._task is not None and worker._task.done()
+
+
+async def test_estop_while_paused_sends_nothing_more():
+    worker, serial, events = make_worker(send_delay=0.005)
+    worker.load_gcode([f"G1 X{i}" for i in range(50)])
+    worker.start()
+    await asyncio.sleep(0.05)
+    worker.pause()
+    await asyncio.sleep(0.05)
+
+    sent_at_estop = serial.send_line.call_count
+    await worker.estop()
+    await asyncio.sleep(0.2)
+
+    assert serial.send_line.call_count == sent_at_estop
+    assert worker._task is not None and worker._task.done()
+
+
+async def test_serial_emergency_write_not_blocked_by_pending_ok():
+    """M410 reaches the wire while another line holds _io_lock waiting for "ok"."""
+    reading = threading.Event()
+    answer = threading.Event()
+    written: list[bytes] = []
+
+    fake = MagicMock()
+    fake.is_open = True
+    fake.write.side_effect = written.append
+
+    def readline():
+        reading.set()
+        answer.wait(timeout=2)
+        return b"ok\n"
+
+    fake.readline.side_effect = readline
+
+    manager = SerialManager()
+    manager._serial = fake
+
+    send_task = asyncio.create_task(manager.send_line("G1 X10"))
+    await asyncio.to_thread(reading.wait, 1)
+
+    await asyncio.wait_for(manager.emergency_write("M410"), timeout=1)
+
+    assert written == [b"G1 X10\n", b"M410\n"]
+    assert not send_task.done()
+    assert [e["content"] for e in manager.log_buffer] == ["G1 X10", "M410"]
+
+    answer.set()
+    assert await send_task == "ok"
 
 
 async def test_pause_resume():

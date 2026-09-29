@@ -12,13 +12,79 @@ export interface SerialLogEntry {
   content: string
 }
 
-export interface WsEvent {
-  type: 'progress' | 'time_remaining_s' | 'status' | 'extrusion_rate' | 'disconnected' | 'serial_log'
-  value?: string | number
-  lines_sent?: number
-  lines_total?: number
-  entry?: SerialLogEntry
+export interface ProgressEvent {
+  type: 'progress'
+  lines_sent: number
+  lines_total: number
+  time_remaining_s?: number
 }
+
+export interface StatusEvent {
+  type: 'status'
+  value: PrintStatus
+}
+
+export interface ExtrusionRateEvent {
+  type: 'extrusion_rate'
+  value: number
+}
+
+export interface ErrorEvent {
+  type: 'error'
+  message: string
+}
+
+// Sent after an e-stop once the backend knows whether the print can resume
+export interface StopEvent {
+  type: 'stop'
+  resumable: boolean
+  reason: string | null
+  line?: number
+}
+
+// null while the backend is still working out where the print stopped
+export type StopInfo = { resumable: boolean; reason: string | null } | null
+
+export interface SerialLogWsEvent {
+  type: 'serial_log'
+  entry: SerialLogEntry
+}
+
+export interface PrinterEvent {
+  type: 'printer'
+  connected: boolean
+  port: string | null
+}
+
+export interface SnapshotEvent {
+  type: 'snapshot'
+  printer_connected: boolean
+  port: string | null
+  print_status: PrintStatus
+  lines_sent: number
+  lines_total: number
+  calibrated: boolean
+  flow_rate: number
+  resumable: boolean
+  stop_reason: string | null
+  time_estimate_s: number | null
+}
+
+export interface CalibrationEvent {
+  type: 'calibration'
+  value: 'calibrated' | 'uncalibrated'
+}
+
+export type WsEvent =
+  | ProgressEvent
+  | StatusEvent
+  | ExtrusionRateEvent
+  | ErrorEvent
+  | StopEvent
+  | SerialLogWsEvent
+  | PrinterEvent
+  | SnapshotEvent
+  | CalibrationEvent
 
 export interface UploadResult {
   status: string

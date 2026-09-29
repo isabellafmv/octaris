@@ -42,7 +42,7 @@ function ArrowButton({
   )
 }
 
-export function JogPanel({ syringeMode: _syringeMode, disabled }: JogPanelProps) {
+export function JogPanel({ syringeMode, disabled }: JogPanelProps) {
   const [step, setStep] = useState<number>(5)
 
   return (
@@ -128,6 +128,30 @@ export function JogPanel({ syringeMode: _syringeMode, disabled }: JogPanelProps)
             </svg>
           </ArrowButton>
         </div>
+
+        {/* A axis — only in dual syringe mode */}
+        {syringeMode === 'both' && (
+          <div className="flex flex-col items-center gap-2">
+            <ArrowButton label="A+" axisLabel="A+" axis="A" direction={1} step={step} disabled={disabled}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+              </svg>
+            </ArrowButton>
+
+            <div
+              className="w-16 h-16 rounded-full flex items-center justify-center text-xs font-semibold tracking-widest"
+              style={{ color: '#8B9090' }}
+            >
+              A
+            </div>
+
+            <ArrowButton label="A-" axisLabel="A-" axis="A" direction={-1} step={step} disabled={disabled}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </ArrowButton>
+          </div>
+        )}
       </div>
     </div>
   )

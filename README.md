@@ -119,6 +119,5 @@ This builds the Python backend into a standalone binary with PyInstaller, then p
 |-----|--------|-------------|
 | `target` | `macos` / `rpi` | Platform, affects where CuraEngine is looked up |
 | `baud_rate` | integer | Serial baud rate (default `115200`) |
-| `touch` | boolean | Enable touch-optimised UI layout |
 
 Slicer settings live in `context/octaris_settings.json` (CuraEngine profile). Printer geometry is in `context/fdmprinter.def.json`.

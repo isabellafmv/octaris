@@ -1,15 +1,20 @@
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from backend.auth import get_token, token_is_valid
 from backend.config import load_config
 from backend.database import init_db
 from backend.events import EventBus
+from backend.history import PrintHistory
 from backend.queue_worker import QueueWorker
 from backend.routers.calibration import router as calibration_router
 from backend.routers.extrusion import router as extrusion_router
 from backend.routers.gcode import router as gcode_router
+from backend.routers.history import router as history_router
 from backend.routers.jog import router as jog_router
 from backend.routers.print_control import router as print_router
 from backend.routers.serial import router as serial_router
@@ -17,26 +22,43 @@ from backend.routers.upload import router as upload_router
 from backend.routers.ws import router as ws_router
 from backend.serial_manager import SerialManager
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not get_token():
+        logger.warning(
+            "OCTARIS_TOKEN is not set — request authentication is disabled (dev mode)"
+        )
     app.state.config = load_config()
     app.state.event_bus = EventBus()
     def _on_disconnect():
         app.state.is_calibrated = False
-        app.state.event_bus.publish({"type": "disconnected"})
+        app.state.queue_worker.invalidate_checkpoint("The printer disconnected")
+        app.state.event_bus.publish({"type": "printer", "connected": False, "port": None})
         app.state.event_bus.publish({"type": "calibration", "value": "uncalibrated"})
+
+    def _on_connect(port: str):
+        app.state.event_bus.publish({"type": "printer", "connected": True, "port": port})
 
     app.state.serial_manager = SerialManager(
         on_disconnect=_on_disconnect,
         on_serial_log=lambda entry: app.state.event_bus.publish(entry),
+        on_connect=_on_connect,
     )
+    app.state.db = init_db()
+    app.state.history = PrintHistory(app.state.db)
     app.state.queue_worker = QueueWorker(
         serial_manager=app.state.serial_manager,
         on_event=app.state.event_bus.publish,
+        on_print_end=app.state.history.end,
+        on_print_resumed=app.state.history.reopen,
+        retract_on_estop=app.state.config.retract_on_estop,
     )
-    app.state.db = init_db()
     app.state.processed_gcode = None
+    app.state.print_source = None
+    app.state.print_settings = {}
     app.state.current_filename = None
     app.state.current_syringe_mode = "left"
     app.state.is_calibrated = False
@@ -55,14 +77,30 @@ app.include_router(print_router)
 app.include_router(extrusion_router)
 app.include_router(jog_router)
 app.include_router(gcode_router)
+app.include_router(history_router)
 app.include_router(ws_router)
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    """Reject requests missing the per-launch X-Octaris-Token header.
+
+    Added before the CORS middleware below so CORS wraps it and still
+    stamps Access-Control-* headers on the 401 responses it returns.
+    """
+    if request.method == "OPTIONS" or request.url.path == "/":
+        return await call_next(request)
+    if not token_is_valid(request.headers.get("x-octaris-token")):
+        return JSONResponse(status_code=401, content={"detail": "Missing or invalid token"})
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "null"],
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "X-Octaris-Token"],
 )
 
 

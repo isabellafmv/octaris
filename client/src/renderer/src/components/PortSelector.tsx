@@ -4,12 +4,11 @@ import type { PortInfo } from '../types'
 
 interface PortSelectorProps {
   connected: boolean
-  onConnect: (port: string) => void
-  onDisconnect: () => void
+  port: string | null
   onError: (msg: string) => void
 }
 
-export function PortSelector({ connected, onConnect, onDisconnect, onError }: PortSelectorProps) {
+export function PortSelector({ connected, port, onError }: PortSelectorProps) {
   const [ports, setPorts] = useState<PortInfo[]>([])
   const [selected, setSelected] = useState('')
   const [loading, setLoading] = useState(false)
@@ -35,7 +34,6 @@ export function PortSelector({ connected, onConnect, onDisconnect, onError }: Po
     setLoading(true)
     try {
       await api.connect(selected)
-      onConnect(selected)
     } catch {
       onError('Printer not found. Check the USB cable and try again.')
     } finally {
@@ -46,7 +44,6 @@ export function PortSelector({ connected, onConnect, onDisconnect, onError }: Po
   const handleDisconnect = async () => {
     try {
       await api.disconnect()
-      onDisconnect()
     } catch {
       onError('Failed to disconnect')
     }
@@ -58,7 +55,7 @@ export function PortSelector({ connected, onConnect, onDisconnect, onError }: Po
         <div className="flex items-center gap-1.5">
           <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: '#1A8B8D' }} />
           <span className="text-xs font-medium" style={{ color: '#2D3333' }}>
-            {selected || 'Connected'}
+            {port || 'Connected'}
           </span>
         </div>
         <button

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SyringeMode, UploadResult } from "../types";
+import type { PrintStatus, SyringeMode, UploadResult } from "../types";
 import { api } from "../api";
 import { PortSelector } from "../components/PortSelector";
 import { JogPanel } from "../components/JogPanel";
@@ -13,8 +13,8 @@ type UploadMode = "stl" | "gcode";
 
 interface SetupScreenProps {
   printerConnected: boolean;
-  onConnect: (port: string) => void;
-  onDisconnect: () => void;
+  port: string | null;
+  calibrated: boolean;
   onStartPrint: () => void;
   externalError?: string | null;
   onClearExternalError?: () => void;
@@ -30,12 +30,15 @@ interface SetupScreenProps {
   onPressurizeMmChange: (v: string) => void;
   flowMultiplier: string;
   onFlowMultiplierChange: (v: string) => void;
+  travelRetractMultiplier: string;
+  onTravelRetractMultiplierChange: (v: string) => void;
+  printStatus: PrintStatus;
 }
 
 export function SetupScreen({
   printerConnected,
-  onConnect,
-  onDisconnect,
+  port,
+  calibrated: calibratedFromEvents,
   onStartPrint,
   externalError,
   onClearExternalError,
@@ -51,6 +54,9 @@ export function SetupScreen({
   onPressurizeMmChange: setPressurizeMm,
   flowMultiplier,
   onFlowMultiplierChange: setFlowMultiplier,
+  travelRetractMultiplier,
+  onTravelRetractMultiplierChange: setTravelRetractMultiplier,
+  printStatus,
 }: SetupScreenProps) {
   const [uploadMode, setUploadMode] = useState<UploadMode>("stl");
   const [stlFile, setStlFile] = useState<File | null>(null);
@@ -58,7 +64,7 @@ export function SetupScreen({
   const [slicing, setSlicing] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [calibrated, setCalibrated] = useState(false);
+  const [calibrated, setCalibrated] = useState(calibratedFromEvents);
   const [syringeCardCompact, setSyringeCardCompact] = useState(false);
   const syringeCardRef = useRef<HTMLDivElement>(null);
 
@@ -80,17 +86,11 @@ export function SetupScreen({
     }
   }, [externalError, onClearExternalError]);
 
-  // Check calibration status when printer connects
+  // Calibration state is pushed live over the websocket (snapshot on connect,
+  // then calibration events), not polled.
   useEffect(() => {
-    if (printerConnected) {
-      api
-        .calibrationStatus()
-        .then((r) => setCalibrated(r.calibrated))
-        .catch(() => {});
-    } else {
-      setCalibrated(false);
-    }
-  }, [printerConnected]);
+    setCalibrated(calibratedFromEvents);
+  }, [calibratedFromEvents]);
 
   const handleSetOrigin = useCallback(async () => {
     try {
@@ -128,6 +128,9 @@ export function SetupScreen({
         layerHeight: layerHeight ? parseFloat(layerHeight) : undefined,
         pressurizeMm: pressurizeMm ? parseFloat(pressurizeMm) : undefined,
         flowMultiplier: flowMultiplier ? parseFloat(flowMultiplier) : undefined,
+        travelRetractMultiplier: travelRetractMultiplier
+          ? parseFloat(travelRetractMultiplier)
+          : undefined,
       });
       setUploadResult(result);
     } catch (e) {
@@ -147,6 +150,7 @@ export function SetupScreen({
     layerHeight,
     pressurizeMm,
     flowMultiplier,
+    travelRetractMultiplier,
   ]);
 
   const handleGcodeFile = useCallback(
@@ -174,6 +178,8 @@ export function SetupScreen({
 
   const canSlice = stlFile !== null && !slicing;
   const canStartPrint = uploadResult !== null && !slicing && calibrated;
+  const isPrinting = printStatus === "printing";
+  const isPausedOrPrinting = isPrinting || printStatus === "paused";
 
   return (
     <div
@@ -199,8 +205,7 @@ export function SetupScreen({
         <div className="mt-1">
           <PortSelector
             connected={printerConnected}
-            onConnect={onConnect}
-            onDisconnect={onDisconnect}
+            port={port}
             onError={setError}
           />
         </div>
@@ -364,8 +369,35 @@ export function SetupScreen({
                 />
               </label>
             </div>
+            <div className="flex gap-2">
+              <label className="flex-1">
+                <span
+                  className="text-[10px] block mb-1"
+                  style={{ color: "#8B9090" }}
+                >
+                  Travel retract ×
+                </span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  placeholder="3.0"
+                  value={travelRetractMultiplier}
+                  onChange={(e) => setTravelRetractMultiplier(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+                  style={{
+                    backgroundColor: "#F5F1E6",
+                    color: "#2D3333",
+                    border: "1px solid #D8D3C8",
+                  }}
+                />
+              </label>
+              <div className="flex-1" />
+            </div>
             <span className="text-[9px]" style={{ color: "#A0A8A8" }}>
-              Layer height defaults to 80% of nozzle diameter.
+              Layer height defaults to 80% of nozzle diameter. Travel retract ×
+              scales the pressurize distance for travel moves only — raise it to
+              stop oozing between segments.
             </span>
           </div>
 
@@ -389,13 +421,13 @@ export function SetupScreen({
                     : { color: "#8B9090" }
                 }
               >
-                {mode === "stl" ? "STL File" : "G-Code File"}
+                {mode === "stl" ? "STL / 3MF" : "G-Code File"}
               </button>
             ))}
           </div>
 
           {uploadMode === "stl" ? (
-            <STLUpload file={stlFile} onFile={handleFile} onError={setError} />
+            <STLUpload file={stlFile} onFile={handleFile} onError={setError} dualMode={syringeMode === 'both'} />
           ) : (
             <GcodeUpload
               file={gcodeFile}
@@ -431,7 +463,7 @@ export function SetupScreen({
                 <button
                   className="text-xs font-semibold px-3 py-1 rounded-lg transition-all active:scale-95 disabled:opacity-40"
                   style={{ backgroundColor: "#E8E3D8", color: "#8B9090" }}
-                  disabled={!printerConnected}
+                  disabled={!printerConnected || isPrinting}
                   onClick={() => api.sendGcode("G1 X0 Y0 F300")}
                 >
                   Go to Origin
@@ -442,7 +474,7 @@ export function SetupScreen({
                     backgroundColor: calibrated ? "#E8E3D8" : "#1A8B8D",
                     color: calibrated ? "#8B9090" : "white",
                   }}
-                  disabled={!printerConnected}
+                  disabled={!printerConnected || isPausedOrPrinting}
                   onClick={handleSetOrigin}
                 >
                   {calibrated ? "Re-zero Origin" : "Set Origin"}
@@ -455,10 +487,15 @@ export function SetupScreen({
                 applied automatically.
               </p>
             )}
+            {isPrinting && (
+              <p className="text-[9px] mt-1 mb-1" style={{ color: "#A0A8A8" }}>
+                Print running — use Monitor to pause or stop
+              </p>
+            )}
             {!uploadResult && (
               <JogPanel
                 syringeMode={syringeMode}
-                disabled={!printerConnected}
+                disabled={!printerConnected || isPrinting}
               />
             )}
           </div>

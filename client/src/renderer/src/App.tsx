@@ -50,7 +50,6 @@ function OctarisLogo() {
 
 function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>('setup')
-  const [connectedPort, setConnectedPort] = useState<string | null>(null)
   const [filename, setFilename] = useState<string | null>(null)
   const previousScreen = useRef<Screen>('setup')
   const ws = useWebSocket()
@@ -62,16 +61,16 @@ function App(): React.JSX.Element {
   const [layerHeight, setLayerHeight] = useState('')
   const [pressurizeMm, setPressurizeMm] = useState('')
   const [flowMultiplier, setFlowMultiplier] = useState('')
+  const [travelRetractMultiplier, setTravelRetractMultiplier] = useState('3')
 
-  const printerConnected = connectedPort !== null
+  const printerConnected = ws.printerConnected
 
-  const handleConnect = useCallback((port: string) => {
-    setConnectedPort(port)
-  }, [])
-
-  const handleDisconnect = useCallback(() => {
-    setConnectedPort(null)
-  }, [])
+  const connectionLabel = !ws.wsConnected
+    ? 'Backend unreachable'
+    : printerConnected
+      ? 'Printer connected'
+      : 'Printer disconnected'
+  const connectionColor = !ws.wsConnected ? '#B54040' : printerConnected ? '#1A8B8D' : '#B5614A'
 
   const [startError, setStartError] = useState<string | null>(null)
 
@@ -136,6 +135,12 @@ function App(): React.JSX.Element {
             {screenTitles[screen]}
           </span>
         </div>
+        <div className="no-drag flex items-center gap-1.5 ml-auto">
+          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: connectionColor }} />
+          <span className="text-[10px] font-medium tracking-wide opacity-80 text-white">
+            {connectionLabel}
+          </span>
+        </div>
       </div>
 
       {/* ── Content row ── */}
@@ -180,8 +185,8 @@ function App(): React.JSX.Element {
           {screen === 'setup' ? (
             <SetupScreen
               printerConnected={printerConnected}
-              onConnect={handleConnect}
-              onDisconnect={handleDisconnect}
+              port={ws.port}
+              calibrated={ws.calibrated}
               onStartPrint={handleStartPrint}
               externalError={startError}
               onClearExternalError={() => setStartError(null)}
@@ -197,6 +202,9 @@ function App(): React.JSX.Element {
               onPressurizeMmChange={setPressurizeMm}
               flowMultiplier={flowMultiplier}
               onFlowMultiplierChange={setFlowMultiplier}
+              travelRetractMultiplier={travelRetractMultiplier}
+              onTravelRetractMultiplierChange={setTravelRetractMultiplier}
+              printStatus={ws.status}
             />
           ) : screen === 'print' ? (
             <PrintScreen
@@ -210,10 +218,13 @@ function App(): React.JSX.Element {
               onRestart={handleRestart}
               onTakeOver={handleTakeOver}
               printerConnected={printerConnected}
+              printError={ws.lastError}
+              stopInfo={ws.stopInfo}
             />
           ) : (
             <TakeOverScreen
               printerConnected={printerConnected}
+              printStatus={ws.status}
               serialLog={ws.serialLog}
               onClearLog={ws.clearSerialLog}
               onSetLog={ws.setSerialLog}

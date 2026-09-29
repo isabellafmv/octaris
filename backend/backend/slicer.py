@@ -6,6 +6,7 @@ import os
 import shutil
 import struct
 import tempfile
+import zipfile
 from pathlib import Path
 
 from backend.config import PROJECT_ROOT, load_config
@@ -76,27 +77,18 @@ def _check_stl_dimensions(stl_path: Path) -> None:
             )
 
 
-async def slice_stl(
-    stl_path: Path,
-    syringe_mode: SyringeMode,
-    nozzle_diameter: float | None = None,
-    syringe_diameter: float | None = None,
-    layer_height: float | None = None,
-    pressurize_mm: float | None = None,
-    flow_multiplier: float | None = None,
-    profile_path: Path | None = None,
-) -> ProcessedGcode:
-    if profile_path is None:
-        profile_path = PROFILE_PATH
+def _check_3mf(path: Path) -> None:
+    """Validate that the file is a readable 3MF archive with a model inside."""
+    if not zipfile.is_zipfile(path):
+        raise SlicingError("File is not a valid 3MF archive.")
+    with zipfile.ZipFile(path) as zf:
+        names = zf.namelist()
+        if not any(n.endswith(".model") for n in names):
+            raise SlicingError("3MF archive does not contain a 3D model file.")
 
-    if not stl_path.exists():
-        raise SlicingError(f"STL file not found: {stl_path}")
 
-    if not profile_path.exists():
-        raise SlicingError(f"Slicer profile not found: {profile_path}")
-
-    _check_stl_dimensions(stl_path)
-
+def _find_cura_engine() -> str:
+    """Locate the CuraEngine binary, raising SlicingError if not found."""
     config = load_config()
     bin_dir = PROJECT_ROOT / "resources" / "bin" / config.target
     bundled = next(
@@ -108,18 +100,53 @@ async def slice_stl(
     if config.target == "rpi" and bundled:
         if not os.access(bundled, os.X_OK):
             os.chmod(bundled, 0o755)
-        cura_bin = str(bundled)
-    elif cura_app_bin.exists():
-        # Use Cura's own binary on macOS — it has its definition files wired up
-        cura_bin = str(cura_app_bin)
-    elif bundled:
+        return str(bundled)
+    if cura_app_bin.exists():
+        return str(cura_app_bin)
+    if bundled:
         if not os.access(bundled, os.X_OK):
             os.chmod(bundled, 0o755)
-        cura_bin = str(bundled)
-    else:
-        cura_bin = shutil.which("CuraEngine")
-    if cura_bin is None:
+        return str(bundled)
+    found = shutil.which("CuraEngine")
+    if found is None:
         raise SlicingError("CuraEngine not found — place binary in resources/bin/macos/")
+    return found
+
+
+async def slice_model(
+    model_path: Path,
+    syringe_mode: SyringeMode,
+    nozzle_diameter: float | None = None,
+    syringe_diameter: float | None = None,
+    layer_height: float | None = None,
+    pressurize_mm: float | None = None,
+    flow_multiplier: float | None = None,
+    travel_retract_multiplier: float | None = None,
+    profile_path: Path | None = None,
+) -> ProcessedGcode:
+    """Slice an STL or 3MF file and return processed G-code.
+
+    Accepts both .stl and .3mf inputs.  For 3MF files the extruder-to-mesh
+    mapping embedded in the archive is used by CuraEngine, so multi-material
+    prints are supported when syringe_mode is "both".
+    """
+    if profile_path is None:
+        profile_path = PROFILE_PATH
+
+    if not model_path.exists():
+        raise SlicingError(f"Model file not found: {model_path}")
+
+    if not profile_path.exists():
+        raise SlicingError(f"Slicer profile not found: {profile_path}")
+
+    is_3mf = model_path.suffix.lower() == ".3mf"
+
+    if is_3mf:
+        _check_3mf(model_path)
+    else:
+        _check_stl_dimensions(model_path)
+
+    cura_bin = _find_cura_engine()
 
     with tempfile.NamedTemporaryFile(suffix=".gcode", delete=False) as tmp:
         output_path = Path(tmp.name)
@@ -128,14 +155,26 @@ async def slice_stl(
     if nozzle_diameter is not None and layer_height is None:
         layer_height = round(nozzle_diameter * DEFAULT_LAYER_HEIGHT_RATIO, 3)
 
+    # Only use dual-extruder slicing for 3MF files (which carry material
+    # assignments).  Single STL in "both" mode is sliced as single-extruder;
+    # gcode_processor mirrors the extrusion to both axes in post-processing.
+    dual = is_3mf and syringe_mode == "both"
+    extruder_count = 2 if dual else 1
+
+    extruder_left_path = profile_path.parent / "octaris_extruder_left.def.json"
+    extruder_right_path = profile_path.parent / "octaris_extruder_right.def.json"
+
     cmd = [
         cura_bin,
         "slice",
         "-j", str(profile_path),
-        "-e0",
+        "-s", f"machine_extruder_count={extruder_count}",
     ]
-    if syringe_mode == "both":
-        cmd.append("-e1")
+
+    # Extruder 0 settings
+    cmd.append("-e0")
+    if dual and extruder_left_path.exists():
+        cmd.extend(["-j", str(extruder_left_path)])
 
     # Override nozzle/layer settings on the command line so the static
     # profile doesn't need to be regenerated for each nozzle tip.
@@ -144,14 +183,27 @@ async def slice_stl(
         cmd.extend(["-s", f"line_width={nozzle_diameter}"])
     if syringe_diameter is not None:
         cmd.extend(["-s", f"material_diameter={syringe_diameter}"])
-        # Ensure material_flow is 100% — the volumetric calculation via
-        # material_diameter already accounts for syringe cross-section.
         cmd.extend(["-s", "material_flow=100"])
     if layer_height is not None:
         cmd.extend(["-s", f"layer_height={layer_height}"])
         cmd.extend(["-s", f"layer_height_0={layer_height}"])
 
-    cmd.extend(["-o", str(output_path), "-l", str(stl_path)])
+    if dual:
+        # Extruder 1 with its definition and same settings
+        cmd.append("-e1")
+        if extruder_right_path.exists():
+            cmd.extend(["-j", str(extruder_right_path)])
+        if nozzle_diameter is not None:
+            cmd.extend(["-s", f"machine_nozzle_size={nozzle_diameter}"])
+            cmd.extend(["-s", f"line_width={nozzle_diameter}"])
+        if syringe_diameter is not None:
+            cmd.extend(["-s", f"material_diameter={syringe_diameter}"])
+            cmd.extend(["-s", "material_flow=100"])
+        if layer_height is not None:
+            cmd.extend(["-s", f"layer_height={layer_height}"])
+            cmd.extend(["-s", f"layer_height_0={layer_height}"])
+
+    cmd.extend(["-o", str(output_path), "-l", str(model_path)])
 
     logger.info("Running CuraEngine: %s", " ".join(cmd))
 
@@ -166,7 +218,6 @@ async def slice_stl(
         err = stderr.decode("utf-8", errors="replace").strip()
         out = stdout.decode("utf-8", errors="replace").strip()
         logger.error("CuraEngine failed (rc=%d):\nSTDERR: %s\nSTDOUT: %s", proc.returncode, err, out)
-        # Skip the version/copyright header lines to surface the real error
         relevant = err or "\n".join(
             line for line in out.splitlines()
             if not any(kw in line for kw in ("version", "Copyright", "GNU", "Free Software", "warranty"))
@@ -185,4 +236,9 @@ async def slice_stl(
         syringe_mode,
         pressurize_mm=pressurize_mm or PRESSURIZE_MM,
         flow_multiplier=flow_multiplier or 1.0,
+        travel_retract_multiplier=travel_retract_multiplier or 3.0,
     )
+
+
+# Keep old name as alias for backward compatibility
+slice_stl = slice_model

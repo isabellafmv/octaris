@@ -1,8 +1,8 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ExtrusionSlider } from '../components/ExtrusionSlider'
 import { PrintOverlay } from '../components/PrintOverlay'
 import { api } from '../api'
-import type { PrintStatus } from '../types'
+import type { PrintStatus, StopInfo } from '../types'
 
 function SetupIcon() {
   return (
@@ -39,6 +39,8 @@ interface PrintScreenProps {
   onRestart: () => void
   onTakeOver: () => void
   printerConnected: boolean
+  printError: { id: number; message: string } | null
+  stopInfo: StopInfo
 }
 
 
@@ -124,13 +126,19 @@ export function PrintScreen({
   filename,
   onBack,
   onRestart,
-  onTakeOver
+  onTakeOver,
+  printError,
+  stopInfo
 }: PrintScreenProps) {
   const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (printError) setError(printError.message)
+  }, [printError])
+
   const handleStop = useCallback(async () => {
     try {
-      await api.printStop()
+      await api.printEstop()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stop failed')
     }
@@ -322,7 +330,7 @@ export function PrintScreen({
       </div>
 
       {(status === 'stopped' || status === 'completed') && (
-        <PrintOverlay status={status} onResume={handleResume} onRestart={onRestart} onBack={onBack} />
+        <PrintOverlay status={status} stopInfo={stopInfo} onResume={handleResume} onRestart={onRestart} onBack={onBack} />
       )}
     </div>
   )

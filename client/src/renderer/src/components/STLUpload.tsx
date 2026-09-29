@@ -4,27 +4,33 @@ interface STLUploadProps {
   file: File | null
   onFile: (f: File) => void
   onError: (msg: string) => void
+  /** When true, shows hint that 3MF is needed for multi-material. */
+  dualMode?: boolean
 }
 
-export function STLUpload({ file, onFile, onError }: STLUploadProps) {
+const ACCEPTED_EXTENSIONS = ['.stl', '.3mf']
+
+export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const is3mf = file?.name.toLowerCase().endsWith('.3mf')
 
   return (
     <>
       <input
         ref={inputRef}
         type="file"
-        accept=".stl"
+        accept=".stl,.3mf"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0]
           if (!f) return
-          if (!f.name.toLowerCase().endsWith('.stl')) {
-            onError('Only .stl files are accepted')
+          const ext = f.name.toLowerCase()
+          if (!ACCEPTED_EXTENSIONS.some((e) => ext.endsWith(e))) {
+            onError('Only .stl and .3mf files are accepted')
             return
           }
           onFile(f)
-          // reset so same file can be re-selected
           e.target.value = ''
         }}
       />
@@ -35,7 +41,7 @@ export function STLUpload({ file, onFile, onError }: STLUploadProps) {
       >
         <div
           className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-          style={{ backgroundColor: '#EDE9DC' }}
+          style={{ backgroundColor: is3mf ? '#D4EAE9' : '#EDE9DC' }}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="#1A8B8D" strokeWidth="1.6" className="w-5 h-5">
             <path
@@ -47,10 +53,10 @@ export function STLUpload({ file, onFile, onError }: STLUploadProps) {
         </div>
         <div className="flex-1 text-left">
           <p className="font-semibold text-sm" style={{ color: '#2D3333' }}>
-            {file ? file.name : 'Upload Your STL'}
+            {file ? file.name : 'Upload Model'}
           </p>
           <p className="text-xs mt-0.5" style={{ color: '#8B9090' }}>
-            {file ? 'Click to replace file' : 'Select a .stl file to preview & slice'}
+            {file ? 'Click to replace file' : 'Select a .stl or .3mf file'}
           </p>
         </div>
         <svg
@@ -63,6 +69,18 @@ export function STLUpload({ file, onFile, onError }: STLUploadProps) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
         </svg>
       </button>
+      {dualMode && !file && (
+        <p className="text-[9px] mt-1.5" style={{ color: '#5A7070' }}>
+          Upload a .3mf file for multi-material printing (different material per syringe).
+          A single .stl will extrude from both syringes simultaneously.
+        </p>
+      )}
+      {dualMode && file && !is3mf && (
+        <p className="text-[9px] mt-1.5" style={{ color: '#8B9090' }}>
+          Both syringes will extrude the same path. Use a .3mf file to assign
+          different regions to each syringe.
+        </p>
+      )}
     </>
   )
 }

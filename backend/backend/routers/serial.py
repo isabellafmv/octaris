@@ -1,9 +1,15 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from backend.routers.ws import build_status_snapshot
 from backend.serial_manager import SerialError
 
 router = APIRouter()
+
+
+@router.get("/status")
+async def status(request: Request):
+    return build_status_snapshot(request.app)
 
 
 class ConnectRequest(BaseModel):
@@ -29,6 +35,7 @@ async def connect(request: Request, body: ConnectRequest):
         await manager.connect(body.port, config.baud_rate)
     except SerialError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    request.app.state.queue_worker.invalidate_checkpoint("The printer was reconnected")
 
     # Auto-send steps/mm calibration (EEPROM disabled on this board)
     try:
@@ -36,6 +43,9 @@ async def connect(request: Request, body: ConnectRequest):
     except SerialError:
         pass  # non-fatal — printer still usable
 
+    request.app.state.event_bus.publish(
+        {"type": "printer", "connected": True, "port": body.port}
+    )
     return {"status": "connected", "port": body.port}
 
 
@@ -45,4 +55,8 @@ async def disconnect(request: Request):
 
     manager: SerialManager = request.app.state.serial_manager
     await manager.disconnect()
+    request.app.state.queue_worker.invalidate_checkpoint("The printer disconnected")
+    request.app.state.event_bus.publish(
+        {"type": "printer", "connected": False, "port": None}
+    )
     return {"status": "disconnected"}

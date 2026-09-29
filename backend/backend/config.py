@@ -24,7 +24,9 @@ PROJECT_ROOT = get_project_root()
 class Config(BaseModel):
     target: Literal["macos", "rpi"] = "macos"
     touch_mode: bool = False
-    baud_rate: int = 250000
+    baud_rate: int = 115200
+    # After an e-stop, pull the plunger(s) back by pressurize_mm to stop oozing
+    retract_on_estop: bool = True
 
 
 def load_config(path: Path | None = None) -> Config:

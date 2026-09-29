@@ -76,7 +76,7 @@ def test_substitute_extrusion_right():
     """Right mode: E values should also be negated for C axis."""
     lines = ["G1 X10 E0.5 F200"]
     result = substitute_extrusion(lines, "right")
-    assert result[0] == "G1 X30 C-0.5 F200"  # X10 + 20mm nozzle offset
+    assert result[0] == "G1 X41 C-0.5 F200"  # X10 + 31mm nozzle offset
 
 
 def test_substitute_extrusion_both():
@@ -315,5 +315,68 @@ def test_insert_travel_retract_consecutive_g0():
         "G1 X60 Y60 B-1.0 F200",
     ]
     result = insert_travel_retract(lines, "left")
-    assert result.count("G1 B0.2 F400 ; retract") == 1
-    assert result.count("G1 B-0.2 F400 ; prime") == 1
+    assert result.count("G1 B0.2 F400 ; retract B") == 1
+    assert result.count("G1 B-0.2 F400 ; prime B") == 1
+
+
+def test_substitute_both_mirror():
+    """Single STL in 'both' mode: E values duplicated to B and C."""
+    lines = ["G1 X10 E0.5 F200", "G0 X20 Y20 F300"]
+    result = substitute_extrusion(lines, "both")
+    assert "B-0.5" in result[0]
+    assert "C-0.5" in result[0]
+    # G0 travel has no E — should pass through unchanged
+    assert result[1] == "G0 X20 Y20 F300"
+
+
+def test_substitute_both_multi():
+    """3MF multi-material: T0→B, T1→C with X offset."""
+    lines = [
+        "T0",
+        "G1 X10 E0.5 F200",
+        "T1",
+        "G1 X10 E0.3 F200",
+    ]
+    result = substitute_extrusion(lines, "both")
+    # T0 section → B axis, no X offset
+    assert "B-0.5" in result[1]
+    assert "X10" in result[1]
+    # T1 section → C axis, X shifted by NOZZLE_OFFSET_X
+    assert "C-0.3" in result[3]
+    assert "X41" in result[3]  # 10 + 31mm offset
+
+
+def test_build_preamble_both():
+    """Both mode should pressurize B and C."""
+    from backend.gcode_processor import build_preamble
+    lines = build_preamble("both")
+    joined = "\n".join(lines)
+    assert "B-" in joined  # pressurize B (negative direction)
+    assert "C-" in joined  # pressurize C (negative direction)
+    assert "G92 B0" in joined
+    assert "G92 C0" in joined
+
+
+def test_build_footer_both():
+    """Both mode should depressurize B and C."""
+    from backend.gcode_processor import build_footer
+    lines = build_footer("both")
+    joined = "\n".join(lines)
+    # Depressurize is opposite of extrude: positive for B/C
+    assert "depressurize B" in joined
+    assert "depressurize C" in joined
+
+
+def test_insert_travel_retract_both():
+    """Both mode should retract/prime both B and C."""
+    lines = [
+        "G1 X10 B-0.5 C-0.5 F200",
+        "G0 X50 F300",
+        "G1 X60 B-1.0 C-1.0 F200",
+    ]
+    result = insert_travel_retract(lines, "both")
+    joined = "\n".join(result)
+    assert "; retract B" in joined
+    assert "; retract C" in joined
+    assert "; prime B" in joined
+    assert "; prime C" in joined

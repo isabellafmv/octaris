@@ -2,10 +2,11 @@ import { useEffect } from 'react'
 import { SerialLog } from '../components/SerialLog'
 import { GcodeInput } from '../components/GcodeInput'
 import { api } from '../api'
-import type { SerialLogEntry } from '../types'
+import type { PrintStatus, SerialLogEntry } from '../types'
 
 interface TakeOverScreenProps {
   printerConnected: boolean
+  printStatus: PrintStatus
   serialLog: SerialLogEntry[]
   onClearLog: () => void
   onSetLog: (entries: SerialLogEntry[]) => void
@@ -14,6 +15,7 @@ interface TakeOverScreenProps {
 
 export function TakeOverScreen({
   printerConnected,
+  printStatus,
   serialLog,
   onClearLog,
   onSetLog,
@@ -60,7 +62,7 @@ export function TakeOverScreen({
           <SerialLog entries={serialLog} onClear={onClearLog} />
         </div>
         <div className="w-80 shrink-0 flex flex-col">
-          <GcodeInput disabled={!printerConnected} />
+          <GcodeInput disabled={!printerConnected} printing={printStatus === 'printing'} />
         </div>
       </div>
     </div>

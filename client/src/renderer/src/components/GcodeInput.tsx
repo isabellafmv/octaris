@@ -3,27 +3,29 @@ import { api } from '../api'
 
 interface GcodeInputProps {
   disabled: boolean
+  printing?: boolean
 }
 
 const QUICK_COMMANDS = [
-  { label: 'Home All', gcode: 'G28', style: 'default' as const },
-  { label: 'Home XY', gcode: 'G28 X0 Y0', style: 'default' as const },
-  { label: 'Position', gcode: 'M114', style: 'default' as const },
-  { label: 'Settings', gcode: 'M503', style: 'default' as const },
-  { label: 'Relative', gcode: 'G91', style: 'default' as const },
-  { label: 'Absolute', gcode: 'G90', style: 'default' as const },
-  { label: 'STOP', gcode: 'M410', style: 'danger' as const },
+  { label: 'Home All', gcode: 'G28' },
+  { label: 'Home XY', gcode: 'G28 X0 Y0' },
+  { label: 'Position', gcode: 'M114' },
+  { label: 'Settings', gcode: 'M503' },
+  { label: 'Relative', gcode: 'G91' },
+  { label: 'Absolute', gcode: 'G90' },
 ] as const
 
 const MAX_HISTORY = 50
 
-export function GcodeInput({ disabled }: GcodeInputProps) {
+export function GcodeInput({ disabled, printing = false }: GcodeInputProps) {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const commandsDisabled = disabled || printing
 
   const sendCommand = useCallback(async (line: string) => {
     const trimmed = line.trim()
@@ -44,7 +46,20 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
       setError(e.message || 'Command failed. Check the connection.')
     } finally {
       setSending(false)
-      inputRef.current?.focus()
+      // Delay focus to ensure React has re-rendered the enabled input
+      requestAnimationFrame(() => inputRef.current?.focus())
+    }
+  }, [])
+
+  const handleStop = useCallback(async () => {
+    setError(null)
+    setSending(true)
+    try {
+      await api.printStop()
+    } catch (e: any) {
+      setError(e.message || 'Stop failed. Check the connection.')
+    } finally {
+      setSending(false)
     }
   }, [])
 
@@ -91,7 +106,7 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
             onChange={(e) => setInput(e.target.value.toUpperCase())}
             onKeyDown={handleKeyDown}
             placeholder="e.g. G28, M114, G1 X10 F200"
-            disabled={disabled || sending}
+            disabled={commandsDisabled || sending}
             className="flex-1 rounded px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               backgroundColor: '#EDE9DC',
@@ -101,7 +116,7 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
           />
           <button
             onClick={() => sendCommand(input)}
-            disabled={disabled || sending || !input.trim()}
+            disabled={commandsDisabled || sending || !input.trim()}
             className="px-4 py-2 rounded font-medium text-sm text-white transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed min-w-15"
             style={{ backgroundColor: '#1A8B8D' }}
           >
@@ -114,28 +129,37 @@ export function GcodeInput({ disabled }: GcodeInputProps) {
         {disabled && (
           <p className="mt-2 text-sm" style={{ color: '#A0A8A8' }}>Connect to the printer to send commands.</p>
         )}
+        {!disabled && printing && (
+          <p className="mt-2 text-sm" style={{ color: '#A0A8A8' }}>Print running — use Monitor to pause or stop</p>
+        )}
       </div>
 
       {/* Quick commands */}
       <div className="px-3 pt-4 flex-1">
         <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#8B9090' }}>Quick Commands</p>
         <div className="grid grid-cols-2 gap-2">
-          {QUICK_COMMANDS.map(({ label, gcode, style }) => (
+          {QUICK_COMMANDS.map(({ label, gcode }) => (
             <button
               key={gcode}
               onClick={() => sendCommand(gcode)}
-              disabled={disabled || sending}
+              disabled={commandsDisabled || sending}
               title={gcode}
-              className={`px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed${style === 'danger' ? ' col-span-2' : ''}`}
-              style={style === 'danger'
-                ? { backgroundColor: '#9B4A3A', color: 'white' }
-                : { backgroundColor: '#E8E3D8', color: '#5A6060' }
-              }
+              className="px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ backgroundColor: '#E8E3D8', color: '#5A6060' }}
             >
               <span className="block">{label}</span>
               <span className="block text-xs opacity-60 font-mono">{gcode}</span>
             </button>
           ))}
+          <button
+            onClick={handleStop}
+            disabled={disabled || sending}
+            title="M410 (via print stop)"
+            className="px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed col-span-2"
+            style={{ backgroundColor: '#9B4A3A', color: 'white' }}
+          >
+            <span className="block">STOP</span>
+          </button>
         </div>
       </div>
     </div>

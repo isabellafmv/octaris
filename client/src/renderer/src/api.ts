@@ -2,8 +2,18 @@ import type { PortInfo, SerialLogEntry, SyringeMode, UploadResult } from './type
 
 const BASE = 'http://127.0.0.1:8000'
 
+// Present in Electron (set by preload from --octaris-token=...); absent when
+// the renderer is opened outside Electron, e.g. a plain browser during dev.
+function authHeaders(): Record<string, string> {
+  const token = window.octaris?.token
+  return token ? { 'X-Octaris-Token': token } : {}
+}
+
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${url}`, init)
+  const res = await fetch(`${BASE}${url}`, {
+    ...init,
+    headers: { ...authHeaders(), ...(init?.headers || {}) }
+  })
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(body.detail || res.statusText)
@@ -23,7 +33,7 @@ export const api = {
   upload: async (
     file: File,
     syringeMode: SyringeMode,
-    opts?: { nozzleDiameter?: number; syringeDiameter?: number; layerHeight?: number; pressurizeMm?: number; flowMultiplier?: number }
+    opts?: { nozzleDiameter?: number; syringeDiameter?: number; layerHeight?: number; pressurizeMm?: number; flowMultiplier?: number; travelRetractMultiplier?: number }
   ): Promise<UploadResult> => {
     const form = new FormData()
     form.append('file', file)
@@ -33,8 +43,11 @@ export const api = {
     if (opts?.layerHeight) params.set('layer_height', String(opts.layerHeight))
     if (opts?.pressurizeMm) params.set('pressurize_mm', String(opts.pressurizeMm))
     if (opts?.flowMultiplier) params.set('flow_multiplier', String(opts.flowMultiplier))
+    if (opts?.travelRetractMultiplier)
+      params.set('travel_retract_multiplier', String(opts.travelRetractMultiplier))
     const res = await fetch(`${BASE}/upload?${params}`, {
       method: 'POST',
+      headers: authHeaders(),
       body: form
     })
     if (!res.ok) {
@@ -48,6 +61,7 @@ export const api = {
     form.append('file', file)
     const res = await fetch(`${BASE}/upload/gcode?syringe_mode=${syringeMode}`, {
       method: 'POST',
+      headers: authHeaders(),
       body: form
     })
     if (!res.ok) {
@@ -58,6 +72,7 @@ export const api = {
   },
   printStart: () => json<{ status: string }>('/print/start', { method: 'POST' }),
   printStop: () => json<{ status: string }>('/print/stop', { method: 'POST' }),
+  printEstop: () => json<{ status: string }>('/print/estop', { method: 'POST' }),
   printPause: () => json<{ status: string }>('/print/pause', { method: 'POST' }),
   printResume: () => json<{ status: string }>('/print/resume', { method: 'POST' }),
   setExtrusion: (rate: number) =>

@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PrintStatus, SerialLogEntry, WsEvent } from '../types'
+import type { PrintStatus, SerialLogEntry, StopInfo, WsEvent } from '../types'
 
-const WS_URL = 'ws://127.0.0.1:8000/ws'
+const WS_BASE_URL = 'ws://127.0.0.1:8000/ws'
+
+// Present in Electron (set by preload from --octaris-token=...); absent when
+// the renderer is opened outside Electron, e.g. a plain browser during dev.
+function wsUrl(): string {
+  const token = window.octaris?.token
+  return token ? `${WS_BASE_URL}?token=${encodeURIComponent(token)}` : WS_BASE_URL
+}
 const RECONNECT_DELAY = 2000
 const MAX_LOG_ENTRIES = 200
 
@@ -11,8 +18,16 @@ interface PrintState {
   linesTotal: number
   timeRemainingS: number | null
   extrusionRate: number
-  connected: boolean
+  // Whether the websocket to the backend itself is open.
+  wsConnected: boolean
+  // Whether the backend currently has a serial connection to the printer.
+  printerConnected: boolean
+  port: string | null
+  calibrated: boolean
   serialLog: SerialLogEntry[]
+  // id changes on every error event, so a repeated message is shown again
+  lastError: { id: number; message: string } | null
+  stopInfo: StopInfo
 }
 
 export function useWebSocket() {
@@ -22,8 +37,13 @@ export function useWebSocket() {
     linesTotal: 0,
     timeRemainingS: null,
     extrusionRate: 100,
-    connected: false,
-    serialLog: []
+    wsConnected: false,
+    printerConnected: false,
+    port: null,
+    calibrated: false,
+    serialLog: [],
+    lastError: null,
+    stopInfo: null
   })
 
   const wsRef = useRef<WebSocket | null>(null)
@@ -32,11 +52,11 @@ export function useWebSocket() {
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
-    const ws = new WebSocket(WS_URL)
+    const ws = new WebSocket(wsUrl())
     wsRef.current = ws
 
     ws.onopen = () => {
-      setState((s) => ({ ...s, connected: true }))
+      setState((s) => ({ ...s, wsConnected: true }))
     }
 
     ws.onmessage = (evt) => {
@@ -47,16 +67,53 @@ export function useWebSocket() {
             return {
               ...prev,
               linesSent: data.lines_sent ?? prev.linesSent,
-              linesTotal: data.lines_total ?? prev.linesTotal
+              linesTotal: data.lines_total ?? prev.linesTotal,
+              timeRemainingS: data.time_remaining_s ?? prev.timeRemainingS
             }
-          case 'time_remaining_s':
-            return { ...prev, timeRemainingS: (data.value as number) ?? prev.timeRemainingS }
           case 'status':
-            return { ...prev, status: (data.value as PrintStatus) ?? prev.status }
+            return {
+              ...prev,
+              status: data.value ?? prev.status,
+              // A new stop gets its own stop event; drop the old one's info
+              stopInfo: data.value === 'stopped' ? prev.stopInfo : null
+            }
+          case 'stop':
+            return { ...prev, stopInfo: { resumable: data.resumable, reason: data.reason } }
           case 'extrusion_rate':
-            return { ...prev, extrusionRate: (data.value as number) ?? prev.extrusionRate }
-          case 'disconnected':
-            return { ...prev, connected: false }
+            return { ...prev, extrusionRate: data.value ?? prev.extrusionRate }
+          case 'error':
+            return {
+              ...prev,
+              lastError: {
+                id: (prev.lastError?.id ?? 0) + 1,
+                message: data.message ?? 'Printer error'
+              }
+            }
+          case 'printer':
+            return { ...prev, printerConnected: data.connected, port: data.port }
+          case 'snapshot': {
+            const timeRemainingS =
+              data.time_estimate_s != null && data.lines_total > 0
+                ? data.time_estimate_s * (1 - data.lines_sent / data.lines_total)
+                : prev.timeRemainingS
+            return {
+              ...prev,
+              printerConnected: data.printer_connected,
+              port: data.port,
+              status: data.print_status,
+              linesSent: data.lines_sent,
+              linesTotal: data.lines_total,
+              calibrated: data.calibrated,
+              extrusionRate: data.flow_rate,
+              stopInfo:
+                data.print_status === 'stopped'
+                  ? { resumable: data.resumable, reason: data.stop_reason }
+                  : null,
+              timeRemainingS
+            }
+          }
+          case 'calibration':
+            return { ...prev, calibrated: data.value === 'calibrated' }
           case 'serial_log':
             if (data.entry) {
               const updated = [...prev.serialLog, data.entry]
@@ -75,7 +132,7 @@ export function useWebSocket() {
     }
 
     ws.onclose = () => {
-      setState((s) => ({ ...s, connected: false }))
+      setState((s) => ({ ...s, wsConnected: false }))
       reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY)
     }
 

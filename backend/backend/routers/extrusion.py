@@ -18,6 +18,9 @@ async def set_extrusion_rate(request: Request, body: ExtrusionRequest):
     worker: QueueWorker = request.app.state.queue_worker
     worker.set_flow_rate(body.rate)
 
+    # No-op unless a print session is active
+    request.app.state.history.log_extrusion(body.rate, worker.lines_sent)
+
     event_bus = request.app.state.event_bus
     event_bus.publish({"type": "extrusion_rate", "value": body.rate})
 

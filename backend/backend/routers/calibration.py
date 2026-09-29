@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.serial_manager import SerialError, SerialManager
+from backend.queue_worker import PrintStatus, QueueWorker
+from backend.serial_manager import SerialError, SerialManager, SerialTimeout
 
 router = APIRouter(prefix="/calibration")
 
@@ -31,6 +32,12 @@ async def calibrate_zero(request: Request, body: CalibrateRequest | None = None)
     Jog the LEFT nozzle to the center of the print area at the correct Z
     height (~0.2 mm above surface) before calling this endpoint.
     """
+    worker: QueueWorker = request.app.state.queue_worker
+    if worker.status == PrintStatus.PRINTING:
+        raise HTTPException(status_code=409, detail="Pause the print first")
+    if worker.status == PrintStatus.PAUSED:
+        raise HTTPException(status_code=409, detail="Can't re-zero during a print")
+
     serial: SerialManager = request.app.state.serial_manager
     if not serial.is_connected:
         raise HTTPException(status_code=400, detail="Printer not connected")
@@ -50,8 +57,11 @@ async def calibrate_zero(request: Request, body: CalibrateRequest | None = None)
     if body.zero_c or mode == "both":
         axes += " C0"
 
+    worker.invalidate_checkpoint("The printer was re-zeroed")
     try:
         await serial.send_line(f"G92 {axes}")
+    except SerialTimeout as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except SerialError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

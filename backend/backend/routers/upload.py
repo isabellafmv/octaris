@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 
 from backend.gcode_processor import GcodeValidationError, SyringeMode, process_gcode
-from backend.slicer import SlicingError, slice_stl
+from backend.slicer import SlicingError, slice_model
 
 router = APIRouter()
 
@@ -12,8 +12,11 @@ router = APIRouter()
 DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
 
 
+ACCEPTED_MODEL_EXTENSIONS = (".stl", ".3mf")
+
+
 @router.post("/upload")
-async def upload_stl(
+async def upload_model(
     request: Request,
     file: UploadFile,
     syringe_mode: str = "left",
@@ -22,9 +25,13 @@ async def upload_stl(
     layer_height: float | None = None,
     pressurize_mm: float | None = None,
     flow_multiplier: float | None = None,
+    travel_retract_multiplier: float | None = None,
 ):
-    if not file.filename or not file.filename.lower().endswith(".stl"):
-        raise HTTPException(status_code=400, detail="Only .stl files are accepted")
+    if not file.filename or not file.filename.lower().endswith(ACCEPTED_MODEL_EXTENSIONS):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .stl and .3mf files are accepted",
+        )
 
     if syringe_mode not in ("left", "right", "both"):
         raise HTTPException(status_code=400, detail="Invalid syringe_mode")
@@ -44,33 +51,49 @@ async def upload_stl(
     if flow_multiplier is not None and flow_multiplier <= 0:
         raise HTTPException(status_code=400, detail="flow_multiplier must be positive")
 
+    if travel_retract_multiplier is not None and travel_retract_multiplier <= 0:
+        raise HTTPException(
+            status_code=400, detail="travel_retract_multiplier must be positive"
+        )
+
     mode: SyringeMode = syringe_mode  # type: ignore
 
     event_bus = request.app.state.event_bus
     event_bus.publish({"type": "status", "value": "slicing"})
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    stl_path = DATA_DIR / file.filename
+    model_path = DATA_DIR / file.filename
     content = await file.read()
-    stl_path.write_bytes(content)
+    model_path.write_bytes(content)
 
     try:
-        result = await slice_stl(
-            stl_path, mode,
+        result = await slice_model(
+            model_path, mode,
             nozzle_diameter=nozzle_diameter,
             syringe_diameter=syringe_diameter,
             layer_height=layer_height,
             pressurize_mm=pressurize_mm,
             flow_multiplier=flow_multiplier,
+            travel_retract_multiplier=travel_retract_multiplier,
         )
     except (SlicingError, GcodeValidationError) as exc:
         event_bus.publish({"type": "status", "value": "idle"})
         raise HTTPException(status_code=500, detail=str(exc))
 
-    # Store processed gcode for print start
+    # Store processed gcode, and the settings it was made with, for print start
+    request.app.state.queue_worker.invalidate_checkpoint("A new file was loaded")
     request.app.state.processed_gcode = result
     request.app.state.current_filename = file.filename
     request.app.state.current_syringe_mode = mode
+    request.app.state.print_source = "stl"
+    request.app.state.print_settings = {
+        "nozzle_diameter": nozzle_diameter,
+        "syringe_diameter": syringe_diameter,
+        "layer_height": layer_height,
+        "pressurize_mm": pressurize_mm,
+        "flow_multiplier": flow_multiplier,
+        "travel_retract_multiplier": travel_retract_multiplier,
+    }
 
     event_bus.publish({"type": "status", "value": "ready"})
 
@@ -102,9 +125,12 @@ async def upload_gcode(request: Request, file: UploadFile, syringe_mode: str = "
     except GcodeValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    request.app.state.queue_worker.invalidate_checkpoint("A new file was loaded")
     request.app.state.processed_gcode = result
     request.app.state.current_filename = file.filename
     request.app.state.current_syringe_mode = mode
+    request.app.state.print_source = "gcode"
+    request.app.state.print_settings = {}
 
     event_bus = request.app.state.event_bus
     event_bus.publish({"type": "status", "value": "ready"})

@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import { randomBytes } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { spawn, ChildProcess } from 'child_process'
@@ -12,6 +13,11 @@ import icon from '../../resources/icon.png?asset'
 const BACKEND_PORT = 8000
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`
 let backendProcess: ChildProcess | null = null
+
+// A fresh per-launch secret. Shared with the backend via env var and with the
+// renderer via a preload arg, so only this app instance's own windows and
+// spawned backend can talk to each other over the local HTTP/WS API.
+const AUTH_TOKEN = randomBytes(32).toString('hex')
 
 function getBackendPath(): string {
   // In production the backend binary is bundled as an extraResource
@@ -31,7 +37,7 @@ function startBackend(): void {
 
   backendProcess = spawn(backendPath, [], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', OCTARIS_TOKEN: AUTH_TOKEN }
   })
 
   backendProcess.stdout?.on('data', (data) => {
@@ -139,7 +145,8 @@ function createWindow(): void {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
-      webSecurity: false
+      webSecurity: true,
+      additionalArguments: [`--octaris-token=${AUTH_TOKEN}`]
     }
   })
 
