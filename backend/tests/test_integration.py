@@ -34,17 +34,24 @@ class FakePrinter:
 
     Every line is answered "ok" after a short delay (so a print is still
     in flight while the test talks to the API). M114 answers with
-    `position`; M115 answers with a firmware string. While `block_on` is
-    in flight, its "ok" is held back until M410 arrives (EMERGENCY_PARSER
-    semantics), letting the test e-stop deterministically mid-line. A line
-    named in `fail_once_on` gets no reply at all the first time it's sent
-    (so it times out), then answers normally on any later attempt (retry).
+    `position` — except the very first M114, which QueueWorker.start() sends
+    before anything else to seed its as-sent position tracker, and which
+    gets `start_position` instead (a real printer's actual position at print
+    start, not wherever the test wants the *stop* to be found). M115
+    answers with a firmware string. While `block_on` is in flight, its "ok"
+    is held back until M410 arrives (EMERGENCY_PARSER semantics), letting
+    the test e-stop deterministically mid-line. A line named in
+    `fail_once_on` gets no reply at all the first time it's sent (so it
+    times out), then answers normally on any later attempt (retry).
     """
 
-    def __init__(self, delay: float = 0.005):
+    def __init__(self, delay: float = 0.005, start_position: str | None = None):
         self.is_open = True
         self.delay = delay
         self.position = ""
+        self.start_position = start_position if start_position is not None else m114(
+            X=0, Y=0, Z=0, A=0, B=0, C=0
+        )
         self.firmware = "FIRMWARE_NAME:Marlin bugfix-2.1.2 MACHINE_TYPE:Octaris EXTRUDER_COUNT:1"
         self.block_on: str | None = None
         self.fail_once_on: str | None = None
@@ -52,6 +59,7 @@ class FakePrinter:
         self.reached = threading.Event()  # block_on was written
         self._released = threading.Event()  # M410 arrived
         self._blocked = False
+        self._m114_calls = 0
         self._already_failed: set[str] = set()
         self._pending: list[str] = []
 
@@ -63,7 +71,9 @@ class FakePrinter:
             return
 
         if line == "M114":
-            self._pending = [self.position, "ok"]
+            self._m114_calls += 1
+            reply = self.start_position if self._m114_calls == 1 else self.position
+            self._pending = [reply, "ok"]
         elif line == "M115":
             self._pending = [self.firmware, "ok"]
         elif line == self.fail_once_on and line not in self._already_failed:
@@ -159,8 +169,11 @@ async def test_full_print_lifecycle(client):
     await upload_sample(client)
 
     # 4. start — and arm the soft-stop point before any line can reach it.
-    fake1.block_on = "G1 F200 X10 Y20 B-1.5"  # worker line 6
-    fake1.position = m114(X=15, Y=10, Z=0.3, A=0, B=-0.25, C=0)
+    # Both as actually sent at the 80% flow override set up below (line 6's
+    # planned B-1.5 scales to B-1.2; the checkpoint position sits at the
+    # midpoint of the *scaled* segment, B0 -> B-0.4, not the planned one).
+    fake1.block_on = "G1 F200 X10 Y20 B-1.2"  # worker line 6, flow-scaled
+    fake1.position = m114(X=15, Y=10, Z=0.3, A=0, B=-0.2, C=0)
 
     resp = await client.post("/print/start")
     assert resp.status_code == 200
@@ -185,15 +198,9 @@ async def test_full_print_lifecycle(client):
     resp = await client.post("/extrusion", json={"rate": 80})
     assert resp.status_code == 200
     assert worker.flow_rate == 80
-
-    # Put it back to 100 before the checkpoint below: a non-100 flow rate
-    # scales the B/C values on every line sent from here on (_apply_flow_rate),
-    # which the checkpoint locator can't see (it matches against the
-    # *unscaled* simulated path) — the backend itself flags this as a reason
-    # a stop may come back not-resumable. Keep this test's stop resumable.
-    resp = await client.post("/extrusion", json={"rate": 100})
-    assert resp.status_code == 200
-    assert worker.flow_rate == 100
+    # Left at 80% through the soft stop below on purpose: the checkpoint
+    # tracks what's actually sent (post-scaling), so a stop under a flow
+    # override is still resumable, at the *scaled* plunger position.
 
     # 6. pause
     resp = await client.post("/print/pause")
@@ -230,6 +237,8 @@ async def test_full_print_lifecycle(client):
     assert stop_result == {"status": "stopped", "resumable": True, "reason": None}
     assert worker.status == PrintStatus.STOPPED
     assert worker.checkpoint.line == k
+    # As actually sent (flow-scaled -0.4), not the planned -0.5.
+    assert worker.checkpoint.after.pos["B"] == pytest.approx(-0.4)
 
     [session] = (await client.get("/history")).json()["sessions"]
     session1_id = session["id"]
@@ -253,6 +262,13 @@ async def test_full_print_lifecycle(client):
     assert session["end_reason"] == "completed"
     assert session["completed"] is True
     assert session["resume_line"] is None
+
+    # Print #1 is fully done sending; safe to reset flow now (no in-flight
+    # line whose scaling this could race with) so print #2 below is back to
+    # its original, unscaled expectations.
+    resp = await client.post("/extrusion", json={"rate": 100})
+    assert resp.status_code == 200
+    assert worker.flow_rate == 100
 
     # --- second print, which gets a hard e-stop -----------------------------
 
@@ -316,7 +332,9 @@ async def test_full_print_lifecycle(client):
     after_hard_stop = sent[i_m410_hard + 1:i_m410_hard + 6]
     assert after_hard_stop == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
 
-    # The resumed checkpoint returns to the stop point before continuing.
+    # The resumed checkpoint returns to the stop point before continuing —
+    # at the *scaled* B values (flow was still 80% at the stop and stays so
+    # for the rest of this print), not the planned, unscaled ones.
     resumed = sent[i_m410_soft + 6:]
     assert resumed[:8] == [
         "G91",
@@ -324,9 +342,9 @@ async def test_full_print_lifecycle(client):
         "G90",
         "G1 X15 Y10 F300",  # back over the stop point
         "G1 Z0.3 A0 F300",  # down to it
-        "G1 B-0.25 F400",  # undo the plunger retract
-        "G1 X20 Y10 Z0.3 B-0.5 F200",  # finish the stopped line
-        "G1 F200 X20 Y20 B-1",  # and carry on after it
+        "G1 B-0.2 F400",  # undo the plunger retract, at the scaled checkpoint position
+        "G1 X20 Y10 Z0.3 A0 B-0.4 C0 F200",  # finish the stopped line, at its scaled target
+        "G1 F200 X20 Y20 B-0.8",  # and carry on after it, still flow-scaled
     ]
 
     # --- the WebSocket event stream (drained from the real event bus) -------
