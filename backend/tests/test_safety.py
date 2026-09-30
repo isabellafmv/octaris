@@ -154,7 +154,12 @@ async def test_serial_error_when_idle_reconnects_without_resending():
     dropped = FakePrinter(drop_on="G1 X1")
     fresh = FakePrinter()
     connected: list[str] = []
-    manager = SerialManager(on_connect=connected.append)
+
+    def on_event(event: dict) -> None:
+        if event["type"] == "printer" and event["connected"]:
+            connected.append(event["port"])
+
+    manager = SerialManager(on_event=on_event)
     attach(manager, dropped)
 
     with patch("backend.serial_manager.serial.Serial", return_value=fresh):

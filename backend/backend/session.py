@@ -121,31 +121,29 @@ class PrinterSession:
             await self.serial.send(STEPS_PER_MM)
         except SerialError:
             pass  # non-fatal — printer still usable
+        # on_event() resets the calibration
         self._publish({"type": "printer", "connected": True, "port": port})
-        self.reset_calibration()
 
     async def disconnect(self) -> None:
         self._refuse_during_print()
         await self.serial.disconnect()
         self.worker.invalidate_checkpoint("The printer disconnected")
         self._publish({"type": "printer", "connected": False, "port": None})
-        self.reset_calibration()
 
-    def connection_lost(self) -> None:
-        """The port failed. Stops a running print for good (the board may
-        reset on reconnect)."""
-        self.worker.connection_lost()
-        self._publish({"type": "printer", "connected": False, "port": None})
-        self.reset_calibration()
-
-    def reconnected(self, port: str) -> None:
-        """The serial manager reopened the port by itself."""
-        self._publish({"type": "printer", "connected": True, "port": port})
-        # Opening the port may have reset the board, losing the G92 zero.
+    def on_event(self, event: dict[str, Any]) -> None:
+        """Reacts to the printer connecting or disconnecting, however it
+        happened: by connect()/disconnect(), or by the serial manager
+        losing or reopening the port by itself."""
+        if event["type"] != "printer":
+            return
+        if not event["connected"]:
+            # Stops a running print for good (the board may reset on reconnect).
+            self.worker.connection_lost()
+        # Opening or losing the port may reset the board, losing the G92 zero.
         self.reset_calibration()
 
     def can_reconnect(self) -> bool:
-        # Never reconnect automatically during a print; see connection_lost().
+        # Never reconnect automatically during a print; see on_event().
         # A line the worker queued before the connection dropped must not
         # reopen the port either, hence `sending`.
         return not (self.worker.print_active or self.worker.sending)

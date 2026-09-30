@@ -194,7 +194,12 @@ def make_worker(send):
     serial.send = AsyncMock(side_effect=send)
     serial.emergency_write = AsyncMock()
     reasons: list[str] = []
-    return QueueWorker(serial, on_print_end=lambda reason, line: reasons.append(reason)), reasons
+
+    def on_event(event: dict) -> None:
+        if event["type"] == "print_end":
+            reasons.append(event["reason"])
+
+    return QueueWorker(serial, on_event=on_event), reasons
 
 
 async def test_worker_reports_error_on_serial_failure():
@@ -234,3 +239,23 @@ async def test_estop_without_print_reports_nothing():
     await worker.estop()
 
     assert reasons == []
+
+
+def test_history_follows_print_events_on_the_bus():
+    from backend.database import init_db
+    from backend.events import EventBus
+    from backend.history import PrintHistory
+
+    bus = EventBus()
+    history = PrintHistory(init_db(Path(":memory:")))
+    bus.listen(history.on_event)
+
+    session_id = history.start("a.gcode", "left", 10, source="gcode", settings={})
+    bus.publish({"type": "print_end", "reason": "stopped", "resume_line": 4})
+    assert history.session_id is None
+    bus.publish({"type": "print_resumed"})
+    assert history.session_id == session_id
+    bus.publish({"type": "print_end", "reason": "completed", "resume_line": None})
+
+    [row] = history.list(10)
+    assert (row["end_reason"], row["completed"], row["resume_line"]) == ("completed", True, None)

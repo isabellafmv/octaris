@@ -156,9 +156,7 @@ def _settle(future: asyncio.Future, result: str | None, exc: BaseException | Non
 class SerialManager:
     def __init__(
         self,
-        on_disconnect: Callable[[], None] | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
-        on_connect: Callable[[str], None] | None = None,
         can_reconnect: Callable[[], bool] | None = None,
     ):
         self._serial: serial.Serial | None = None
@@ -185,13 +183,11 @@ class SerialManager:
         self._reader_stop: threading.Event | None = None
         self._monitor: asyncio.Task | None = None
         self._autoreport_seen: asyncio.Event | None = None
-        self._on_disconnect = on_disconnect
-        # Receives {"type": "serial_log", ...} and {"type": "temperature", ...}
-        # events, always on the event loop.
+        # Receives, always on the event loop: "serial_log" and "temperature"
+        # events, and "printer" events when the port is lost or reopened
+        # *automatically*. A manual connect()/disconnect() is reported by the
+        # caller, not from here.
         self._on_event = on_event
-        # Fired with the port after a successful *automatic* reconnect. A
-        # manual /connect is reported by the caller, not from here.
-        self._on_connect = on_connect
         # Whether an automatic reconnect is allowed right now. Reopening the
         # port can reset the board, losing its position and G92 zero, so the
         # app only allows it while no print is active.
@@ -325,8 +321,8 @@ class SerialManager:
         if ser is None or self._serial is not ser:
             return
         self._close(SerialError("The printer disconnected"))
-        if self._on_disconnect:
-            self._on_disconnect()
+        if self._on_event:
+            self._on_event({"type": "printer", "connected": False, "port": None})
 
     async def reconnect(self) -> bool:
         """Reconnect using the last-known port and baud rate."""
@@ -339,8 +335,8 @@ class SerialManager:
             logger.info("Reconnect attempt %d/%d to %s", attempt, RECONNECT_ATTEMPTS, port)
             try:
                 await self.connect(port, baud_rate)
-                if self._on_connect:
-                    self._on_connect(port)
+                if self._on_event:
+                    self._on_event({"type": "printer", "connected": True, "port": port})
                 return True
             except SerialError:
                 if attempt < RECONNECT_ATTEMPTS:
@@ -405,7 +401,8 @@ class SerialManager:
             return await self._transact(line, numbered, log)
         except _PortLost as exc:
             logger.error("Serial error sending line: %s", exc)
-            # Decided before on_disconnect, which stops a running print.
+            # Decided before the disconnect event, whose listeners stop a
+            # running print.
             may_reconnect = self._can_reconnect()
             self._handle_disconnect(self._serial)
             if may_reconnect:

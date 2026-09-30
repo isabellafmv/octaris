@@ -33,20 +33,18 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
     event_bus = EventBus()
     history = PrintHistory(db)
     serial_manager = SerialManager(
-        on_disconnect=lambda: session.connection_lost(),
         on_event=event_bus.publish,
-        on_connect=lambda port: session.reconnected(port),
         can_reconnect=lambda: session.can_reconnect(),
     )
     queue_worker = QueueWorker(
         serial_manager=serial_manager,
         on_event=event_bus.publish,
-        on_print_end=history.end,
-        on_print_resumed=history.reopen,
         retract_on_estop=config.retract_on_estop,
         syringe_travel_mm=config.syringe_travel_mm,
     )
     session = PrinterSession(config, serial_manager, queue_worker, history, event_bus.publish)
+    event_bus.listen(session.on_event)
+    event_bus.listen(history.on_event)
 
     app.state.config = config
     app.state.db = db

@@ -60,6 +60,13 @@ class PrintHistory:
         self._last_session_id = self._session_id
         self._session_id = None
 
+    def on_event(self, event: dict) -> None:
+        """Follows the print through the app's event bus."""
+        if event["type"] == "print_end":
+            self.end(event["reason"], event["resume_line"])
+        elif event["type"] == "print_resumed":
+            self.reopen()
+
     def reopen(self) -> None:
         """Continue the last session: its stopped print was resumed."""
         if self._session_id is not None or self._last_session_id is None:

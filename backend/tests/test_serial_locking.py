@@ -108,10 +108,18 @@ async def test_send_line_reconnect_does_not_deadlock():
     await manager.disconnect()
 
 
-async def test_on_connect_fires_after_automatic_reconnect():
+def connection_events(ports: list[str]):
+    """An on_event handler that records the port of each "printer connected" event."""
+    def on_event(event: dict) -> None:
+        if event["type"] == "printer" and event["connected"]:
+            ports.append(event["port"])
+    return on_event
+
+
+async def test_printer_event_after_automatic_reconnect():
     fake = FakeSerial(delay=0.0)
     connected_ports: list[str] = []
-    manager = SerialManager(on_connect=connected_ports.append)
+    manager = SerialManager(on_event=connection_events(connected_ports))
     manager._port = "/dev/fake"
     manager._baud_rate = 115200
     manager._serial = None  # force the reconnect path
@@ -123,12 +131,12 @@ async def test_on_connect_fires_after_automatic_reconnect():
     await manager.disconnect()
 
 
-async def test_on_connect_not_called_for_manual_connect():
-    """Manual connect() is reported by the caller (the /connect router), not
-    from within SerialManager — on_connect is only for automatic reconnects."""
+async def test_no_printer_event_for_manual_connect():
+    """Manual connect() is reported by the caller (PrinterSession.connect),
+    not from within SerialManager, which reports automatic reconnects only."""
     fake = FakeSerial(delay=0.0)
     connected_ports: list[str] = []
-    manager = SerialManager(on_connect=connected_ports.append)
+    manager = SerialManager(on_event=connection_events(connected_ports))
 
     with patch("backend.serial_manager.serial.Serial", return_value=fake):
         await manager.connect("/dev/fake", 115200)

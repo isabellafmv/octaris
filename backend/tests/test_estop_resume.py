@@ -117,7 +117,14 @@ async def printer(client):
     attach(app.state.serial_manager, fake)
     app.state.session.calibrated = True
     events: list[dict] = []
-    app.state.queue_worker._on_event = events.append
+    publish = app.state.queue_worker._on_event
+
+    def record(event: dict) -> None:
+        """Keep the worker's own events, and still publish them."""
+        events.append(event)
+        publish(event)
+
+    app.state.queue_worker._on_event = record
     fake.events = events
     return fake
 

@@ -122,8 +122,6 @@ class QueueWorker:
         self,
         serial_manager: SerialManager,
         on_event: Callable[[dict], None] | None = None,
-        on_print_end: Callable[[str, int | None], None] | None = None,
-        on_print_resumed: Callable[[], None] | None = None,
         retract_on_estop: bool = True,
         syringe_travel_mm: float | None = None,
     ):
@@ -146,11 +144,6 @@ class QueueWorker:
         self._stop_reason: str | None = None  # why the last stop can't be resumed
         self._task: asyncio.Task | None = None
         self._on_event = on_event
-        # Called once per print with the end reason ("completed", "stopped",
-        # "estop" or "error") and the line a resumable stop halted on.
-        self._on_print_end = on_print_end
-        # Called when an e-stopped print is resumed.
-        self._on_print_resumed = on_print_resumed
         self._flow_rate: float = 100.0  # percentage, same semantics as M221
         self._time_estimate_s: float | None = None
         # Plunger travel of a full syringe, and how far each plunger has been
@@ -227,12 +220,10 @@ class QueueWorker:
             self._emit({"type": "status", "value": self.status.value})
 
     def _end_print(self, end_reason: str, resume_line: int | None = None) -> None:
-        """Report the end of a print. Called once, right after it leaves ACTIVE."""
-        if self._on_print_end:
-            try:
-                self._on_print_end(end_reason, resume_line)
-            except Exception:
-                logger.exception("on_print_end callback failed")
+        """Report the end of a print ("completed", "stopped", "estop" or
+        "error") and the line a resumable stop halted on. Called once, right
+        after the print leaves ACTIVE."""
+        self._emit({"type": "print_end", "reason": end_reason, "resume_line": resume_line})
 
     def load_gcode(
         self,
@@ -348,7 +339,7 @@ class QueueWorker:
         EMERGENCY_PARSER acts on it on arrival). If a print was running, the
         printer's position is then read back to find the line it stopped on,
         so the print can be resumed from there.
-        `end_reason` is reported to on_print_end if a print was running.
+        `end_reason` is reported in the print_end event if a print was running.
         """
         was_active = self._state in ACTIVE
         if self._state not in (STOPPED, STOPPED_RESUMABLE):
@@ -434,11 +425,7 @@ class QueueWorker:
         self._tracker.resume_at(checkpoint.line, checkpoint.after)
         self._next = checkpoint.line + 1
         self._transition(PRINTING)
-        if self._on_print_resumed:
-            try:
-                self._on_print_resumed()
-            except Exception:
-                logger.exception("on_print_resumed callback failed")
+        self._emit({"type": "print_resumed"})
         self._emit_progress()
         self._task = asyncio.create_task(self._run(preamble=[], seed=False))
 
@@ -579,8 +566,8 @@ class QueueWorker:
             logger.error("Failed to send: %s", line)
             if self._state not in ACTIVE:
                 # An e-stop, or connection_lost() via the disconnect
-                # callback, is already handling this print.
+                # event, is already handling this print.
                 return False
-            self._emit({"type": "printer", "connected": False, "port": None})
             self.connection_lost()
+            self._emit({"type": "printer", "connected": False, "port": None})
             return False
