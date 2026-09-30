@@ -13,7 +13,7 @@ def set_status(status: PrintStatus) -> None:
 
 def connect_fake_serial() -> None:
     app.state.serial_manager._serial = SimpleNamespace(is_open=True)
-    app.state.serial_manager.send_line = AsyncMock(return_value="ok")
+    app.state.serial_manager.send = AsyncMock(return_value="ok")
     app.state.serial_manager.send_lines = AsyncMock(return_value=["ok", "ok", "ok"])
 
 

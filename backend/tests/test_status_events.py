@@ -10,6 +10,7 @@ from backend.history import PrintHistory
 from backend.main import app
 from backend.queue_worker import QueueWorker
 from backend.serial_manager import SerialManager
+from tests.serial_fakes import mock_port
 
 
 def _setup_app_state():
@@ -34,10 +35,7 @@ def _setup_app_state():
 
 
 def _fake_connected_serial() -> MagicMock:
-    fake = MagicMock()
-    fake.is_open = True
-    fake.readline.return_value = b"ok\n"
-    return fake
+    return mock_port()
 
 
 def test_ws_sends_snapshot_right_after_connect():

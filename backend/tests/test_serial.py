@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.serial_manager import SerialError, SerialManager
+from tests.serial_fakes import mock_port
 
 
 def test_list_ports_returns_list():
@@ -26,8 +27,7 @@ async def test_connect_failure_raises():
 
 
 async def test_connect_disconnect():
-    mock_serial = MagicMock()
-    mock_serial.is_open = True
+    mock_serial = mock_port()
 
     manager = SerialManager()
     with patch("backend.serial_manager.serial.Serial", return_value=mock_serial):
@@ -42,7 +42,7 @@ async def test_connect_disconnect():
 async def test_send_line_when_disconnected():
     manager = SerialManager()
     with pytest.raises(SerialError, match="Not connected"):
-        await manager.send_line("G28")
+        await manager.send("G28")
 
 
 async def test_ports_endpoint(client):

@@ -43,7 +43,7 @@ async def send_gcode(body: GcodeSendRequest, request: Request):
         worker.invalidate_checkpoint(reason)
 
     try:
-        response = await serial_manager.send_line(line)
+        response = await serial_manager.send(line)
         return GcodeSendResponse(status="ok", response=response)
     except SerialTimeout as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc

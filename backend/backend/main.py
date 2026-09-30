@@ -46,10 +46,14 @@ def make_serial_manager(app: FastAPI) -> SerialManager:
 
     return SerialManager(
         on_disconnect=_on_disconnect,
-        on_serial_log=lambda entry: app.state.event_bus.publish(entry),
+        on_event=app.state.event_bus.publish,
         on_connect=_on_connect,
         # Never reconnect automatically during a print; see connection_lost().
-        can_reconnect=lambda: not app.state.queue_worker.print_active,
+        # A line the worker queued before the connection dropped must not
+        # reopen the port either, hence `sending`.
+        can_reconnect=lambda: not (
+            app.state.queue_worker.print_active or app.state.queue_worker.sending
+        ),
     )
 
 

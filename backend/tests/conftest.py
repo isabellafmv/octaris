@@ -28,4 +28,6 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+    # Stops the serial reader thread of any port a test attached.
+    await app.state.serial_manager.disconnect()
     app.state.db.close()

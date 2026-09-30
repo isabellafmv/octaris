@@ -63,7 +63,7 @@ async def _check_bed_limits(
         return
     current = serial.position[axis]
     if current is None:
-        await serial.send_line("M114")  # the reply updates serial.position
+        await serial.send("M114")  # the reply updates serial.position
         current = serial.position[axis]
     if current is None:
         raise HTTPException(

@@ -23,6 +23,7 @@ from backend.limits import (
 from backend.main import app
 from backend.queue_worker import CONNECTION_LOST, PrintStatus, QueueWorker
 from backend.serial_manager import SerialError, SerialManager, _open_port
+from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RAW_SAMPLE = (FIXTURES / "raw_sample.gcode").read_text()
@@ -48,7 +49,7 @@ class FakePrinter:
         self._pending: list[str] = []
 
     def write(self, data: bytes) -> None:
-        line = data.decode().strip()
+        _, line = unframe(data.decode().strip())
         if line == self.drop_on:
             raise serial.SerialException("device reports readiness to read but returned no data")
         self.written.append(line)
@@ -83,10 +84,9 @@ async def wait_for(condition, timeout: float = 3.0) -> None:
 
 
 @pytest.fixture
-def printer(client):
+async def printer(client):
     fake = FakePrinter()
-    app.state.serial_manager._serial = fake
-    app.state.serial_manager._port = "/dev/fake"
+    attach(app.state.serial_manager, fake)
     app.state.is_calibrated = True
     return fake
 
@@ -137,13 +137,13 @@ def test_port_opened_with_dtr_and_rts_cleared_before_open():
 async def test_serial_error_while_reconnect_forbidden_does_not_reopen():
     fake = FakePrinter(drop_on="G1 X1")
     manager = SerialManager(can_reconnect=lambda: False)
-    manager._serial, manager._port = fake, "/dev/fake"
+    attach(manager, fake)
 
     with patch("backend.serial_manager.serial.Serial") as opener:
         with pytest.raises(SerialError, match="Connection lost"):
-            await manager.send_line("G1 X1")
+            await manager.send("G1 X1")
         with pytest.raises(SerialError, match="Not connected"):
-            await manager.send_line("G1 X2")
+            await manager.send("G1 X2")
 
     opener.assert_not_called()
     assert not manager.is_connected
@@ -154,11 +154,11 @@ async def test_serial_error_when_idle_reconnects_without_resending():
     fresh = FakePrinter()
     connected: list[str] = []
     manager = SerialManager(on_connect=connected.append)
-    manager._serial, manager._port = dropped, "/dev/fake"
+    attach(manager, dropped)
 
     with patch("backend.serial_manager.serial.Serial", return_value=fresh):
         with pytest.raises(SerialError, match="not re-sent"):
-            await manager.send_line("G1 X1")
+            await manager.send("G1 X1")
 
     assert manager.is_connected
     assert connected == ["/dev/fake"]
@@ -227,6 +227,8 @@ async def test_idle_reconnect_resets_calibration(client, printer, events):
     assert app.state.is_calibrated is False
     published = events()
     assert {"type": "printer", "connected": True, "port": "/dev/fake"} in published
+    # (Ignoring serial log entries, e.g. the M155 sent after reconnecting.)
+    published = [e for e in published if e["type"] != "serial_log"]
     assert published[-1] == {"type": "calibration", "value": "uncalibrated"}
 
 
@@ -364,7 +366,7 @@ async def test_jog_unlimited_before_calibration(client, printer):
 
 async def test_position_unknown_after_stop(client, printer):
     manager = app.state.serial_manager
-    await manager.send_line("G92 X0 Y0 Z0")
+    await manager.send("G92 X0 Y0 Z0")
     assert manager.position["X"] == 0
     await manager.emergency_write("M410")
     assert manager.position["X"] is None
@@ -424,7 +426,7 @@ async def test_print_start_accounts_for_flow_override(client, printer):
 
 async def test_low_travel_warning_emitted_once():
     manager = MagicMock()
-    manager.send_line = AsyncMock(return_value="ok")
+    manager.send = AsyncMock(return_value="ok")
     events: list[dict] = []
     worker = QueueWorker(manager, on_event=events.append, syringe_travel_mm=10.0)
     worker.load_gcode(["G90", "G1 B-5", "G1 B-8.9", "G1 B-9.2", "G1 B-9.5", "G1 B-9.9"])

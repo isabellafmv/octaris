@@ -59,7 +59,7 @@ async def calibrate_zero(request: Request, body: CalibrateRequest | None = None)
 
     worker.invalidate_checkpoint("The printer was re-zeroed")
     try:
-        await serial.send_line(f"G92 {axes}")
+        await serial.send(f"G92 {axes}")
     except SerialTimeout as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except SerialError as exc:

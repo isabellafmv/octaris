@@ -9,6 +9,7 @@ from backend.gcode_processor import ProcessedGcode
 from backend.main import app
 from backend.queue_worker import PrintStatus, QueueWorker
 from backend.serial_manager import SerialError
+from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -26,10 +27,12 @@ class FakeSerial:
         self._pending: list[bytes] = []
 
     def write(self, data: bytes) -> None:
-        line = data.decode().strip()
+        _, line = unframe(data.decode().strip())
         self.written.append(line)
         if line == "M114" and self.written[-2:-1] != ["M400"]:
-            self._pending = [b"X:0.00 Y:0.00 Z:0.00 A:0.00 B:0.00 C:0.00 Count X:0\n"]
+            self._pending = [b"X:0.00 Y:0.00 Z:0.00 A:0.00 B:0.00 C:0.00 Count X:0\n", b"ok\n"]
+        else:
+            self._pending = [b"ok\n"]
 
     def flush(self) -> None:
         pass
@@ -38,17 +41,16 @@ class FakeSerial:
         time.sleep(self.delay)
         if self._pending:
             return self._pending.pop(0)
-        return b"ok\n"
+        return b""
 
     def close(self) -> None:
         self.is_open = False
 
 
 @pytest.fixture
-def printer(client):
+async def printer(client):
     fake = FakeSerial()
-    app.state.serial_manager._serial = fake
-    app.state.serial_manager._port = "/dev/fake"
+    attach(app.state.serial_manager, fake)
     app.state.is_calibrated = True
     # The synthetic prints below use both syringes
     app.state.config.nozzle_offset_measured = True
@@ -187,16 +189,16 @@ async def test_history_limit(client, printer, tmp_path):
 # --- QueueWorker end-reason callback --------------------------------------
 
 
-def make_worker(send_line):
+def make_worker(send):
     serial = MagicMock()
-    serial.send_line = AsyncMock(side_effect=send_line)
+    serial.send = AsyncMock(side_effect=send)
     serial.emergency_write = AsyncMock()
     reasons: list[str] = []
     return QueueWorker(serial, on_print_end=lambda reason, line: reasons.append(reason)), reasons
 
 
 async def test_worker_reports_error_on_serial_failure():
-    async def fail_on_third(line):
+    async def fail_on_third(line, numbered=False):
         if line == "G1 X2":
             raise SerialError("Send failed")
         return "ok"
@@ -211,7 +213,7 @@ async def test_worker_reports_error_on_serial_failure():
 
 
 async def test_worker_reports_each_print_end_once():
-    async def ok(line):
+    async def ok(line, numbered=False):
         return "ok"
 
     worker, reasons = make_worker(ok)
@@ -225,7 +227,7 @@ async def test_worker_reports_each_print_end_once():
 
 
 async def test_estop_without_print_reports_nothing():
-    async def ok(line):
+    async def ok(line, numbered=False):
         return "ok"
 
     worker, reasons = make_worker(ok)

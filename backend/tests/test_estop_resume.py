@@ -9,6 +9,7 @@ from backend.checkpoint import Checkpoint, build_resume_commands, locate_line, p
 from backend.gcode_processor import MachineState, ProcessedGcode, process_gcode, simulate_states
 from backend.main import app
 from backend.queue_worker import PrintStatus
+from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RAW_SAMPLE = (FIXTURES / "raw_sample.gcode").read_text()
@@ -51,26 +52,31 @@ class FakePrinter:
         self.written: list[str] = []
         self.reached = threading.Event()  # block_on was written
         self._released = threading.Event()  # M410 arrived
-        self._blocked = False
+        self._held: list[str] = []
+        self._blocked_at = 0.0
         self._m114_calls = 0
         self._pending: list[str] = []
 
     def write(self, data: bytes) -> None:
-        line = data.decode().strip()
+        _, line = unframe(data.decode().strip())
         self.written.append(line)
         if line == "M410":
             self._released.set()  # emergency parser: acts on it immediately
             return
         if line == "M114":
             self._m114_calls += 1
-            reply = self.start_position if self._m114_calls == 1 else self.position
-            self._pending = [reply, "ok"]
+            position = self.start_position if self._m114_calls == 1 else self.position
+            reply = [position, "ok"]
         else:
-            self._pending = ["ok"]
+            reply = ["ok"]
         if line == self.block_on:
+            # Its "ok" is held back (never visible to readline) until M410.
             self.block_on = None
-            self._blocked = True
+            self._held = reply
+            self._blocked_at = time.monotonic()
             self.reached.set()
+        else:
+            self._pending = reply
 
     def flush(self) -> None:
         pass
@@ -79,9 +85,8 @@ class FakePrinter:
         pass
 
     def readline(self) -> bytes:
-        if self._blocked:
-            self._released.wait(timeout=2)
-            self._blocked = False
+        if self._held and (self._released.is_set() or time.monotonic() - self._blocked_at > 2):
+            self._pending, self._held = self._held, []
         if not self._pending:
             time.sleep(0.01)
             return b""
@@ -106,10 +111,9 @@ async def wait_for(condition, timeout: float = 3.0) -> None:
 
 
 @pytest.fixture
-def printer(client):
+async def printer(client):
     fake = FakePrinter()
-    app.state.serial_manager._serial = fake
-    app.state.serial_manager._port = "/dev/fake"
+    attach(app.state.serial_manager, fake)
     app.state.is_calibrated = True
     events: list[dict] = []
     app.state.queue_worker._on_event = events.append
@@ -137,6 +141,11 @@ async def estop_at(client, printer: FakePrinter, block_on: str, position: str) -
     resp = await client.post("/print/estop")
     assert resp.status_code == 200
     return resp.json()
+
+
+def on_wire(lines: list[str]) -> list[str]:
+    """Print lines as sent numbered: without their comments."""
+    return [line.split(";", 1)[0].strip() for line in lines]
 
 
 def worker_index(text: str, occurrence: int = 0) -> int:
@@ -448,7 +457,7 @@ async def test_resume_command_sequence(client, printer):
         "G1 F200 X20 Y20 B-1",  # and carry on after it
     ]
     # Every line after k is sent exactly once more, in order.
-    assert resumed[7:] == worker._lines[k + 1:]
+    assert resumed[7:] == on_wire(worker._lines[k + 1:])
     assert worker.lines_sent == worker.lines_total
 
     [session] = (await client.get("/history")).json()["sessions"]
@@ -482,7 +491,7 @@ async def test_resume_inside_relative_block(client, printer):
         "G91",  # back into the relative block
         "G90",  # line k+1
     ]
-    assert resumed[8:] == worker._lines[k + 1:]
+    assert resumed[8:] == on_wire(worker._lines[k + 1:])
 
 
 def test_resume_commands_for_non_moving_line():

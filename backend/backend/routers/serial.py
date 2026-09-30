@@ -52,7 +52,7 @@ async def connect(request: Request, body: ConnectRequest):
 
     # Auto-send steps/mm calibration (EEPROM disabled on this board)
     try:
-        await manager.send_line("M92 X800 Y800 Z800 A800 B800 C800")
+        await manager.send("M92 X800 Y800 Z800 A800 B800 C800")
     except SerialError:
         pass  # non-fatal — printer still usable
 

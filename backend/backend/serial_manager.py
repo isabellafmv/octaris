@@ -1,12 +1,22 @@
+"""Serial link to the printer.
+
+One reader thread per connection owns the pyserial port: it reads every line
+the printer sends and sorts it (reply, resend request, busy, temperature, log).
+Commands are sent one at a time — a line goes out, and the next may only follow
+once the reader has seen its "ok" (or its deadline has passed). Print lines
+carry line numbers and checksums, so the printer can ask for a corrupted line
+to be sent again.
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
 import platform
+import re
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -20,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 RECONNECT_ATTEMPTS = 5
 RECONNECT_DELAY_S = 2.0
-# pyserial readline() timeout. Short, so the reply loop can check its deadline.
+# pyserial readline() timeout. Short, so the reader can check deadlines and
+# notice a stop request while the printer is silent.
 SERIAL_TIMEOUT_S = 1.0
 # Overall time to wait for "ok"/"error" after sending a command.
 REPLY_DEADLINE_S = 60.0
@@ -29,6 +40,24 @@ REPLY_DEADLINE_S = 60.0
 SLOW_COMMANDS = frozenset({"G28", "G4", "M400", "M109", "M190"})
 SLOW_REPLY_DEADLINE_S = 300.0
 SERIAL_LOG_MAX_ENTRIES = 500
+# Numbered lines kept for answering resend requests.
+RESEND_HISTORY = 100
+# Temperature auto-report interval requested with M155, and how long to wait
+# for the first report before falling back to polling with M105.
+AUTOREPORT_INTERVAL_S = 2
+AUTOREPORT_WAIT_S = 5.0
+TEMPERATURE_POLL_S = 2.0
+
+_RESEND = re.compile(r"^(?:resend:?|rs)\s*N?:?\s*(\d+)", re.IGNORECASE)
+# A temperature report starts with a sensor key, optionally after "ok":
+# "T:21.30 /0.00 B:20.10 /0.00 @:0 B@:0". M114's "X:... B:... C:..." does not.
+_TEMPERATURE_REPORT = re.compile(r"^(?:ok\s+)?(?:T\d*|B|C|P|R|W):\s*-?\d")
+_TEMPERATURE = re.compile(
+    r"\b(T\d*|B|C|P|R|W):\s*(-?\d+(?:\.\d+)?)(?:\s*/\s*(-?\d+(?:\.\d+)?))?"
+)
+_M110 = re.compile(r"^M110\b.*?\bN(\d+)", re.IGNORECASE)
+# Errors Marlin sends just before a "Resend:" request — not a reply by themselves.
+_RESEND_ERRORS = ("checksum", "line number", "last line")
 
 
 @dataclass
@@ -36,8 +65,9 @@ class SerialLogEntry:
     timestamp: str
     direction: str  # "sent" | "received"
     content: str
+    line_number: int | None = None  # the N of a numbered line
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -54,6 +84,14 @@ class SerialTimeout(SerialError):
         super().__init__(f"No reply from printer to '{command}' within {timeout_s:g} s")
 
 
+class ResendUnavailable(SerialError):
+    """The printer asked for a line that is no longer in the resend history."""
+
+
+class _PortLost(SerialError):
+    """Reading from or writing to the port failed; worth a reconnect."""
+
+
 def reply_deadline_s(line: str) -> float:
     """How long to wait for the reply to `line`, based on its command word."""
     command = line.split(";", 1)[0].split(maxsplit=1)
@@ -62,28 +100,95 @@ def reply_deadline_s(line: str) -> float:
     return REPLY_DEADLINE_S
 
 
+def checksum(body: str) -> int:
+    """Marlin's line checksum: XOR of every byte before the '*'."""
+    result = 0
+    for byte in body.encode():
+        result ^= byte
+    return result
+
+
+def number_line(number: int, command: str) -> str:
+    body = f"N{number} {command}"
+    return f"{body}*{checksum(body)}"
+
+
+def parse_temperatures(line: str) -> dict[str, dict[str, float | None]] | None:
+    """{"T": {"actual": 21.3, "target": 0.0}, ...} for a temperature report, else None."""
+    if not _TEMPERATURE_REPORT.match(line):
+        return None
+    return {
+        key: {"actual": float(actual), "target": float(target) if target is not None else None}
+        for key, actual, target in _TEMPERATURE.findall(line)
+    }
+
+
 def _unknown_position(relative: bool = False) -> MachineState:
     return MachineState(pos={ax: None for ax in AXES}, relative=relative)
+
+
+@dataclass
+class _Pending:
+    """The one command in flight. While set, nothing else may be sent."""
+
+    command: str
+    number: int | None
+    timeout_s: float
+    deadline: float
+    loop: asyncio.AbstractEventLoop
+    future: asyncio.Future
+    lines: list[str] = field(default_factory=list)
+    wants_temperatures: bool = False
+    resend_from: int | None = None
+    # Numbered lines still to re-send before the command's own "ok" counts.
+    resend_queue: deque[tuple[int, str]] = field(default_factory=deque)
+
+
+def _settle(future: asyncio.Future, result: str | None, exc: BaseException | None) -> None:
+    if future.done():
+        return
+    if exc is not None:
+        future.set_exception(exc)
+    else:
+        future.set_result(result)
 
 
 class SerialManager:
     def __init__(
         self,
         on_disconnect: Callable[[], None] | None = None,
-        on_serial_log: Callable[[dict[str, Any]], None] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
         on_connect: Callable[[str], None] | None = None,
         can_reconnect: Callable[[], bool] | None = None,
     ):
         self._serial: serial.Serial | None = None
         self._port: str | None = None
         self._baud_rate: int = 115200
-        self._lock = asyncio.Lock()
-        self._io_lock = asyncio.Lock()
-        # Guards only serial.write(), so emergency_write() can interleave with a
-        # send that is blocked waiting for "ok" while holding _io_lock.
+        # Serializes connect/disconnect, so two can't open the port at once.
+        self._connect_lock = asyncio.Lock()
+        # Queues senders; whoever holds it may put one command in flight at a
+        # time. Holding it across several lines makes them one atomic exchange.
+        self._send_lock = asyncio.Lock()
+        # Guards only port.write(), so emergency_write() and resends from the
+        # reader thread can't interleave bytes with a normal send.
         self._write_lock = threading.Lock()
+        # Guards _pending and _history, shared with the reader thread.
+        self._state_lock = threading.Lock()
+        self._pending: _Pending | None = None
+        self._history: deque[tuple[int, str]] = deque(maxlen=RESEND_HISTORY)
+        self._next_line_number = 1
+        # Set when the printer's idea of the last line number may differ from
+        # ours (fresh port, or a numbered line that failed); the next numbered
+        # line is preceded by an M110 to agree on it.
+        self._resync = True
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._reader_stop: threading.Event | None = None
+        self._monitor: asyncio.Task | None = None
+        self._autoreport_seen: asyncio.Event | None = None
         self._on_disconnect = on_disconnect
-        self._on_serial_log = on_serial_log
+        # Receives {"type": "serial_log", ...} and {"type": "temperature", ...}
+        # events, always on the event loop.
+        self._on_event = on_event
         # Fired with the port after a successful *automatic* reconnect. A
         # manual /connect is reported by the caller, not from here.
         self._on_connect = on_connect
@@ -96,25 +201,11 @@ class SerialManager:
         # Axes are None while unknown.
         self._state = _unknown_position()
         self._log_buffer: deque[SerialLogEntry] = deque(maxlen=SERIAL_LOG_MAX_ENTRIES)
-        # Set after a SerialTimeout: the late reply may still arrive, and must
-        # not be read as the reply to the next command.
-        self._discard_stale_input = False
 
     @property
-    def log_buffer(self) -> list[dict[str, str]]:
+    def log_buffer(self) -> list[dict[str, Any]]:
         """Return the serial log buffer as a list of dicts (oldest first)."""
         return [entry.to_dict() for entry in self._log_buffer]
-
-    def _log(self, direction: str, content: str) -> None:
-        """Record a serial log entry and emit it via the event callback."""
-        entry = SerialLogEntry(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            direction=direction,
-            content=content,
-        )
-        self._log_buffer.append(entry)
-        if self._on_serial_log:
-            self._on_serial_log({"type": "serial_log", "entry": entry.to_dict()})
 
     @property
     def is_connected(self) -> bool:
@@ -148,142 +239,92 @@ class SerialManager:
             ]
         return [{"device": p.device, "description": p.description} for p in ports]
 
-    async def connect(self, port: str, baud_rate: int) -> None:
-        async with self._lock:
-            if self._serial and self._serial.is_open:
-                self._serial.close()
+    # --- events ---------------------------------------------------------------
 
+    def _emit(self, event: dict[str, Any]) -> None:
+        """Hand an event to on_event on the event loop, from any thread."""
+        if self._on_event is None or self._loop is None:
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._on_event, event)
+        except RuntimeError:
+            pass  # the loop is closed; nobody is listening any more
+
+    def _log(self, direction: str, content: str, line_number: int | None = None) -> None:
+        entry = SerialLogEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            direction=direction,
+            content=content,
+            line_number=line_number,
+        )
+        self._log_buffer.append(entry)
+        self._emit({"type": "serial_log", "entry": entry.to_dict()})
+
+    # --- connection -------------------------------------------------------------
+
+    async def connect(self, port: str, baud_rate: int) -> None:
+        async with self._connect_lock:
+            self._close(SerialError("Reconnected"))
             try:
                 ser = await asyncio.to_thread(_open_port, port, baud_rate)
-                self._serial = ser
-                self._state = _unknown_position()
-                self._port = port
-                self._baud_rate = baud_rate
-                logger.info("Connected to %s at %d baud", port, baud_rate)
-            except (serial.SerialException, OSError, Exception) as exc:
+            except Exception as exc:
                 raise SerialError(f"Could not connect to {port}: {exc}") from exc
+            self._attach(ser, port, baud_rate)
+            self._monitor = asyncio.create_task(self._monitor_temperature())
+            logger.info("Connected to %s at %d baud", port, baud_rate)
+
+    def _attach(self, ser: Any, port: str, baud_rate: int | None = None) -> None:
+        """Take over an open port and start its reader thread."""
+        self._stop_reader()
+        self._loop = asyncio.get_running_loop()
+        self._serial = ser
+        self._port = port
+        if baud_rate is not None:
+            self._baud_rate = baud_rate
+        self._resync = True
+        self._state = _unknown_position()
+        stop = threading.Event()
+        self._reader_stop = stop
+        threading.Thread(
+            target=self._read_loop, args=(ser, stop), name=f"serial-reader {port}", daemon=True
+        ).start()
 
     async def disconnect(self) -> None:
-        async with self._lock:
-            if self._serial and self._serial.is_open:
-                await asyncio.to_thread(self._serial.close)
-                logger.info("Disconnected from %s", self._port)
-            self._serial = None
+        async with self._connect_lock:
+            was_open = self._serial is not None
+            self._close(SerialError("Disconnected"))
             self._port = None
-            self._state = _unknown_position()
+            if was_open:
+                logger.info("Disconnected")
 
-    async def send_line(self, line: str) -> str:
-        async with self._io_lock:
-            return await self._send_unlocked(line)
+    def _stop_reader(self) -> None:
+        if self._reader_stop is not None:
+            self._reader_stop.set()
+            self._reader_stop = None
 
-    async def send_lines(self, lines: list[str]) -> list[str]:
-        """Send several lines as one atomic exchange, holding the I/O lock once."""
-        async with self._io_lock:
-            return [await self._send_unlocked(line) for line in lines]
-
-    async def emergency_write(self, line: str) -> None:
-        """Write a line immediately, bypassing _io_lock and not waiting for "ok".
-
-        Meant for commands like M410 that Marlin's EMERGENCY_PARSER handles as
-        soon as they arrive, even while another command is in flight.
-        """
-        if not self.is_connected:
-            raise SerialError("Not connected")
-        # A quick stop (M410) halts mid-move: the position is unknown until
-        # the next M114.
-        self._state = _unknown_position(self._state.relative)
-        try:
-            await asyncio.to_thread(self._write_line, line.strip())
-        except (serial.SerialException, OSError) as exc:
-            logger.error("Serial error on emergency write: %s", exc)
-            await self._handle_disconnect()
-            raise SerialError(f"Emergency write failed: {exc}") from exc
-
-    def _write_line(self, stripped: str) -> None:
-        ser = self._serial
-        assert ser is not None
-        with self._write_lock:
-            ser.write((stripped + "\n").encode())
-        ser.flush()
-        self._log("sent", stripped)
-
-    async def _send_unlocked(self, line: str) -> str:
-        """Write-then-read-until-ok for a single line. Caller must hold _io_lock.
-
-        A serial error closes the connection and raises. If `can_reconnect`
-        allows it (never during a print), the port is reopened first, but the
-        line is never re-sent: it may already have reached the printer, and
-        the board may have reset and lost its zero.
-        """
-        if not self.is_connected:
-            if not (self._can_reconnect() and await self.reconnect()):
-                raise SerialError("Not connected")
-
-        try:
-            response = await asyncio.to_thread(self._send_and_receive, line)
-            return response
-        except (serial.SerialException, OSError) as exc:
-            logger.error("Serial error sending line: %s", exc)
-            # Decided before on_disconnect, which stops a running print.
-            may_reconnect = self._can_reconnect()
-            await self._handle_disconnect()
-            if may_reconnect:
-                logger.info("Attempting reconnect after serial error…")
-                if await self.reconnect():
-                    raise SerialError(
-                        f"Connection lost and re-established ({exc}); "
-                        f"'{line.strip()}' was not re-sent"
-                    ) from exc
-            raise SerialError(f"Connection lost: {exc}") from exc
-
-    def _send_and_receive(self, line: str) -> str:
-        assert self._serial is not None
-        stripped = line.strip()
-        timeout_s = reply_deadline_s(stripped)
-        if self._discard_stale_input:
-            self._serial.reset_input_buffer()
-            self._discard_stale_input = False
-        self._write_line(stripped)
-        self._state = step(self._state, stripped)
-
-        response_lines: list[str] = []
-        deadline = time.monotonic() + timeout_s
-        while True:
-            raw = self._serial.readline()
-            if not raw:
-                if time.monotonic() >= deadline:
-                    if response_lines:
-                        self._log("received", "\n".join(response_lines))
-                    self._discard_stale_input = True
-                    # Unknown whether (or when) the printer acts on it
-                    self._state = _unknown_position(self._state.relative)
-                    raise SerialTimeout(stripped, timeout_s)
-                continue
-            decoded = raw.decode("utf-8", errors="replace").strip()
-            lowered = decoded.lower()
-            if lowered.startswith("echo:busy"):
-                # Marlin is still working on the command; keep waiting.
-                self._log("received", decoded)
-                deadline = time.monotonic() + timeout_s
-                continue
-            if not decoded:
-                continue
-            response_lines.append(decoded)
-            if lowered.startswith("ok") or lowered.startswith("error"):
-                break
-
-        response = "\n".join(response_lines)
-        self._log("received", response)
-        if stripped.split(";", 1)[0].split()[:1] == ["M114"]:
-            reported = parse_m114(response)
-            if reported is not None:
-                pos = {ax: reported.get(ax, self._state.pos[ax]) for ax in AXES}
-                self._state = MachineState(pos, self._state.relative, self._state.feed)
-        return response
-
-    async def _handle_disconnect(self) -> None:
-        self._serial = None
+    def _close(self, reason: SerialError) -> None:
+        """Stop the reader and monitor, close the port, fail the command in flight."""
+        if self._monitor is not None:
+            self._monitor.cancel()
+            self._monitor = None
+        self._stop_reader()
+        ser, self._serial = self._serial, None
         self._state = _unknown_position()
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:
+                logger.debug("Closing the port failed", exc_info=True)
+        with self._state_lock:
+            pending, self._pending = self._pending, None
+        if pending is not None:
+            pending.loop.call_soon_threadsafe(_settle, pending.future, None, reason)
+
+    def _handle_disconnect(self, ser: Any) -> None:
+        """The port `ser` failed. No-op if it was already replaced or closed."""
+        if ser is None or self._serial is not ser:
+            return
+        self._close(SerialError("The printer disconnected"))
         if self._on_disconnect:
             self._on_disconnect()
 
@@ -305,6 +346,290 @@ class SerialManager:
                 if attempt < RECONNECT_ATTEMPTS:
                     await asyncio.sleep(RECONNECT_DELAY_S)
         return False
+
+    # --- sending ------------------------------------------------------------------
+
+    async def send(self, line: str, numbered: bool = False, *, log: bool = True) -> str:
+        """Send one line and return the printer's reply once it's "ok"/"error".
+
+        `numbered` lines go out as "N<n> <line>*<checksum>" (comment removed),
+        so a corrupted one is re-sent when the printer asks for it. Send
+        "M110 N0" first to start numbering from 1.
+        """
+        async with self._send_lock:
+            return await self._exchange(line.strip(), numbered, log)
+
+    async def send_lines(self, lines: list[str]) -> list[str]:
+        """Send several unnumbered lines as one atomic exchange."""
+        async with self._send_lock:
+            return [await self._exchange(line.strip(), False, True) for line in lines]
+
+    async def emergency_write(self, line: str) -> None:
+        """Write a line immediately, without waiting for "ok" or for a command in flight.
+
+        Meant for commands like M410 that Marlin's EMERGENCY_PARSER handles as
+        soon as they arrive, even while another command is in flight.
+        """
+        ser = self._serial
+        if not self.is_connected:
+            raise SerialError("Not connected")
+        stripped = line.strip()
+        # A quick stop (M410) halts mid-move: the position is unknown until
+        # the next M114.
+        self._state = _unknown_position(self._state.relative)
+        try:
+            self._log("sent", stripped)
+            await asyncio.to_thread(self._write, ser, stripped)
+        except (serial.SerialException, OSError) as exc:
+            logger.error("Serial error on emergency write: %s", exc)
+            self._handle_disconnect(ser)
+            raise SerialError(f"Emergency write failed: {exc}") from exc
+
+    def _write(self, ser: Any, wire: str) -> None:
+        with self._write_lock:
+            ser.write((wire + "\n").encode())
+            ser.flush()
+
+    async def _exchange(self, line: str, numbered: bool, log: bool) -> str:
+        """Send a line and wait for its reply. Caller must hold _send_lock.
+
+        A serial error closes the connection and raises. If `can_reconnect`
+        allows it (never during a print), the port is reopened first, but the
+        line is never re-sent: it may already have reached the printer, and
+        the board may have reset and lost its zero.
+        """
+        if not self.is_connected:
+            if not await self.reconnect():
+                raise SerialError("Not connected")
+        try:
+            return await self._transact(line, numbered, log)
+        except _PortLost as exc:
+            logger.error("Serial error sending line: %s", exc)
+            # Decided before on_disconnect, which stops a running print.
+            may_reconnect = self._can_reconnect()
+            self._handle_disconnect(self._serial)
+            if may_reconnect:
+                logger.info("Attempting reconnect after serial error…")
+                if await self.reconnect():
+                    raise SerialError(
+                        f"Connection lost and re-established ({exc}); "
+                        f"'{line}' was not re-sent"
+                    ) from exc
+            raise SerialError(f"Connection lost: {exc}") from exc
+
+    async def _transact(self, line: str, numbered: bool, log: bool) -> str:
+        if numbered:
+            if self._resync:
+                await self._transact(f"M110 N{self._next_line_number - 1}", False, log)
+            command = line.split(";", 1)[0].strip()
+            if not command:
+                raise ValueError(f"Nothing to send in {line!r}")
+            number: int | None = self._next_line_number
+            wire = number_line(number, command)
+        else:
+            command, number, wire = line, None, line
+            m110 = _M110.match(command)
+            if m110:
+                self._next_line_number = int(m110.group(1)) + 1
+                self._resync = False
+                with self._state_lock:
+                    self._history.clear()
+
+        ser = self._serial
+        loop = asyncio.get_running_loop()
+        timeout_s = reply_deadline_s(command)
+        words = command.split(maxsplit=1)
+        pending = _Pending(
+            command=command,
+            number=number,
+            timeout_s=timeout_s,
+            deadline=time.monotonic() + timeout_s,
+            loop=loop,
+            future=loop.create_future(),
+            wants_temperatures=bool(words) and words[0].upper() == "M105",
+        )
+        with self._state_lock:
+            if number is not None:
+                self._next_line_number = number + 1
+                self._history.append((number, wire))
+            self._pending = pending
+        try:
+            if log:
+                self._log("sent", command, number)
+            try:
+                await asyncio.to_thread(self._write, ser, wire)
+            except (serial.SerialException, OSError) as exc:
+                raise _PortLost(str(exc)) from exc
+            self._state = step(self._state, command)
+            reply = await pending.future
+        except BaseException as exc:
+            if isinstance(exc, SerialTimeout):
+                # Unknown whether (or when) the printer acts on it
+                self._state = _unknown_position(self._state.relative)
+            if number is not None:
+                # The printer may or may not have taken this line. Re-use its
+                # number for the retry, and agree on it with M110 first.
+                with self._state_lock:
+                    self._next_line_number = number
+                    if self._history and self._history[-1][0] == number:
+                        self._history.pop()
+                self._resync = True
+            raise
+        finally:
+            with self._state_lock:
+                if self._pending is pending:
+                    self._pending = None
+        if words and words[0].upper() == "M114":
+            reported = parse_m114(reply)
+            if reported is not None:
+                pos = {ax: reported.get(ax, self._state.pos[ax]) for ax in AXES}
+                self._state = MachineState(pos, self._state.relative, self._state.feed)
+        return reply
+
+    # --- reader thread -----------------------------------------------------------
+
+    def _read_loop(self, ser: Any, stop: threading.Event) -> None:
+        while not stop.is_set():
+            try:
+                raw = ser.readline()
+            except Exception as exc:
+                if stop.is_set():
+                    break
+                logger.error("Serial read failed: %s", exc)
+                self._port_lost(ser, exc)
+                break
+            if raw:
+                try:
+                    self._handle_line(ser, raw.decode("utf-8", errors="replace").strip())
+                except Exception:
+                    logger.exception("Failed to handle serial line %r", raw)
+            self._check_deadline()
+
+    def _port_lost(self, ser: Any, exc: Exception) -> None:
+        """Reader thread: the port failed. A sender in flight handles the
+        reconnect; otherwise report the disconnect from the event loop."""
+        with self._state_lock:
+            pending, self._pending = self._pending, None
+        if pending is not None:
+            pending.loop.call_soon_threadsafe(_settle, pending.future, None, _PortLost(str(exc)))
+        elif self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._handle_disconnect, ser)
+            except RuntimeError:
+                pass
+
+    def _finish(self, pending: _Pending, result: str | None = None,
+                exc: BaseException | None = None) -> None:
+        with self._state_lock:
+            if self._pending is not pending:
+                return
+            self._pending = None
+        pending.loop.call_soon_threadsafe(_settle, pending.future, result, exc)
+
+    def _check_deadline(self) -> None:
+        pending = self._pending
+        if pending is not None and time.monotonic() >= pending.deadline:
+            self._finish(pending, exc=SerialTimeout(pending.command, pending.timeout_s))
+
+    def _handle_line(self, ser: Any, line: str) -> None:
+        if not line:
+            return
+        pending = self._pending
+        lowered = line.lower()
+
+        if lowered.startswith("echo:busy"):
+            # The printer is still working on the command; keep waiting.
+            self._log("received", line)
+            if pending is not None:
+                pending.deadline = time.monotonic() + pending.timeout_s
+            return
+
+        temperatures = parse_temperatures(line)
+        if temperatures is not None:
+            self._emit({"type": "temperature", "temperatures": temperatures})
+            if (pending is None or not pending.wants_temperatures) and self._autoreport_seen:
+                self._loop.call_soon_threadsafe(self._autoreport_seen.set)
+
+        resend = _RESEND.match(line)
+        if resend:
+            self._log("received", line)
+            if pending is not None and pending.number is not None:
+                pending.resend_from = int(resend.group(1))
+            return
+
+        if lowered.startswith("ok"):
+            if temperatures is None:
+                self._log("received", line)
+            if pending is not None:
+                self._on_ok(ser, pending, line)
+            return
+
+        if temperatures is not None:
+            if pending is not None and pending.wants_temperatures:
+                pending.lines.append(line)
+            return
+
+        self._log("received", line)
+        if pending is None or line.startswith("//"):
+            return  # unsolicited, or a host action message
+        if lowered.startswith("error"):
+            if any(marker in lowered for marker in _RESEND_ERRORS):
+                return  # a "Resend:" follows
+            pending.lines.append(line)
+            self._finish(pending, "\n".join(pending.lines))
+            return
+        pending.lines.append(line)
+
+    def _on_ok(self, ser: Any, pending: _Pending, line: str) -> None:
+        if pending.resend_from is not None:
+            wanted, pending.resend_from = pending.resend_from, None
+            if wanted == pending.number + 1:
+                # The printer already has this line (e.g. it was sent twice).
+                self._finish(pending, "\n".join([*pending.lines, line]))
+                return
+            with self._state_lock:
+                lines = [(n, wire) for n, wire in self._history if n >= wanted]
+            if not lines or lines[0][0] != wanted:
+                self._finish(pending, exc=ResendUnavailable(
+                    f"The printer asked to resend line {wanted}, which is no longer available"
+                ))
+                return
+            pending.resend_queue = deque(lines)
+
+        if pending.resend_queue:
+            number, wire = pending.resend_queue.popleft()
+            self._log("sent", wire.split(" ", 1)[1].rsplit("*", 1)[0], number)
+            pending.deadline = time.monotonic() + pending.timeout_s
+            try:
+                self._write(ser, wire)
+            except (serial.SerialException, OSError) as exc:
+                self._finish(pending, exc=_PortLost(str(exc)))
+            return
+
+        self._finish(pending, "\n".join([*pending.lines, line]))
+
+    # --- temperature ---------------------------------------------------------------
+
+    async def _monitor_temperature(self) -> None:
+        """Ask for temperature auto-reports; poll with M105 if they don't come."""
+        self._autoreport_seen = asyncio.Event()
+        try:
+            await self.send(f"M155 S{AUTOREPORT_INTERVAL_S}")
+            try:
+                await asyncio.wait_for(self._autoreport_seen.wait(), AUTOREPORT_WAIT_S)
+                return
+            except asyncio.TimeoutError:
+                logger.info("No temperature auto-report; polling with M105")
+            while True:
+                await asyncio.sleep(TEMPERATURE_POLL_S)
+                # Waits its turn behind the command in flight, so it goes out
+                # between commands.
+                try:
+                    await self.send("M105", log=False)
+                except SerialTimeout:
+                    logger.warning("M105 temperature poll timed out")
+        except SerialError as exc:
+            logger.info("Temperature monitoring stopped: %s", exc)
 
 
 def _open_port(port: str, baud_rate: int) -> serial.Serial:

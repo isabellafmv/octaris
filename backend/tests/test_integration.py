@@ -19,6 +19,7 @@ import pytest
 from backend import serial_manager as serial_module
 from backend.main import app
 from backend.queue_worker import PrintStatus
+from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RAW_SAMPLE = (FIXTURES / "raw_sample.gcode").read_text()
@@ -58,13 +59,14 @@ class FakePrinter:
         self.written: list[str] = []
         self.reached = threading.Event()  # block_on was written
         self._released = threading.Event()  # M410 arrived
-        self._blocked = False
+        self._held: list[str] = []
+        self._blocked_at = 0.0
         self._m114_calls = 0
         self._already_failed: set[str] = set()
         self._pending: list[str] = []
 
     def write(self, data: bytes) -> None:
-        line = data.decode().strip()
+        _, line = unframe(data.decode().strip())
         self.written.append(line)
         if line == "M410":
             self._released.set()  # emergency parser: acts on it immediately
@@ -72,20 +74,24 @@ class FakePrinter:
 
         if line == "M114":
             self._m114_calls += 1
-            reply = self.start_position if self._m114_calls == 1 else self.position
-            self._pending = [reply, "ok"]
+            position = self.start_position if self._m114_calls == 1 else self.position
+            reply = [position, "ok"]
         elif line == "M115":
-            self._pending = [self.firmware, "ok"]
+            reply = [self.firmware, "ok"]
         elif line == self.fail_once_on and line not in self._already_failed:
             self._already_failed.add(line)
-            self._pending = []  # never answers this attempt -> timeout
+            reply = []  # never answers this attempt -> timeout
         else:
-            self._pending = ["ok"]
+            reply = ["ok"]
 
         if line == self.block_on:
+            # Its "ok" is held back (never visible to readline) until M410.
             self.block_on = None
-            self._blocked = True
+            self._held = reply
+            self._blocked_at = time.monotonic()
             self.reached.set()
+        else:
+            self._pending = reply
 
     def flush(self) -> None:
         pass
@@ -94,9 +100,8 @@ class FakePrinter:
         pass
 
     def readline(self) -> bytes:
-        if self._blocked:
-            self._released.wait(timeout=5)
-            self._blocked = False
+        if self._held and (self._released.is_set() or time.monotonic() - self._blocked_at > 5):
+            self._pending, self._held = self._held, []
         if not self._pending:
             time.sleep(0.01)
             return b""
@@ -276,7 +281,7 @@ async def test_full_print_lifecycle(client):
     # --- second print, which gets a hard e-stop -----------------------------
 
     fake2 = FakePrinter()
-    app.state.serial_manager._serial = fake2  # still "connected"; swap the wire
+    attach(app.state.serial_manager, fake2)  # still "connected"; swap the wire
     fake2.block_on = "G1 F200 X10 Y20 B-1.5"
     fake2.position = m114(X=15, Y=10, Z=0.3, A=0, B=-0.25, C=0)
 
@@ -318,7 +323,7 @@ async def test_full_print_lifecycle(client):
     i_m115 = sent.index("M115")
     i_g92_zero = sent.index("G92 X0 Y0 Z0 B0")  # calibration
     i_preamble = sent.index("M84 S0")  # print/start's "keep motors enabled" preamble
-    i_pressurize = sent.index("G1 B-0.2 F400 ; pressurize B")
+    i_pressurize = sent.index("G1 B-0.2 F400")  # numbered, so sent without its comment
     i_manual_jog = sent.index("G1 X1.0 F300")  # sent only while PAUSED
     i_manual_g28 = sent.index("G28")  # only ever sent manually; fixture's own G28 is stripped
     i_m410_soft = sent.index("M410")
@@ -393,8 +398,7 @@ async def test_timeout_pauses_print_and_retries_on_resume(client, monkeypatch):
 
     worker = app.state.queue_worker
     fake = FakePrinter()
-    app.state.serial_manager._serial = fake
-    app.state.serial_manager._port = "/dev/fake"
+    attach(app.state.serial_manager, fake)
     app.state.is_calibrated = True
 
     await upload_sample(client)

@@ -16,7 +16,12 @@ from backend.checkpoint import (
 )
 from backend.gcode_processor import AXES, PRESSURIZE_FEED, MachineState, step
 from backend.limits import LOW_TRAVEL_FRACTION, PLUNGER_AXES, plunger_step
-from backend.serial_manager import SerialError, SerialManager, SerialTimeout
+from backend.serial_manager import (
+    ResendUnavailable,
+    SerialError,
+    SerialManager,
+    SerialTimeout,
+)
 
 _BC_RUNTIME = re.compile(r"([BC])(-?\d+\.?\d*)")
 
@@ -130,6 +135,12 @@ class QueueWorker:
         """A print is printing or paused (not yet stopped or finished)."""
         return self._print_active
 
+    @property
+    def sending(self) -> bool:
+        """The worker task is still running. It can outlive the print by a
+        line or two (e.g. a preamble line queued behind a manual command)."""
+        return self._task is not None and not self._task.done()
+
     def set_flow_rate(self, rate: float) -> None:
         """Set runtime flow rate as percentage (100 = normal)."""
         self._flow_rate = max(0, rate)
@@ -212,7 +223,8 @@ class QueueWorker:
         self._emit({"type": "status", "value": self._status.value})
         # Keep idle motors enabled so a stopped print holds its position.
         self._task = asyncio.create_task(
-            self._run(preamble=["M84 S0"], seed=start_position is None)
+            # M110 N0 starts line numbering: print lines go out from N1.
+            self._run(preamble=["M84 S0", "M110 N0"], seed=start_position is None)
         )
 
     def pause(self) -> None:
@@ -302,7 +314,7 @@ class QueueWorker:
             self._not_resumable(self._seed_error)
             return
         try:
-            # send_lines takes the I/O lock, so this also waits for the
+            # send_lines queues behind the line in flight, so this also waits for the
             # line that was in flight when M410 went out.
             replies = await self._serial.send_lines(["M400", "M114"])
         except SerialError as exc:
@@ -385,7 +397,7 @@ class QueueWorker:
         be resumable, with `_seed_error` explaining why.
         """
         try:
-            reply = await self._serial.send_line("M114")
+            reply = await self._serial.send("M114")
         except SerialError as exc:
             self._seed_error = f"Couldn't read the printer's starting position: {exc}"
             return
@@ -472,7 +484,7 @@ class QueueWorker:
                 sent_line = self._apply_flow_rate(self._lines[index])
                 self._track_send(sent_line, index=index)
                 # On failure _next stays put: a timed-out line is re-sent on resume.
-                if await self._send(sent_line):
+                if await self._send(sent_line, numbered=True):
                     self._next = index + 1
                     self._emit_progress()
                 await asyncio.sleep(0)
@@ -514,13 +526,13 @@ class QueueWorker:
             event["time_remaining_s"] = self._time_estimate_s * (1 - self._next / total)
         self._emit(event)
 
-    async def _send(self, line: str) -> bool:
+    async def _send(self, line: str, numbered: bool = False) -> bool:
         """Send one line. Returns False if it failed and must not be counted."""
         try:
-            await self._serial.send_line(line)
+            await self._serial.send(line, numbered=numbered)
             return True
-        except SerialTimeout as exc:
-            logger.error("Timed out waiting for reply: %s", line)
+        except (SerialTimeout, ResendUnavailable) as exc:
+            logger.error("No usable reply to %s: %s", line, exc)
             if self._status != PrintStatus.STOPPED:
                 self._status = PrintStatus.PAUSED
                 self._paused.clear()

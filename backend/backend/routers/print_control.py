@@ -49,7 +49,7 @@ async def start_print(request: Request):
     # The printer's actual position, so relative moves can be checked too.
     # Also seeds the worker's as-sent tracker (see QueueWorker.start).
     try:
-        reply = await state.serial_manager.send_line("M114")
+        reply = await state.serial_manager.send("M114")
     except SerialTimeout as exc:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except SerialError as exc:
