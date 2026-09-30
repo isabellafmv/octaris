@@ -398,25 +398,8 @@
     "/print/stop": {
       "post": {
         "summary": "Stop Print",
+        "description": "Stop at once: M410 goes straight to the printer, then the stop point\nis located so the print can be resumed from there.",
         "operationId": "stop_print_print_stop_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StopResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/print/estop": {
-      "post": {
-        "summary": "Estop Print",
-        "operationId": "estop_print_print_estop_post",
         "responses": {
           "200": {
             "description": "Successful Response",

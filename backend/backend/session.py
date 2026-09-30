@@ -355,9 +355,9 @@ class PrinterSession:
         worker.start(start_position=position)
         return worker.lines_total
 
-    async def stop(self, end_reason: str = "stopped") -> tuple[bool, str | None]:
+    async def stop(self) -> tuple[bool, str | None]:
         """Stop any print; returns whether it can be resumed, and if not, why."""
-        await self.worker.estop(end_reason=end_reason)
+        await self.worker.estop()
         return self.worker.resumable, self.worker.stop_reason
 
     def pause(self) -> None:

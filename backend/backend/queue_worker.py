@@ -231,8 +231,8 @@ class QueueWorker:
             self._emit(StatusEvent(value=self.status.value))
 
     def _end_print(self, end_reason: str, resume_line: int | None = None) -> None:
-        """Report the end of a print ("completed", "stopped", "estop" or
-        "error") and the line a resumable stop halted on. Called once, right
+        """Report the end of a print ("completed", "stopped" or "error") and
+        the line a resumable stop halted on. Called once, right
         after the print leaves ACTIVE."""
         self._emit(PrintEndEvent(reason=end_reason, resume_line=resume_line))
 
@@ -343,14 +343,13 @@ class QueueWorker:
         logger.info("Resume checkpoint invalidated: %s", reason)
         self._not_resumable(reason)
 
-    async def estop(self, end_reason: str = "estop") -> None:
+    async def estop(self) -> None:
         """Emergency stop: halt the queue and send M410 straight to the printer.
 
         M410 bypasses both queues and the in-flight line (Marlin's
         EMERGENCY_PARSER acts on it on arrival). If a print was running, the
         printer's position is then read back to find the line it stopped on,
         so the print can be resumed from there.
-        `end_reason` is reported in the print_end event if a print was running.
         """
         was_active = self._state in ACTIVE
         if self._state not in (STOPPED, STOPPED_RESUMABLE):
@@ -363,7 +362,7 @@ class QueueWorker:
             self._emit(PrinterEvent(connected=False, port=None))
             if was_active:
                 self._not_resumable(CONNECTION_LOST)
-                self._end_print(end_reason)
+                self._end_print("stopped")
             return
 
         if not was_active:
@@ -371,7 +370,7 @@ class QueueWorker:
                 self._emit(StopEvent(resumable=False, reason=None))
             return
         await self._take_checkpoint()
-        self._end_print(end_reason, self._checkpoint.line if self._checkpoint else None)
+        self._end_print("stopped", self._checkpoint.line if self._checkpoint else None)
 
     async def _take_checkpoint(self) -> None:
         if self._tracker.error:

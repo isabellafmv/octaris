@@ -72,7 +72,6 @@ export const api = {
   },
   printStart: () => json<{ status: string }>('/print/start', { method: 'POST' }),
   printStop: () => json<{ status: string }>('/print/stop', { method: 'POST' }),
-  printEstop: () => json<{ status: string }>('/print/estop', { method: 'POST' }),
   printPause: () => json<{ status: string }>('/print/pause', { method: 'POST' }),
   printResume: () => json<{ status: string }>('/print/resume', { method: 'POST' }),
   setExtrusion: (rate: number) =>

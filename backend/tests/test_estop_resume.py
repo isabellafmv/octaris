@@ -146,7 +146,7 @@ async def estop_at(client, printer: FakePrinter, block_on: str, position: str) -
     await upload_sample(client)
     assert (await client.post("/print/start")).status_code == 200
     await wait_for(printer.reached.is_set)
-    resp = await client.post("/print/estop")
+    resp = await client.post("/print/stop")
     assert resp.status_code == 200
     return resp.json()
 
@@ -291,7 +291,7 @@ async def test_estop_locates_line_and_retracts(client, printer):
     assert {"type": "stop", "resumable": True, "reason": None, "line": k} in printer.events
 
     [session] = (await client.get("/history")).json()["sessions"]
-    assert session["end_reason"] == "estop"
+    assert session["end_reason"] == "stopped"
     assert session["resume_line"] == k
 
 
@@ -357,7 +357,7 @@ async def test_estop_at_flow_override_is_resumable_at_scaled_position(client, pr
     assert (await client.post("/print/start")).status_code == 200
     await wait_for(printer.reached.is_set)
 
-    resp = await client.post("/print/estop")
+    resp = await client.post("/print/stop")
     assert resp.status_code == 200
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
 
@@ -392,7 +392,7 @@ async def test_flow_change_mid_recent_window_still_locates(client, printer):
     assert (await client.post("/extrusion", json={"rate": 80})).status_code == 200
 
     await wait_for(printer.reached.is_set)
-    resp = await client.post("/print/estop")
+    resp = await client.post("/print/stop")
     assert resp.status_code == 200
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
 
@@ -426,7 +426,7 @@ async def test_g91_only_file_resumable_after_seed(client, printer):
     assert (await client.post("/print/start")).status_code == 200
     await wait_for(printer.reached.is_set)
 
-    resp = await client.post("/print/estop")
+    resp = await client.post("/print/stop")
     assert resp.status_code == 200
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
 

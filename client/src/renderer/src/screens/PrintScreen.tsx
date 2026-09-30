@@ -138,7 +138,7 @@ export function PrintScreen({
 
   const handleStop = useCallback(async () => {
     try {
-      await api.printEstop()
+      await api.printStop()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stop failed')
     }

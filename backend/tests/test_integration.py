@@ -280,7 +280,7 @@ async def test_full_print_lifecycle(client):
     assert resp.status_code == 200
     assert worker.flow_rate == 100
 
-    # --- second print, which gets a hard e-stop -----------------------------
+    # --- second print, stopped the same way --------------------------------
 
     fake2 = FakePrinter()
     attach(app.state.serial_manager, fake2)  # still "connected"; swap the wire
@@ -294,7 +294,7 @@ async def test_full_print_lifecycle(client):
     await wait_for(fake2.reached.is_set)
     k2 = worker_index("G1 F200 X20 Y10 B-0.5")
 
-    resp = await client.post("/print/estop")
+    resp = await client.post("/print/stop")
     assert resp.status_code == 200
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
     assert worker.status == PrintStatus.STOPPED
@@ -302,7 +302,7 @@ async def test_full_print_lifecycle(client):
     sessions = (await client.get("/history")).json()["sessions"]
     assert len(sessions) == 2
     session2 = next(s for s in sessions if s["id"] != session1_id)
-    assert session2["end_reason"] == "estop"
+    assert session2["end_reason"] == "stopped"
     assert session2["completed"] is False
     assert session2["resume_line"] == k2
 
@@ -314,7 +314,7 @@ async def test_full_print_lifecycle(client):
     ).fetchall()
     assert len(rows) == 2
     assert rows[0] == (session1_id, "sample.gcode", "gcode", 1, "completed", None)
-    assert rows[1] == (session2["id"], "sample.gcode", "gcode", 0, "estop", k2)
+    assert rows[1] == (session2["id"], "sample.gcode", "gcode", 0, "stopped", k2)
 
     # --- serial log command order --------------------------------------------
 
@@ -338,7 +338,7 @@ async def test_full_print_lifecycle(client):
     after_soft_stop = sent[i_m410_soft + 1:i_m410_soft + 6]
     assert after_soft_stop == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
 
-    # The hard e-stop does the same thing.
+    # The second stop does the same thing.
     after_hard_stop = sent[i_m410_hard + 1:i_m410_hard + 6]
     assert after_hard_stop == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
 
@@ -380,7 +380,7 @@ async def test_full_print_lifecycle(client):
         "completed",   # natural completion
         "ready",       # upload #2
         "printing",    # start #2
-        "stopped",     # hard e-stop
+        "stopped",     # second stop
     ]
 
     stop_events = [e for e in events if e["type"] == "stop"]

@@ -149,10 +149,10 @@ async def test_estop_records_history(client, printer, tmp_path):
 
     await client.post("/print/start")
     await wait_for(lambda: worker.lines_sent >= 5)
-    await client.post("/print/estop")
+    await client.post("/print/stop")
 
     [session] = await get_sessions(client)
-    assert session["end_reason"] == "estop"
+    assert session["end_reason"] == "stopped"
     assert "M410" in printer.written
 
 

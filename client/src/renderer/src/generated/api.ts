@@ -199,25 +199,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Stop Print */
+        /**
+         * Stop Print
+         * @description Stop at once: M410 goes straight to the printer, then the stop point
+         *     is located so the print can be resumed from there.
+         */
         post: operations["stop_print_print_stop_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/print/estop": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Estop Print */
-        post: operations["estop_print_print_estop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1187,26 +1174,6 @@ export interface operations {
         };
     };
     stop_print_print_stop_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StopResponse"];
-                };
-            };
-        };
-    };
-    estop_print_print_estop_post: {
         parameters: {
             query?: never;
             header?: never;

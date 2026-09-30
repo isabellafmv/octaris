@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 SyringeMode = Literal["left", "right", "both"]
 # The worker's print status, plus the upload states the client also shows
 PrintStatus = Literal["idle", "slicing", "ready", "printing", "paused", "stopped", "completed"]
+# "estop" only appears in history recorded before /print/estop merged into /print/stop
 EndReason = Literal["completed", "stopped", "estop", "error"]
 
 

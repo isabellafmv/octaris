@@ -20,13 +20,9 @@ async def start_print(session: PrinterSession = Depends(get_session)):
 
 @router.post("/stop", response_model=StopResponse)
 async def stop_print(session: PrinterSession = Depends(get_session)):
-    resumable, reason = await session.stop(end_reason="stopped")
-    return {"status": "stopped", "resumable": resumable, "reason": reason}
-
-
-@router.post("/estop", response_model=StopResponse)
-async def estop_print(session: PrinterSession = Depends(get_session)):
-    resumable, reason = await session.stop(end_reason="estop")
+    """Stop at once: M410 goes straight to the printer, then the stop point
+    is located so the print can be resumed from there."""
+    resumable, reason = await session.stop()
     return {"status": "stopped", "resumable": resumable, "reason": reason}
 
 
