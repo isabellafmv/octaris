@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections import deque
 from enum import Enum
 from typing import Callable, Sequence
@@ -14,7 +13,7 @@ from backend.checkpoint import (
     locate_line,
     parse_m114,
 )
-from backend.gcode_processor import AXES, PRESSURIZE_FEED, MachineState, step
+from backend.gcode_processor import AXES, PRESSURIZE_FEED, MachineState, scale_flow, step
 from backend.limits import LOW_TRAVEL_FRACTION, PLUNGER_AXES, plunger_step
 from backend.serial_manager import (
     ResendUnavailable,
@@ -22,8 +21,6 @@ from backend.serial_manager import (
     SerialManager,
     SerialTimeout,
 )
-
-_BC_RUNTIME = re.compile(r"([BC])(-?\d+\.?\d*)")
 
 # How many sent line indices to remember for locating an e-stop. More than
 # the printer's move buffer can hold, so the line it stopped on is always
@@ -481,7 +478,7 @@ class QueueWorker:
                     break
 
                 index = self._next
-                sent_line = self._apply_flow_rate(self._lines[index])
+                sent_line = scale_flow(self._lines[index], self._flow_rate / 100.0)
                 self._track_send(sent_line, index=index)
                 # On failure _next stays put: a timed-out line is re-sent on resume.
                 if await self._send(sent_line, numbered=True):
@@ -501,19 +498,6 @@ class QueueWorker:
                 self._next,
                 len(self._lines),
             )
-
-    def _apply_flow_rate(self, line: str) -> str:
-        """Scale B/C values by the current flow rate percentage."""
-        if self._flow_rate == 100.0:
-            return line
-        multiplier = self._flow_rate / 100.0
-
-        def scale(m):
-            axis = m.group(1)
-            val = float(m.group(2)) * multiplier
-            return f"{axis}{val:g}"
-
-        return _BC_RUNTIME.sub(scale, line)
 
     def _emit_progress(self) -> None:
         total = len(self._lines)

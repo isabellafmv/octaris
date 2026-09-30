@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.checkpoint import parse_m114
-from backend.gcode_processor import NOZZLE_OFFSET_X, apply_flow_multiplier
+from backend.gcode_processor import NOZZLE_OFFSET_X, scale_flow
 from backend.limits import (
     LimitError,
     check_path,
@@ -65,7 +65,7 @@ async def start_print(request: Request):
     try:
         check_path(state.config.bed, processed.lines, start_state(position))
         # As it will be sent: the flow override scales every B/C value.
-        lines = apply_flow_multiplier(processed.lines, worker.flow_rate / 100.0)
+        lines = [scale_flow(line, worker.flow_rate / 100.0) for line in processed.lines]
         needed = plunger_travel_needed(lines, start_state(position))
         check_plunger_travel(needed, state.config.syringe_travel_mm)
     except LimitError as exc:

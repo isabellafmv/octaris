@@ -331,7 +331,7 @@ async def test_resume_without_stop_is_409(client, printer):
 #
 # These exercise QueueWorker's as-sent position tracker directly: the
 # checkpoint locates against what was actually written to the printer
-# (after _apply_flow_rate scaling), not the planned path, and a fully
+# (after the flow override scaling), not the planned path, and a fully
 # relative (G91) file is resumable because the print-start M114 seed gives
 # every axis a known absolute reference before any line is sent.
 

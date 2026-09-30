@@ -10,14 +10,21 @@ from backend.gcode_processor import (
     extract_time_metadata,
     insert_layer_depressurize,
     insert_travel_retract,
+    parse,
     process_gcode,
-    strip_footer,
-    strip_header,
+    render,
+    scale_flow,
     substitute_extrusion,
+    trim_to_print,
     validate,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def run(step, lines, *args):
+    """Run a processing step on G-code text, returning text."""
+    return render(step(parse(lines), *args))
 
 
 def test_extract_time_metadata():
@@ -29,7 +36,7 @@ def test_extract_time_metadata_missing():
     assert extract_time_metadata("G0 X10\nG1 X20") is None
 
 
-def test_strip_header():
+def test_trim_drops_start_code():
     lines = [
         ";FLAVOR:Marlin",
         ";TIME:847",
@@ -39,12 +46,12 @@ def test_strip_header():
         "G0 F600 X10 Y10 Z0.3",
         "G1 F200 X20 Y10 E0.5",
     ]
-    result = strip_header(lines)
+    result = run(trim_to_print, lines)
     assert result[0] == "G0 F600 X10 Y10 Z0.3"
     assert len(result) == 2
 
 
-def test_strip_footer():
+def test_trim_drops_end_code():
     lines = [
         "G1 F200 X10 Y10 E4.0",
         "M107",
@@ -59,7 +66,7 @@ def test_strip_footer():
         "M104 S0",
         ";End of Gcode",
     ]
-    result = strip_footer(lines)
+    result = run(trim_to_print, lines)
     assert len(result) == 1
     assert result[0] == "G1 F200 X10 Y10 E4.0"
 
@@ -67,7 +74,7 @@ def test_strip_footer():
 def test_substitute_extrusion_left():
     """Left mode: E values should be negated for B axis."""
     lines = ["G1 X10 E0.5 F200", "G1 X20 E1.0 F200"]
-    result = substitute_extrusion(lines, "left")
+    result = run(substitute_extrusion, lines, "left")
     assert result[0] == "G1 X10 B-0.5 F200"
     assert result[1] == "G1 X20 B-1 F200"
 
@@ -75,7 +82,7 @@ def test_substitute_extrusion_left():
 def test_substitute_extrusion_right():
     """Right mode: E values should also be negated for C axis."""
     lines = ["G1 X10 E0.5 F200"]
-    result = substitute_extrusion(lines, "right")
+    result = run(substitute_extrusion, lines, "right")
     assert result[0] == "G1 X41 C-0.5 F200"  # X10 + 31mm nozzle offset
 
 
@@ -87,7 +94,7 @@ def test_substitute_extrusion_both():
         "T0",
         "G1 X30 E1.5",
     ]
-    result = substitute_extrusion(lines, "both")
+    result = run(substitute_extrusion, lines, "both")
     assert "B-0.5" in result[0]  # B is negated
     assert result[1] == "T1"
     assert "C-1" in result[2]    # C is also negated
@@ -98,13 +105,14 @@ def test_substitute_extrusion_both():
 def test_substitute_extrusion_negative_e():
     """Negative E values (retractions) become positive B (retract = opposite of extrude)."""
     lines = ["G1 X10 E-0.5 F200"]
-    result = substitute_extrusion(lines, "left")
+    result = run(substitute_extrusion, lines, "left")
     assert result[0] == "G1 X10 B0.5 F200"
 
 
 def test_clamp_feed_rates():
     lines = ["G1 X10 F600", "G1 X20 F350", "G1 X30 F1200"]
-    result, log = clamp_feed_rates(lines)
+    cmds, log = clamp_feed_rates(parse(lines))
+    result = render(cmds)
     assert "F400" in result[0]
     assert "F350" in result[1]
     assert "F400" in result[2]
@@ -113,7 +121,8 @@ def test_clamp_feed_rates():
 
 def test_clamp_feed_rates_no_change():
     lines = ["G1 X10 F200"]
-    result, log = clamp_feed_rates(lines)
+    cmds, log = clamp_feed_rates(parse(lines))
+    result = render(cmds)
     assert result[0] == "G1 X10 F200"
     assert len(log) == 0
 
@@ -153,7 +162,7 @@ def test_validate_passes():
         "G90 ; absolute positioning",
         "G1 X10 B0.5 F200",
     ]
-    validate(lines)  # should not raise
+    validate(parse(lines))  # should not raise
 
 
 def test_validate_fails_leftover_e():
@@ -163,7 +172,7 @@ def test_validate_fails_leftover_e():
         "G1 X10 E0.5 F200",
     ]
     with pytest.raises(GcodeValidationError, match="Unsubstituted E command"):
-        validate(lines)
+        validate(parse(lines))
 
 
 def test_validate_fails_high_f():
@@ -173,13 +182,13 @@ def test_validate_fails_high_f():
         "G1 X10 B0.5 F600",
     ]
     with pytest.raises(GcodeValidationError, match="exceeds 400"):
-        validate(lines)
+        validate(parse(lines))
 
 
 def test_validate_fails_no_g90():
     lines = ["G91", "G1 X10"]
     with pytest.raises(GcodeValidationError, match="G90"):
-        validate(lines)
+        validate(parse(lines))
 
 
 def test_insert_layer_depressurize_skips_first():
@@ -188,7 +197,7 @@ def test_insert_layer_depressurize_skips_first():
         "G0 F300 X10 Y10 Z0.3",
         "G1 F200 X20 Y10 B0.5",
     ]
-    result = insert_layer_depressurize(lines, "left")
+    result = run(insert_layer_depressurize, lines, "left")
     assert result[0] == "G0 F300 X10 Y10 Z0.3"
     assert "depressurize" not in " ".join(result)
 
@@ -201,7 +210,7 @@ def test_insert_layer_depressurize_wraps_second():
         "G0 F300 X10 Y10 Z0.5",
         "G1 F200 X20 Y10 B-1.0",
     ]
-    result = insert_layer_depressurize(lines, "left")
+    result = run(insert_layer_depressurize, lines, "left")
     joined = "\n".join(result)
     assert "depressurize" in joined
     assert "repressurize" in joined
@@ -220,7 +229,7 @@ def test_insert_layer_depressurize_right_mode():
         "G0 F300 X10 Y10 A0.5",
         "G1 F200 X20 Y10 C-1.0",
     ]
-    result = insert_layer_depressurize(lines, "right")
+    result = run(insert_layer_depressurize, lines, "right")
     joined = "\n".join(result)
     assert "C0.2" in joined   # depressurize (retract = positive for C)
     assert "C-0.2" in joined  # repressurize (push = negative for C)
@@ -283,7 +292,7 @@ def test_insert_travel_retract_wraps_g0():
         "G0 X50 Y50 F300",          # travel move — should trigger retract
         "G1 X60 Y60 B-1.0 F200",
     ]
-    result = insert_travel_retract(lines, "left")
+    result = run(insert_travel_retract, lines, "left")
     joined = "\n".join(result)
     # Should have retract before travel and prime after
     assert "; retract" in joined
@@ -300,7 +309,7 @@ def test_insert_travel_retract_skips_layer_change():
         "G0 X50 Y50 Z0.5 F300",     # layer change — skip
         "G1 X60 Y60 B-1.0 F200",
     ]
-    result = insert_travel_retract(lines, "left")
+    result = run(insert_travel_retract, lines, "left")
     joined = "\n".join(result)
     assert "; retract" not in joined
     assert "; prime" not in joined
@@ -314,7 +323,7 @@ def test_insert_travel_retract_consecutive_g0():
         "G0 X50 Y50 F300",          # second travel — already retracted
         "G1 X60 Y60 B-1.0 F200",
     ]
-    result = insert_travel_retract(lines, "left")
+    result = run(insert_travel_retract, lines, "left")
     assert result.count("G1 B0.2 F400 ; retract B") == 1
     assert result.count("G1 B-0.2 F400 ; prime B") == 1
 
@@ -322,7 +331,7 @@ def test_insert_travel_retract_consecutive_g0():
 def test_substitute_both_mirror():
     """Single STL in 'both' mode: E values duplicated to B and C."""
     lines = ["G1 X10 E0.5 F200", "G0 X20 Y20 F300"]
-    result = substitute_extrusion(lines, "both")
+    result = run(substitute_extrusion, lines, "both")
     assert "B-0.5" in result[0]
     assert "C-0.5" in result[0]
     # G0 travel has no E — should pass through unchanged
@@ -337,7 +346,7 @@ def test_substitute_both_multi():
         "T1",
         "G1 X10 E0.3 F200",
     ]
-    result = substitute_extrusion(lines, "both")
+    result = run(substitute_extrusion, lines, "both")
     # T0 section → B axis, no X offset
     assert "B-0.5" in result[1]
     assert "X10" in result[1]
@@ -374,9 +383,40 @@ def test_insert_travel_retract_both():
         "G0 X50 F300",
         "G1 X60 B-1.0 C-1.0 F200",
     ]
-    result = insert_travel_retract(lines, "both")
+    result = run(insert_travel_retract, lines, "both")
     joined = "\n".join(result)
     assert "; retract B" in joined
     assert "; retract C" in joined
     assert "; prime B" in joined
     assert "; prime C" in joined
+
+
+def test_numbers_without_leading_zero():
+    """Cura writes e.g. "X-.5" and "E.01234"; both must be converted."""
+    result = run(substitute_extrusion, ["G1 X-.5 Y1 E.01234 F200"], "right")
+    assert result == ["G1 X30.5 Y1 C-0.01234 F200"]
+    with pytest.raises(GcodeValidationError, match="Unsubstituted E"):
+        validate(parse(["G90", "G1 X1 E.5"]))
+
+
+def test_trim_drops_any_end_code_after_the_last_move():
+    lines = [
+        "G0 F300 X1 Y1 Z0.2",
+        "G1 F200 X2 Y1 E0.5",
+        ";TIME_ELAPSED:12.3",
+        "M82 ;absolute extrusion mode",
+        ";End of Gcode",
+    ]
+    assert run(trim_to_print, lines) == lines[:2]
+
+
+def test_unchanged_lines_are_written_back_verbatim():
+    lines = ["G0 F300 X1  Y1 Z0.20 ; start", "G1 F200 X2 Y1 B-.5"]
+    assert run(substitute_extrusion, lines, "left") == lines
+
+
+def test_scale_flow():
+    assert scale_flow("G1 F200 X10 Y20 B-1.5", 0.8) == "G1 F200 X10 Y20 B-1.2"
+    assert scale_flow("G1 B-0.2 F400 ; pressurize B", 0.5) == "G1 B-0.1 F400 ; pressurize B"
+    assert scale_flow("G1 X1 Y1", 0.5) == "G1 X1 Y1"
+    assert scale_flow("G1 B-1.5", 1.0) == "G1 B-1.5"
