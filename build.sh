@@ -27,6 +27,20 @@ echo "════════════════════════�
 echo "  Octaris Build"
 echo "═══════════════════════════════════════════"
 
+# ── Step 0: Check native binaries ───────────────────────────────────────────
+# New binaries under resources/bin are stored in Git LFS. Without `git lfs pull`
+# they are small text pointers, which PyInstaller would happily bundle.
+for bin in resources/bin/macos/CuraEngine resources/bin/macos/UltiMaker-Cura; do
+  if [ ! -f "$bin" ]; then
+    echo "✗ Missing $bin" >&2
+    exit 1
+  fi
+  if head -c 40 "$bin" | grep -q "git-lfs.github.com/spec"; then
+    echo "✗ $bin is a Git LFS pointer. Run: git lfs install && git lfs pull" >&2
+    exit 1
+  fi
+done
+
 # ── Step 1: Build the backend with PyInstaller ──────────────────────────────
 echo ""
 echo "▸ Building backend..."

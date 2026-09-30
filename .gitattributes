@@ -1,0 +1,8 @@
+# Native binaries (CuraEngine etc.) go through Git LFS.
+resources/bin/** filter=lfs diff=lfs merge=lfs -text
+resources/bin/**/.gitkeep !filter !diff !merge !text
+
+# Binaries committed before LFS was introduced stay regular blobs until they
+# are migrated deliberately. Remove these lines when doing that migration.
+resources/bin/macos/CuraEngine !filter !diff !merge !text
+resources/bin/macos/UltiMaker-Cura !filter !diff !merge !text

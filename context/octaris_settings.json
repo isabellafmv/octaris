@@ -1,0 +1,42 @@
+{
+  "name": "Octaris Bioprinter",
+  "version": 2,
+  "inherits": "fdmprinter",
+  "metadata": {
+    "type": "printer",
+    "author": "Octaris",
+    "manufacturer": "Octaris",
+    "visible": true,
+    "machine_extruder_trains": {
+      "0": "octaris_extruder_left",
+      "1": "octaris_extruder_right"
+    }
+  },
+  "overrides": {
+    "machine_name": { "default_value": "Octaris Bioprinter" },
+    "machine_start_gcode": { "default_value": "" },
+    "machine_end_gcode": { "default_value": "" },
+    "machine_width": { "default_value": 60 },
+    "machine_depth": { "default_value": 60 },
+    "machine_height": { "default_value": 60 },
+    "machine_center_is_zero": { "default_value": true },
+    "machine_heated_bed": { "default_value": false },
+    "machine_extruder_count": { "default_value": 1 },
+    "layer_height": { "default_value": 0.2 },
+    "layer_height_0": { "default_value": 0.2 },
+    "wall_line_count": { "default_value": 2 },
+    "material_flow": { "default_value": 100.0 },
+    "speed_print": { "default_value": 5.0 },
+    "speed_travel": { "default_value": 5.0 },
+    "retraction_enable": { "default_value": false },
+    "cool_fan_enabled": { "default_value": false },
+    "adhesion_type": { "default_value": "none" },
+    "support_enable": { "default_value": false },
+    "material_print_temperature": { "default_value": 0 },
+    "material_bed_temperature": { "default_value": 0 },
+    "roofing_layer_count": { "default_value": 0 },
+    "flooring_layer_count": { "default_value": 0 }
+  }
+}
+
+
