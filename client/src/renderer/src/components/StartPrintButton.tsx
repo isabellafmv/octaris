@@ -3,7 +3,7 @@ interface StartPrintButtonProps {
   onClick: () => void
 }
 
-export function StartPrintButton({ disabled, onClick }: StartPrintButtonProps) {
+export function StartPrintButton({ disabled, onClick }: StartPrintButtonProps): React.JSX.Element {
   return (
     <button
       onClick={onClick}

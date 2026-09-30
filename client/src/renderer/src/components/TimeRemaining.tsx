@@ -13,7 +13,7 @@ function formatTime(s: number): string {
   return `${min} min ${sec} sec`
 }
 
-export function TimeRemaining({ seconds, linesSent, linesTotal }: TimeRemainingProps) {
+export function TimeRemaining({ seconds, linesSent, linesTotal }: TimeRemainingProps): React.JSX.Element {
   const [remaining, setRemaining] = useState<number>(seconds ?? 0)
 
   useEffect(() => {

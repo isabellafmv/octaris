@@ -2,7 +2,7 @@ interface ProgressBarProps {
   percentage: number
 }
 
-export function ProgressBar({ percentage }: ProgressBarProps) {
+export function ProgressBar({ percentage }: ProgressBarProps): React.JSX.Element {
   return (
     <div>
       <div className="flex justify-between text-sm text-gray-500 mb-1">

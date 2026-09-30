@@ -1,11 +1,10 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { SetupScreen } from './screens/SetupScreen'
 import { PrintScreen } from './screens/PrintScreen'
 import { TakeOverScreen } from './screens/TakeOverScreen'
 import { useWebSocket } from './hooks/useWebSocket'
+import { useScreenNavigation, type Screen } from './hooks/useScreenNavigation'
 import { api } from './api'
-
-type Screen = 'setup' | 'print' | 'takeover'
 
 const screenTitles: Record<Screen, string> = {
   setup: 'Setup',
@@ -13,7 +12,13 @@ const screenTitles: Record<Screen, string> = {
   takeover: 'Manual Control',
 }
 
-function SetupIcon() {
+const navItems: { id: Screen; icon: React.JSX.Element; label: string }[] = [
+  { id: 'setup', icon: <SetupIcon />, label: 'SETUP' },
+  { id: 'print', icon: <MonitorIcon />, label: 'MONITOR' },
+  { id: 'takeover', icon: <LibraryIcon />, label: 'LOGS' },
+]
+
+function SetupIcon(): React.JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-5 h-5">
       <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75" />
@@ -21,7 +26,7 @@ function SetupIcon() {
   )
 }
 
-function MonitorIcon() {
+function MonitorIcon(): React.JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-5 h-5">
       <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
@@ -29,7 +34,7 @@ function MonitorIcon() {
   )
 }
 
-function LibraryIcon() {
+function LibraryIcon(): React.JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="w-5 h-5">
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
@@ -37,7 +42,7 @@ function LibraryIcon() {
   )
 }
 
-function OctarisLogo() {
+function OctarisLogo(): React.JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="white" className="w-4 h-4">
       <rect x="3" y="3" width="7.5" height="7.5" rx="1.5" />
@@ -49,19 +54,10 @@ function OctarisLogo() {
 }
 
 function App(): React.JSX.Element {
-  const [screen, setScreen] = useState<Screen>('setup')
+  const { screen, navigate, back } = useScreenNavigation()
   const [filename, setFilename] = useState<string | null>(null)
-  const previousScreen = useRef<Screen>('setup')
   const ws = useWebSocket()
-
-  // Persisted print parameters — survive screen navigation within a session
-  const [syringeMode, setSyringeMode] = useState<'left' | 'right' | 'both'>('left')
-  const [nozzleDiameter, setNozzleDiameter] = useState('')
-  const [syringeDiameter, setSyringeDiameter] = useState('')
-  const [layerHeight, setLayerHeight] = useState('')
-  const [pressurizeMm, setPressurizeMm] = useState('')
-  const [flowMultiplier, setFlowMultiplier] = useState('')
-  const [travelRetractMultiplier, setTravelRetractMultiplier] = useState('3')
+  const { resetPrintState } = ws
 
   const printerConnected = ws.printerConnected
 
@@ -70,7 +66,7 @@ function App(): React.JSX.Element {
     : printerConnected
       ? 'Printer connected'
       : 'Printer disconnected'
-  const connectionColor = !ws.wsConnected ? '#B54040' : printerConnected ? '#1A8B8D' : '#B5614A'
+  const connectionDot = !ws.wsConnected ? 'bg-danger' : printerConnected ? 'bg-primary' : 'bg-warning'
 
   const [startError, setStartError] = useState<string | null>(null)
 
@@ -78,57 +74,37 @@ function App(): React.JSX.Element {
     setStartError(null)
     try {
       await api.printStart()
-      setScreen('print')
+      navigate('print')
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to start print'
       setStartError(msg)
     }
-  }, [])
+  }, [navigate])
 
   const handleBack = useCallback(() => {
-    setScreen('setup')
+    navigate('setup')
     setFilename(null)
-    ws.resetPrintState()
-  }, [ws.resetPrintState])
+    resetPrintState()
+  }, [navigate, resetPrintState])
 
   const handleRestart = useCallback(async () => {
     setStartError(null)
     try {
       await api.printStart()
-      ws.resetPrintState()
+      resetPrintState()
     } catch (e) {
       setStartError(e instanceof Error ? e.message : 'Failed to restart print')
     }
-  }, [ws.resetPrintState])
+  }, [resetPrintState])
 
-  const handleTakeOver = useCallback(() => {
-    previousScreen.current = screen === 'takeover' ? 'setup' : screen
-    setScreen('takeover')
-  }, [screen])
-
-  const handleTakeOverBack = useCallback(() => {
-    setScreen(previousScreen.current)
-  }, [])
-
-  const handleNavClick = (id: Screen) => {
-    if (id === 'setup') {
-      setScreen('setup')
-    } else if (id === 'takeover') {
-      handleTakeOver()
-    } else if (id === 'print') {
-      setScreen('print')
-    }
-  }
+  const handleClearStartError = useCallback(() => setStartError(null), [])
 
   return (
     <div className="dot-grid h-screen flex flex-col select-none">
       {/* ── Title bar ── */}
       <div className="drag-region flex items-center gap-3 px-5 py-3 shrink-0">
         <div className="no-drag flex items-center gap-2.5">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-            style={{ backgroundColor: '#1A8B8D' }}
-          >
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-primary">
             <OctarisLogo />
           </div>
           <span className="text-white text-sm font-medium tracking-wide opacity-90">
@@ -136,7 +112,7 @@ function App(): React.JSX.Element {
           </span>
         </div>
         <div className="no-drag flex items-center gap-1.5 ml-auto">
-          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: connectionColor }} />
+          <div className={`w-1.5 h-1.5 rounded-full ${connectionDot}`} />
           <span className="text-[10px] font-medium tracking-wide opacity-80 text-white">
             {connectionLabel}
           </span>
@@ -148,27 +124,21 @@ function App(): React.JSX.Element {
         {/* Floating sidebar — hidden when PrintScreen has its own */}
         {screen !== 'print' && (
           <div className="flex flex-col items-center gap-1 py-2 w-14 shrink-0">
-            {[
-              { id: 'setup' as Screen, icon: <SetupIcon />, label: 'SETUP' },
-              { id: 'print' as Screen, icon: <MonitorIcon />, label: 'MONITOR' },
-              { id: 'takeover' as Screen, icon: <LibraryIcon />, label: 'LOGS' },
-            ].map((item) => (
+            {navItems.map((item) => (
               <div key={item.id} className="flex flex-col items-center gap-0.5 w-full">
                 <button
-                  onClick={() => handleNavClick(item.id)}
-                  className="w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90 no-drag"
-                  style={
-                    screen === item.id
-                      ? { backgroundColor: '#1A8B8D', color: 'white' }
-                      : { color: '#6B7070' }
-                  }
+                  onClick={() => navigate(item.id)}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90 no-drag ${
+                    screen === item.id ? 'bg-primary text-white' : 'text-chrome-icon'
+                  }`}
                   title={item.label}
                 >
                   {item.icon}
                 </button>
                 <span
-                  className="text-[8px] tracking-widest uppercase font-medium"
-                  style={{ color: screen === item.id ? '#1A8B8D' : '#4D5252' }}
+                  className={`text-[8px] tracking-widest uppercase font-medium ${
+                    screen === item.id ? 'text-primary' : 'text-chrome-label'
+                  }`}
                 >
                   {item.label}
                 </span>
@@ -178,33 +148,16 @@ function App(): React.JSX.Element {
         )}
 
         {/* Main content card */}
-        <div
-          className="flex-1 rounded-2xl overflow-hidden min-h-0 flex flex-col"
-          style={{ backgroundColor: '#F5F1E6' }}
-        >
+        <div className="flex-1 rounded-2xl overflow-hidden min-h-0 flex flex-col bg-surface">
           {screen === 'setup' ? (
             <SetupScreen
               printerConnected={printerConnected}
               port={ws.port}
               calibrated={ws.calibrated}
+              printStatus={ws.status}
               onStartPrint={handleStartPrint}
               externalError={startError}
-              onClearExternalError={() => setStartError(null)}
-              syringeMode={syringeMode}
-              onSyringeModeChange={setSyringeMode}
-              nozzleDiameter={nozzleDiameter}
-              onNozzleDiameterChange={setNozzleDiameter}
-              syringeDiameter={syringeDiameter}
-              onSyringeDiameterChange={setSyringeDiameter}
-              layerHeight={layerHeight}
-              onLayerHeightChange={setLayerHeight}
-              pressurizeMm={pressurizeMm}
-              onPressurizeMmChange={setPressurizeMm}
-              flowMultiplier={flowMultiplier}
-              onFlowMultiplierChange={setFlowMultiplier}
-              travelRetractMultiplier={travelRetractMultiplier}
-              onTravelRetractMultiplierChange={setTravelRetractMultiplier}
-              printStatus={ws.status}
+              onClearExternalError={handleClearStartError}
             />
           ) : screen === 'print' ? (
             <PrintScreen
@@ -216,7 +169,7 @@ function App(): React.JSX.Element {
               filename={filename}
               onBack={handleBack}
               onRestart={handleRestart}
-              onTakeOver={handleTakeOver}
+              onTakeOver={() => navigate('takeover')}
               printerConnected={printerConnected}
               printError={ws.lastError}
               stopInfo={ws.stopInfo}
@@ -225,10 +178,7 @@ function App(): React.JSX.Element {
             <TakeOverScreen
               printerConnected={printerConnected}
               printStatus={ws.status}
-              serialLog={ws.serialLog}
-              onClearLog={ws.clearSerialLog}
-              onSetLog={ws.setSerialLog}
-              onBack={handleTakeOverBack}
+              onBack={back}
             />
           )}
         </div>

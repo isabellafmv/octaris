@@ -1,5 +1,39 @@
 @import "tailwindcss";
 
+/* ─── Theme ──────────────────────────────────────────── */
+/* Every color becomes a utility (bg-primary, text-text-muted, border-border…).
+   `static` keeps the variables in the output even when no class uses them, so
+   JS that needs a color (three.js) can read them with getComputedStyle. */
+@theme static {
+  --color-primary: #1A8B8D;
+  --color-primary-strong: #127A7C;
+  --color-primary-muted: #D4EAE9;
+
+  --color-surface: #F5F1E6;
+  --color-surface-card: #EDE9DC;
+  --color-surface-sunken: #E8E3D8;
+
+  --color-border: #D8D3C8;
+  --color-border-strong: #C8C3B8;
+
+  --color-text: #2D3333;
+  --color-text-secondary: #5A6060;
+  --color-text-tinted: #5A7070;
+  --color-text-muted: #8B9090;
+  --color-text-subtle: #A0A8A8;
+
+  --color-danger: #B54040;
+  --color-danger-muted: #FDEAEA;
+  --color-danger-strong: #9B4A3A;
+  --color-warning: #B5614A;
+
+  /* Dark window chrome around the main card */
+  --color-chrome: #262929;
+  --color-chrome-dot: #3D4040;
+  --color-chrome-icon: #6B7070;
+  --color-chrome-label: #4D5252;
+}
+
 * {
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   box-sizing: border-box;
@@ -17,7 +51,7 @@ input[type="range"] {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
-  background-color: #D8D3C8;
+  background-color: var(--color-border);
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -32,16 +66,16 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 input[type="range"].slider-primary::-webkit-slider-thumb {
-  background: #1A8B8D;
+  background: var(--color-primary);
 }
 
 input[type="range"].slider-terra::-webkit-slider-thumb {
-  background: #B5614A;
+  background: var(--color-warning);
 }
 
 input[type="range"].slider-flow::-webkit-slider-thumb {
   background: white;
-  border: 2px solid #1A8B8D;
+  border: 2px solid var(--color-primary);
   width: 20px;
   height: 20px;
   margin-top: -8px;
@@ -50,8 +84,8 @@ input[type="range"].slider-flow::-webkit-slider-thumb {
 
 /* ─── Dot-grid background ────────────────────────────── */
 .dot-grid {
-  background-color: #262929;
-  background-image: radial-gradient(circle, #3D4040 1.2px, transparent 1.2px);
+  background-color: var(--color-chrome);
+  background-image: radial-gradient(circle, var(--color-chrome-dot) 1.2px, transparent 1.2px);
   background-size: 22px 22px;
 }
 

@@ -17,7 +17,7 @@ const QUICK_COMMANDS = [
 
 const MAX_HISTORY = 50
 
-export function GcodeInput({ disabled, printing = false }: GcodeInputProps) {
+export function GcodeInput({ disabled, printing = false }: GcodeInputProps): React.JSX.Element {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -89,11 +89,8 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps) {
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Header */}
-      <div
-        className="px-3 py-2 border-b shrink-0"
-        style={{ backgroundColor: '#EDE9DC', borderColor: '#D8D3C8' }}
-      >
-        <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: '#8B9090' }}>Send G-code</h3>
+      <div className="px-3 py-2 border-b shrink-0 bg-surface-card border-border">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-text-muted">Send G-code</h3>
       </div>
 
       {/* Input area */}
@@ -107,36 +104,30 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps) {
             onKeyDown={handleKeyDown}
             placeholder="e.g. G28, M114, G1 X10 F200"
             disabled={commandsDisabled || sending}
-            className="flex-1 rounded px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              backgroundColor: '#EDE9DC',
-              border: '1px solid #D8D3C8',
-              color: '#2D3333',
-            }}
+            className="flex-1 rounded px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 disabled:opacity-50 disabled:cursor-not-allowed bg-surface-card border border-border text-text"
           />
           <button
             onClick={() => sendCommand(input)}
             disabled={commandsDisabled || sending || !input.trim()}
-            className="px-4 py-2 rounded font-medium text-sm text-white transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed min-w-15"
-            style={{ backgroundColor: '#1A8B8D' }}
+            className="px-4 py-2 rounded font-medium text-sm text-white transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed min-w-15 bg-primary"
           >
             {sending ? '...' : 'Send'}
           </button>
         </div>
         {error && (
-          <p className="mt-2 text-sm" style={{ color: '#B5614A' }}>{error}</p>
+          <p className="mt-2 text-sm text-warning">{error}</p>
         )}
         {disabled && (
-          <p className="mt-2 text-sm" style={{ color: '#A0A8A8' }}>Connect to the printer to send commands.</p>
+          <p className="mt-2 text-sm text-text-subtle">Connect to the printer to send commands.</p>
         )}
         {!disabled && printing && (
-          <p className="mt-2 text-sm" style={{ color: '#A0A8A8' }}>Print running — use Monitor to pause or stop</p>
+          <p className="mt-2 text-sm text-text-subtle">Print running — use Monitor to pause or stop</p>
         )}
       </div>
 
       {/* Quick commands */}
       <div className="px-3 pt-4 flex-1">
-        <p className="text-xs uppercase tracking-widest mb-2" style={{ color: '#8B9090' }}>Quick Commands</p>
+        <p className="text-xs uppercase tracking-widest mb-2 text-text-muted">Quick Commands</p>
         <div className="grid grid-cols-2 gap-2">
           {QUICK_COMMANDS.map(({ label, gcode }) => (
             <button
@@ -144,8 +135,7 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps) {
               onClick={() => sendCommand(gcode)}
               disabled={commandsDisabled || sending}
               title={gcode}
-              className="px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ backgroundColor: '#E8E3D8', color: '#5A6060' }}
+              className="px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed bg-surface-sunken text-text-secondary"
             >
               <span className="block">{label}</span>
               <span className="block text-xs opacity-60 font-mono">{gcode}</span>
@@ -155,8 +145,7 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps) {
             onClick={handleStop}
             disabled={disabled || sending}
             title="M410 (via print stop)"
-            className="px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed col-span-2"
-            style={{ backgroundColor: '#9B4A3A', color: 'white' }}
+            className="px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed col-span-2 bg-danger-strong text-white"
           >
             <span className="block">STOP</span>
           </button>

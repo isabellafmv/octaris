@@ -18,7 +18,7 @@ function SyringeModule({
   selected: SyringeMode;
   fillLevel: number;
   onSelect: (m: SyringeMode) => void;
-}) {
+}): React.JSX.Element {
   const isActive = selected === mode || selected === "both";
 
   return (
@@ -35,8 +35,9 @@ function SyringeModule({
           width="32"
           height="88"
           rx="16"
-          fill={isActive ? "#1A8B8D" : "none"}
-          stroke={isActive ? "#1A8B8D" : "#C8C3B8"}
+          className={
+            isActive ? "fill-primary stroke-primary" : "fill-none stroke-border-strong"
+          }
           strokeWidth="2"
         />
         {/* Inner fill */}
@@ -47,13 +48,20 @@ function SyringeModule({
             width="28"
             height={fillLevel * 80}
             rx="14"
-            fill={isActive ? "#127A7C" : "#D8D3C8"}
+            className={isActive ? "fill-primary-strong" : "fill-border"}
           />
         )}
         {!isActive && (
           <>
             {/* Empty tube outline interior */}
-            <rect x="12" y="12" width="28" height="84" rx="14" fill="#F0EBE0" />
+            <rect
+              x="12"
+              y="12"
+              width="28"
+              height="84"
+              rx="14"
+              className="fill-[#F0EBE0]"
+            />
             {/* Partial fill to show it has some content */}
             <rect
               x="12"
@@ -61,7 +69,7 @@ function SyringeModule({
               width="28"
               height={fillLevel * 70}
               rx="10"
-              fill="#D8D3C8"
+              className="fill-border"
             />
           </>
         )}
@@ -72,7 +80,7 @@ function SyringeModule({
           width="12"
           height="14"
           rx="6"
-          fill={isActive ? "#1A8B8D" : "#C8C3B8"}
+          className={isActive ? "fill-primary" : "fill-border-strong"}
         />
         {/* Cap ring */}
         <rect
@@ -81,20 +89,22 @@ function SyringeModule({
           width="36"
           height="8"
           rx="4"
-          fill={isActive ? "#127A7C" : "#B8B3A8"}
+          className={isActive ? "fill-primary-strong" : "fill-[#B8B3A8]"}
         />
       </svg>
 
       {/* Dot indicator */}
       <div
-        className="w-2 h-2 rounded-full transition-all"
-        style={{ backgroundColor: isActive ? "#1A8B8D" : "#C8C3B8" }}
+        className={`w-2 h-2 rounded-full transition-all ${
+          isActive ? "bg-primary" : "bg-border-strong"
+        }`}
       />
 
       {/* Label */}
       <span
-        className="text-[10px] font-semibold tracking-widest uppercase"
-        style={{ color: isActive ? "#1A8B8D" : "#8B9090" }}
+        className={`text-[10px] font-semibold tracking-widest uppercase ${
+          isActive ? "text-primary" : "text-text-muted"
+        }`}
       >
         {label} Syringe
       </span>
@@ -106,7 +116,7 @@ export function SyringeModuleViz({
   selected,
   onSelect,
   compact = false,
-}: SyringeModuleVizProps) {
+}: SyringeModuleVizProps): React.JSX.Element {
   return (
     <div className="flex flex-col items-center gap-4 w-full">
       {!compact && (
@@ -132,8 +142,7 @@ export function SyringeModuleViz({
           {/* Platform rail */}
           <div className="flex items-center gap-3 mt-1">
             <div
-              className="h-0.5 w-32 rounded-full"
-              style={{ backgroundColor: "#C8C3B8" }}
+              className="h-0.5 w-32 rounded-full bg-border-strong"
             />
           </div>
         </>
@@ -146,23 +155,19 @@ export function SyringeModuleViz({
             <button
               key={m}
               onClick={() => onSelect(m)}
-              className="px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide uppercase transition-all"
-              style={
+              className={`px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide uppercase transition-all ${
                 selected === m
-                  ? { backgroundColor: "#1A8B8D", color: "white" }
-                  : { backgroundColor: "#D8D3C8", color: "#8B9090" }
-              }
+                  ? "bg-primary text-white"
+                  : "bg-border text-text-muted"
+              }`}
             >
               {m}
             </button>
           ))}
         </div>
-        <p
-          className="text-center text-xs leading-relaxed"
-          style={{ color: "#8B9090" }}
-        >
+        <p className="text-center text-xs leading-relaxed text-text-muted">
           Tap to toggle{" "}
-          <span className="font-semibold" style={{ color: "#2D3333" }}>
+          <span className="font-semibold text-text">
             dual-ink mode
           </span>{" "}
           or single extrusion.
@@ -179,6 +184,6 @@ export function SyringeSelector({
 }: {
   selected: SyringeMode;
   onSelect: (m: SyringeMode) => void;
-}) {
+}): React.JSX.Element {
   return <SyringeModuleViz selected={selected} onSelect={onSelect} />;
 }

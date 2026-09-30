@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PrintStatus, SerialLogEntry, StopInfo, WsEvent } from '../types'
+import { useSerialLog } from '../stores/serialLog'
+import type { PrintStatus, StopInfo, WsEvent } from '../types'
 
 const WS_BASE_URL = 'ws://127.0.0.1:8000/ws'
 
@@ -10,7 +11,6 @@ function wsUrl(): string {
   return token ? `${WS_BASE_URL}?token=${encodeURIComponent(token)}` : WS_BASE_URL
 }
 const RECONNECT_DELAY = 2000
-const MAX_LOG_ENTRIES = 200
 
 interface PrintState {
   status: PrintStatus
@@ -24,13 +24,12 @@ interface PrintState {
   printerConnected: boolean
   port: string | null
   calibrated: boolean
-  serialLog: SerialLogEntry[]
   // id changes on every error event, so a repeated message is shown again
   lastError: { id: number; message: string } | null
   stopInfo: StopInfo
 }
 
-export function useWebSocket() {
+export function useWebSocket(): PrintState & { resetPrintState: () => void } {
   const [state, setState] = useState<PrintState>({
     status: 'idle',
     linesSent: 0,
@@ -41,7 +40,6 @@ export function useWebSocket() {
     printerConnected: false,
     port: null,
     calibrated: false,
-    serialLog: [],
     lastError: null,
     stopInfo: null
   })
@@ -61,6 +59,11 @@ export function useWebSocket() {
 
     ws.onmessage = (evt) => {
       const data: WsEvent = JSON.parse(evt.data)
+      // Serial lines go to their own store so they don't re-render the app
+      if (data.type === 'serial_log') {
+        if (data.entry) useSerialLog.getState().append(data.entry)
+        return
+      }
       setState((prev) => {
         switch (data.type) {
           case 'progress':
@@ -115,17 +118,6 @@ export function useWebSocket() {
           }
           case 'calibration':
             return { ...prev, calibrated: data.value === 'calibrated' }
-          case 'serial_log':
-            if (data.entry) {
-              const updated = [...prev.serialLog, data.entry]
-              return {
-                ...prev,
-                serialLog: updated.length > MAX_LOG_ENTRIES
-                  ? updated.slice(-MAX_LOG_ENTRIES)
-                  : updated
-              }
-            }
-            return prev
           default:
             return prev
         }
@@ -150,14 +142,6 @@ export function useWebSocket() {
     }
   }, [connect])
 
-  const clearSerialLog = useCallback(() => {
-    setState((s) => ({ ...s, serialLog: [] }))
-  }, [])
-
-  const setSerialLog = useCallback((entries: SerialLogEntry[]) => {
-    setState((s) => ({ ...s, serialLog: entries }))
-  }, [])
-
   const resetPrintState = useCallback(() => {
     setState((s) => ({
       ...s,
@@ -169,5 +153,5 @@ export function useWebSocket() {
     }))
   }, [])
 
-  return { ...state, clearSerialLog, setSerialLog, resetPrintState }
+  return { ...state, resetPrintState }
 }

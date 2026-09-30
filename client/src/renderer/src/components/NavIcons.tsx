@@ -1,6 +1,6 @@
 /** Shared navigation icons used by both the App sidebar and PrintScreen sidebar. */
 
-export function SetupIcon({ filled }: { filled?: boolean }) {
+export function SetupIcon({ filled }: { filled?: boolean }): React.JSX.Element {
   if (filled) {
     return (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-[18px] h-[18px]">
@@ -16,7 +16,7 @@ export function SetupIcon({ filled }: { filled?: boolean }) {
   )
 }
 
-export function MonitorIcon({ filled }: { filled?: boolean }) {
+export function MonitorIcon({ filled }: { filled?: boolean }): React.JSX.Element {
   if (filled) {
     return (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-[18px] h-[18px]">
@@ -31,7 +31,7 @@ export function MonitorIcon({ filled }: { filled?: boolean }) {
   )
 }
 
-export function LogsIcon({ filled }: { filled?: boolean }) {
+export function LogsIcon({ filled }: { filled?: boolean }): React.JSX.Element {
   if (filled) {
     return (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-[18px] h-[18px]">
@@ -53,31 +53,24 @@ interface NavButtonProps {
   onClick: () => void
 }
 
-export function NavButton({ active, icon, label, onClick }: NavButtonProps) {
+export function NavButton({ active, icon, label, onClick }: NavButtonProps): React.JSX.Element {
   return (
     <div className="flex flex-col items-center gap-1 w-full">
       <button
         onClick={onClick}
-        className="w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-150 active:scale-90"
-        style={
+        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-150 active:scale-90 ${
           active
-            ? {
-                backgroundColor: '#1A8B8D',
-                color: 'white',
-                boxShadow: '0 0 0 2.5px rgba(26,139,141,0.25), 0 2px 8px rgba(26,139,141,0.3)',
-              }
-            : {
-                color: '#7A8080',
-                backgroundColor: 'transparent',
-              }
-        }
+            ? 'bg-primary text-white shadow-[0_0_0_2.5px_rgba(26,139,141,0.25),0_2px_8px_rgba(26,139,141,0.3)]'
+            : 'bg-transparent text-[#7A8080]'
+        }`}
         title={label}
       >
         {icon}
       </button>
       <span
-        className="text-[9px] tracking-wider uppercase font-semibold"
-        style={{ color: active ? '#1A8B8D' : '#5A6060' }}
+        className={`text-[9px] tracking-wider uppercase font-semibold ${
+          active ? 'text-primary' : 'text-text-secondary'
+        }`}
       >
         {label}
       </span>

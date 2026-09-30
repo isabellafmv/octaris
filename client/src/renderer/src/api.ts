@@ -21,6 +21,24 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+// Slicer options for /upload, keyed by their query parameter names
+const SLICE_PARAMS = {
+  nozzleDiameter: 'nozzle_diameter',
+  syringeDiameter: 'syringe_diameter',
+  layerHeight: 'layer_height',
+  pressurizeMm: 'pressurize_mm',
+  flowMultiplier: 'flow_multiplier',
+  travelRetractMultiplier: 'travel_retract_multiplier'
+} as const
+
+export type SliceOptions = Partial<Record<keyof typeof SLICE_PARAMS, number>>
+
+function uploadFile(path: string, file: File, params: URLSearchParams): Promise<UploadResult> {
+  const form = new FormData()
+  form.append('file', file)
+  return json<UploadResult>(`${path}?${params}`, { method: 'POST', body: form })
+}
+
 export const api = {
   getPorts: () => json<{ ports: PortInfo[] }>('/ports'),
   connect: (port: string) =>
@@ -30,46 +48,16 @@ export const api = {
       body: JSON.stringify({ port })
     }),
   disconnect: () => json<{ status: string }>('/disconnect', { method: 'POST' }),
-  upload: async (
-    file: File,
-    syringeMode: SyringeMode,
-    opts?: { nozzleDiameter?: number; syringeDiameter?: number; layerHeight?: number; pressurizeMm?: number; flowMultiplier?: number; travelRetractMultiplier?: number }
-  ): Promise<UploadResult> => {
-    const form = new FormData()
-    form.append('file', file)
+  upload: (file: File, syringeMode: SyringeMode, opts: SliceOptions = {}) => {
     const params = new URLSearchParams({ syringe_mode: syringeMode })
-    if (opts?.nozzleDiameter) params.set('nozzle_diameter', String(opts.nozzleDiameter))
-    if (opts?.syringeDiameter) params.set('syringe_diameter', String(opts.syringeDiameter))
-    if (opts?.layerHeight) params.set('layer_height', String(opts.layerHeight))
-    if (opts?.pressurizeMm) params.set('pressurize_mm', String(opts.pressurizeMm))
-    if (opts?.flowMultiplier) params.set('flow_multiplier', String(opts.flowMultiplier))
-    if (opts?.travelRetractMultiplier)
-      params.set('travel_retract_multiplier', String(opts.travelRetractMultiplier))
-    const res = await fetch(`${BASE}/upload?${params}`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: form
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(body.detail || res.statusText)
+    for (const [key, name] of Object.entries(SLICE_PARAMS)) {
+      const value = opts[key as keyof SliceOptions]
+      if (value) params.set(name, String(value))
     }
-    return res.json()
+    return uploadFile('/upload', file, params)
   },
-  uploadGcode: async (file: File, syringeMode: SyringeMode): Promise<UploadResult> => {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await fetch(`${BASE}/upload/gcode?syringe_mode=${syringeMode}`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: form
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(body.detail || res.statusText)
-    }
-    return res.json()
-  },
+  uploadGcode: (file: File, syringeMode: SyringeMode) =>
+    uploadFile('/upload/gcode', file, new URLSearchParams({ syringe_mode: syringeMode })),
   printStart: () => json<{ status: string }>('/print/start', { method: 'POST' }),
   printStop: () => json<{ status: string }>('/print/stop', { method: 'POST' }),
   printPause: () => json<{ status: string }>('/print/pause', { method: 'POST' }),

@@ -3,11 +3,16 @@ import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
+// Theme colors from main.css, for three.js which can't use CSS classes
+function themeColor(name: string): THREE.Color {
+  return new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue(name).trim())
+}
+
 interface STLPreviewProps {
   file: File
 }
 
-export function STLPreview({ file }: STLPreviewProps) {
+export function STLPreview({ file }: STLPreviewProps): React.JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -19,7 +24,7 @@ export function STLPreview({ file }: STLPreviewProps) {
 
     // Scene
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color('#EDE9DC')
+    scene.background = themeColor('--color-surface-card')
 
     // Camera
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 10000)
@@ -71,7 +76,7 @@ export function STLPreview({ file }: STLPreviewProps) {
       controls.update()
 
       const material = new THREE.MeshPhongMaterial({
-        color: new THREE.Color('#1A8B8D'),
+        color: themeColor('--color-primary'),
         specular: new THREE.Color('#ffffff'),
         shininess: 40,
       })

@@ -8,7 +8,7 @@ interface PortSelectorProps {
   onError: (msg: string) => void
 }
 
-export function PortSelector({ connected, port, onError }: PortSelectorProps) {
+export function PortSelector({ connected, port, onError }: PortSelectorProps): React.JSX.Element {
   const [ports, setPorts] = useState<PortInfo[]>([])
   const [selected, setSelected] = useState('')
   const [loading, setLoading] = useState(false)
@@ -53,15 +53,14 @@ export function PortSelector({ connected, port, onError }: PortSelectorProps) {
     return (
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-1.5">
-          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: '#1A8B8D' }} />
-          <span className="text-xs font-medium" style={{ color: '#2D3333' }}>
+          <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+          <span className="text-xs font-medium text-text">
             {port || 'Connected'}
           </span>
         </div>
         <button
           onClick={handleDisconnect}
-          className="text-xs px-2.5 py-1 rounded-lg font-medium transition-all active:scale-95"
-          style={{ backgroundColor: '#E8E3D8', color: '#5A6060' }}
+          className="text-xs px-2.5 py-1 rounded-lg font-medium transition-all active:scale-95 bg-surface-sunken text-text-secondary"
         >
           Disconnect
         </button>
@@ -74,8 +73,7 @@ export function PortSelector({ connected, port, onError }: PortSelectorProps) {
       <select
         value={selected}
         onChange={(e) => setSelected(e.target.value)}
-        className="text-xs px-2.5 py-1.5 rounded-lg border outline-none"
-        style={{ borderColor: '#D8D3C8', backgroundColor: 'white', color: '#2D3333' }}
+        className="text-xs px-2.5 py-1.5 rounded-lg border outline-none border-border bg-white text-text"
       >
         {ports.length === 0 && <option value="">No ports found</option>}
         {ports.map((p) => (
@@ -87,8 +85,7 @@ export function PortSelector({ connected, port, onError }: PortSelectorProps) {
 
       <button
         onClick={refresh}
-        className="text-xs px-2 py-1.5 rounded-lg border transition-all active:scale-95"
-        style={{ borderColor: '#D8D3C8', backgroundColor: 'white', color: '#5A6060' }}
+        className="text-xs px-2 py-1.5 rounded-lg border transition-all active:scale-95 border-border bg-white text-text-secondary"
         title="Refresh ports"
       >
         ↺
@@ -97,8 +94,7 @@ export function PortSelector({ connected, port, onError }: PortSelectorProps) {
       <button
         onClick={handleConnect}
         disabled={!selected || loading}
-        className="text-xs px-3 py-1.5 rounded-lg font-semibold text-white transition-all active:scale-95 disabled:opacity-40"
-        style={{ backgroundColor: '#1A8B8D' }}
+        className="text-xs px-3 py-1.5 rounded-lg font-semibold text-white transition-all active:scale-95 disabled:opacity-40 bg-primary"
       >
         {loading ? 'Connecting…' : 'Connect'}
       </button>
