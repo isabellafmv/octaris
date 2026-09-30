@@ -4,6 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.auth import token_is_valid
 from backend.events import EventBus
+from backend.schemas import SnapshotEvent
 
 router = APIRouter()
 
@@ -17,7 +18,8 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     event_bus: EventBus = ws.app.state.event_bus
 
-    await ws.send_text(json.dumps({"type": "snapshot", **ws.app.state.session.snapshot()}))
+    snapshot = SnapshotEvent(**ws.app.state.session.snapshot().model_dump())
+    await ws.send_text(json.dumps(snapshot.dump()))
 
     sub_id, queue = event_bus.subscribe()
     try:

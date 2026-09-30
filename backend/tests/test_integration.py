@@ -15,10 +15,12 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from pydantic import TypeAdapter
 
 from backend import serial_manager as serial_module
 from backend.main import app
 from backend.queue_worker import PrintStatus
+from backend.schemas import WsEvent
 from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -361,6 +363,11 @@ async def test_full_print_lifecycle(client):
     while not event_queue.empty():
         events.append(event_queue.get_nowait())
     app.state.event_bus.unsubscribe(sub_id)
+
+    # Every event matches its model in backend/schemas.py
+    ws_event = TypeAdapter(WsEvent)
+    for event in events:
+        assert ws_event.validate_python(event).dump() == event
 
     status_values = [e["value"] for e in events if e["type"] == "status"]
     assert status_values == [

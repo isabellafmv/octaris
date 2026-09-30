@@ -27,6 +27,14 @@ from backend.limits import (
     start_state,
 )
 from backend.queue_worker import InvalidTransition, PrintStatus, QueueWorker
+from backend.schemas import (
+    CalibrationEvent,
+    Event,
+    ExtrusionRateEvent,
+    PrinterEvent,
+    Snapshot,
+    StatusEvent,
+)
 from backend.serial_manager import SerialError, SerialManager
 from backend.slicer import slice_model
 
@@ -80,30 +88,33 @@ class PrinterSession:
         self.serial = serial
         self.worker = worker
         self.history = history
-        self._publish = publish
+        self._bus_publish = publish
         self.loaded: LoadedPrint | None = None
         # The G92 zero was set since the printer was last (re)connected
         self.calibrated = False
+
+    def _publish(self, event: Event) -> None:
+        self._bus_publish(event.dump())
 
     @property
     def syringe_mode(self) -> SyringeMode:
         return self.loaded.mode if self.loaded else "left"
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self) -> Snapshot:
         """Current connection/print state, for GET /status and the ws snapshot."""
         worker = self.worker
-        return {
-            "printer_connected": self.serial.is_connected,
-            "port": self.serial.port,
-            "print_status": worker.status.value,
-            "lines_sent": worker.lines_sent,
-            "lines_total": worker.lines_total,
-            "calibrated": self.calibrated,
-            "flow_rate": worker.flow_rate,
-            "resumable": worker.resumable,
-            "stop_reason": worker.stop_reason,
-            "time_estimate_s": self.loaded.gcode.time_estimate_s if self.loaded else None,
-        }
+        return Snapshot(
+            printer_connected=self.serial.is_connected,
+            port=self.serial.port,
+            print_status=worker.status.value,
+            lines_sent=worker.lines_sent,
+            lines_total=worker.lines_total,
+            calibrated=self.calibrated,
+            flow_rate=worker.flow_rate,
+            resumable=worker.resumable,
+            stop_reason=worker.stop_reason,
+            time_estimate_s=self.loaded.gcode.time_estimate_s if self.loaded else None,
+        )
 
     # --- connection -----------------------------------------------------------
 
@@ -122,13 +133,13 @@ class PrinterSession:
         except SerialError:
             pass  # non-fatal — printer still usable
         # on_event() resets the calibration
-        self._publish({"type": "printer", "connected": True, "port": port})
+        self._publish(PrinterEvent(connected=True, port=port))
 
     async def disconnect(self) -> None:
         self._refuse_during_print()
         await self.serial.disconnect()
         self.worker.invalidate_checkpoint("The printer disconnected")
-        self._publish({"type": "printer", "connected": False, "port": None})
+        self._publish(PrinterEvent(connected=False, port=None))
 
     def on_event(self, event: dict[str, Any]) -> None:
         """Reacts to the printer connecting or disconnecting, however it
@@ -182,13 +193,13 @@ class PrinterSession:
         self.worker.invalidate_checkpoint("The printer was re-zeroed")
         await self.serial.send(command)
         self.calibrated = True
-        self._publish({"type": "calibration", "value": "calibrated"})
+        self._publish(CalibrationEvent(value="calibrated"))
         return command
 
     def reset_calibration(self) -> None:
         """Mark calibration as invalid (e.g. after a disconnect or power cycle)."""
         self.calibrated = False
-        self._publish({"type": "calibration", "value": "uncalibrated"})
+        self._publish(CalibrationEvent(value="uncalibrated"))
 
     # --- manual control -----------------------------------------------------------
 
@@ -250,7 +261,7 @@ class PrinterSession:
         self.worker.set_flow_rate(rate)
         # No-op unless a print session is active
         self.history.log_extrusion(rate, self.worker.lines_sent)
-        self._publish({"type": "extrusion_rate", "value": rate})
+        self._publish(ExtrusionRateEvent(value=rate))
 
     # --- loading a print --------------------------------------------------------
 
@@ -262,7 +273,7 @@ class PrinterSession:
         Raises SlicingError or GcodeValidationError if slicing fails, and
         LimitError if the print would leave the bed.
         """
-        self._publish({"type": "status", "value": "slicing"})
+        self._publish(StatusEvent(value="slicing"))
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         model_path = DATA_DIR / filename
         model_path.write_bytes(content)
@@ -270,7 +281,7 @@ class PrinterSession:
             gcode = await slice_model(model_path, mode, **settings)
             check_path(self.config.bed, gcode.lines)
         except Exception:
-            self._publish({"type": "status", "value": "idle"})
+            self._publish(StatusEvent(value="idle"))
             raise
         self._load(LoadedPrint(gcode, filename, mode, "stl", settings))
         return gcode
@@ -288,7 +299,7 @@ class PrinterSession:
     def _load(self, loaded: LoadedPrint) -> None:
         self.worker.invalidate_checkpoint("A new file was loaded")
         self.loaded = loaded
-        self._publish({"type": "status", "value": "ready"})
+        self._publish(StatusEvent(value="ready"))
 
     # --- printing ---------------------------------------------------------------
 

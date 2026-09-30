@@ -25,6 +25,7 @@ import serial.tools.list_ports
 
 from backend.checkpoint import parse_m114
 from backend.gcode_processor import AXES, MachineState, step
+from backend.schemas import Event, PrinterEvent, SerialLogEvent, TemperatureEvent
 
 logger = logging.getLogger(__name__)
 
@@ -237,12 +238,12 @@ class SerialManager:
 
     # --- events ---------------------------------------------------------------
 
-    def _emit(self, event: dict[str, Any]) -> None:
+    def _emit(self, event: Event) -> None:
         """Hand an event to on_event on the event loop, from any thread."""
         if self._on_event is None or self._loop is None:
             return
         try:
-            self._loop.call_soon_threadsafe(self._on_event, event)
+            self._loop.call_soon_threadsafe(self._on_event, event.dump())
         except RuntimeError:
             pass  # the loop is closed; nobody is listening any more
 
@@ -254,7 +255,7 @@ class SerialManager:
             line_number=line_number,
         )
         self._log_buffer.append(entry)
-        self._emit({"type": "serial_log", "entry": entry.to_dict()})
+        self._emit(SerialLogEvent(entry=entry.to_dict()))
 
     # --- connection -------------------------------------------------------------
 
@@ -322,7 +323,7 @@ class SerialManager:
             return
         self._close(SerialError("The printer disconnected"))
         if self._on_event:
-            self._on_event({"type": "printer", "connected": False, "port": None})
+            self._on_event(PrinterEvent(connected=False, port=None).dump())
 
     async def reconnect(self) -> bool:
         """Reconnect using the last-known port and baud rate."""
@@ -336,7 +337,7 @@ class SerialManager:
             try:
                 await self.connect(port, baud_rate)
                 if self._on_event:
-                    self._on_event({"type": "printer", "connected": True, "port": port})
+                    self._on_event(PrinterEvent(connected=True, port=port).dump())
                 return True
             except SerialError:
                 if attempt < RECONNECT_ATTEMPTS:
@@ -543,7 +544,7 @@ class SerialManager:
 
         temperatures = parse_temperatures(line)
         if temperatures is not None:
-            self._emit({"type": "temperature", "temperatures": temperatures})
+            self._emit(TemperatureEvent(temperatures=temperatures))
             if (pending is None or not pending.wants_temperatures) and self._autoreport_seen:
                 self._loop.call_soon_threadsafe(self._autoreport_seen.set)
 

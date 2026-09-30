@@ -3,8 +3,10 @@ import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 
 from backend.auth import get_token, token_is_valid
 from backend.config import Config, load_config
@@ -23,6 +25,7 @@ from backend.routers.serial import router as serial_router
 from backend.routers.upload import router as upload_router
 from backend.routers.ws import router as ws_router
 from backend.serial_manager import SerialError, SerialManager, SerialTimeout
+from backend.schemas import ErrorResponse, HealthResponse, WsEvent
 from backend.session import Conflict, NotReady, PrinterSession
 
 logger = logging.getLogger(__name__)
@@ -118,6 +121,26 @@ async def require_token(request: Request, call_next):
     return await call_next(request)
 
 
+def openapi_schema() -> dict:
+    """The OpenAPI schema, plus the models no route returns: the WebSocket
+    events (as the WsEvent union) and the error body."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+    for name, model in (("WsEvent", WsEvent), ("ErrorResponse", ErrorResponse)):
+        extra = TypeAdapter(model).json_schema(
+            mode="serialization", ref_template="#/components/schemas/{model}"
+        )
+        schemas.update(extra.pop("$defs", {}))
+        schemas[name] = extra
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = openapi_schema
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "null"],
@@ -127,7 +150,7 @@ app.add_middleware(
 )
 
 
-@app.get("/")
+@app.get("/", response_model=HealthResponse)
 async def health():
     return {"status": "ok"}
 

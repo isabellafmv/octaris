@@ -1,0 +1,2064 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Octaris Bioprinter",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/status": {
+      "get": {
+        "summary": "Status",
+        "operationId": "status_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ports": {
+      "get": {
+        "summary": "List Ports",
+        "operationId": "list_ports_ports_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/connect": {
+      "post": {
+        "summary": "Connect",
+        "operationId": "connect_connect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/disconnect": {
+      "post": {
+        "summary": "Disconnect",
+        "operationId": "disconnect_disconnect_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisconnectResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calibration/status": {
+      "get": {
+        "summary": "Calibration Status",
+        "description": "Check whether the printer has been calibrated this session.",
+        "operationId": "calibration_status_calibration_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calibration/zero": {
+      "post": {
+        "summary": "Calibrate Zero",
+        "description": "Set the current nozzle position as the origin.\n\nIMPORTANT: Always zero using the LEFT nozzle, even when printing with\nthe right nozzle or both. The software automatically applies the nozzle\noffset (NOZZLE_OFFSET_X) for the right nozzle.\n\nJog the LEFT nozzle to the center of the print area at the correct Z\nheight (~0.2 mm above surface) before calling this endpoint.",
+        "operationId": "calibrate_zero_calibration_zero_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CalibrateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calibration/reset": {
+      "post": {
+        "summary": "Reset Calibration",
+        "description": "Mark calibration as invalid (e.g. after a disconnect or power cycle).",
+        "operationId": "reset_calibration_calibration_reset_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationResetResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/upload": {
+      "post": {
+        "summary": "Upload Model",
+        "operationId": "upload_model_upload_post",
+        "parameters": [
+          {
+            "name": "syringe_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "left",
+              "title": "Syringe Mode"
+            }
+          },
+          {
+            "name": "nozzle_diameter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Nozzle Diameter"
+            }
+          },
+          {
+            "name": "syringe_diameter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Syringe Diameter"
+            }
+          },
+          {
+            "name": "layer_height",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Layer Height"
+            }
+          },
+          {
+            "name": "pressurize_mm",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pressurize Mm"
+            }
+          },
+          {
+            "name": "flow_multiplier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Flow Multiplier"
+            }
+          },
+          {
+            "name": "travel_retract_multiplier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Travel Retract Multiplier"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_model_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/upload/gcode": {
+      "post": {
+        "summary": "Upload Gcode",
+        "operationId": "upload_gcode_upload_gcode_post",
+        "parameters": [
+          {
+            "name": "syringe_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "left",
+              "title": "Syringe Mode"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_gcode_upload_gcode_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/start": {
+      "post": {
+        "summary": "Start Print",
+        "operationId": "start_print_print_start_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintStartResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/stop": {
+      "post": {
+        "summary": "Stop Print",
+        "operationId": "stop_print_print_stop_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/estop": {
+      "post": {
+        "summary": "Estop Print",
+        "operationId": "estop_print_print_estop_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/pause": {
+      "post": {
+        "summary": "Pause Print",
+        "operationId": "pause_print_print_pause_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/resume": {
+      "post": {
+        "summary": "Resume Print",
+        "operationId": "resume_print_print_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/extrusion": {
+      "post": {
+        "summary": "Set Extrusion Rate",
+        "operationId": "set_extrusion_rate_extrusion_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtrusionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtrusionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jog": {
+      "post": {
+        "summary": "Jog",
+        "operationId": "jog_jog_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gcode/send": {
+      "post": {
+        "summary": "Send Gcode",
+        "description": "Send a raw G-code line to the printer and return its response.",
+        "operationId": "send_gcode_gcode_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GcodeSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcodeSendResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gcode/log": {
+      "get": {
+        "summary": "Get Serial Log",
+        "description": "Return the most recent serial log entries.",
+        "operationId": "get_serial_log_gcode_log_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SerialLogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/history": {
+      "get": {
+        "summary": "Get History",
+        "description": "Recent print sessions, newest first, with their extrusion events.",
+        "operationId": "get_history_history_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_upload_gcode_upload_gcode_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_gcode_upload_gcode_post"
+      },
+      "Body_upload_model_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_model_upload_post"
+      },
+      "CalibrateRequest": {
+        "properties": {
+          "zero_z": {
+            "type": "boolean",
+            "title": "Zero Z",
+            "default": true
+          },
+          "zero_b": {
+            "type": "boolean",
+            "title": "Zero B",
+            "default": true
+          },
+          "zero_c": {
+            "type": "boolean",
+            "title": "Zero C",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "CalibrateRequest",
+        "description": "Optional overrides for the zeroing command."
+      },
+      "CalibrateResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "calibrated",
+            "title": "Status"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "command"
+        ],
+        "title": "CalibrateResponse"
+      },
+      "CalibrationResetResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "uncalibrated",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "CalibrationResetResponse"
+      },
+      "CalibrationStatusResponse": {
+        "properties": {
+          "calibrated": {
+            "type": "boolean",
+            "title": "Calibrated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calibrated"
+        ],
+        "title": "CalibrationStatusResponse"
+      },
+      "ConnectRequest": {
+        "properties": {
+          "port": {
+            "type": "string",
+            "title": "Port"
+          }
+        },
+        "type": "object",
+        "required": [
+          "port"
+        ],
+        "title": "ConnectRequest"
+      },
+      "ConnectResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "connected",
+            "title": "Status"
+          },
+          "port": {
+            "type": "string",
+            "title": "Port"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "port"
+        ],
+        "title": "ConnectResponse"
+      },
+      "DisconnectResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "disconnected",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "DisconnectResponse"
+      },
+      "ExtrusionChange": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "session_id": {
+            "type": "integer",
+            "title": "Session Id"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "extrusion_rate": {
+            "type": "integer",
+            "title": "Extrusion Rate"
+          },
+          "lines_sent": {
+            "type": "integer",
+            "title": "Lines Sent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "timestamp",
+          "extrusion_rate",
+          "lines_sent"
+        ],
+        "title": "ExtrusionChange"
+      },
+      "ExtrusionRequest": {
+        "properties": {
+          "rate": {
+            "type": "integer",
+            "title": "Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rate"
+        ],
+        "title": "ExtrusionRequest"
+      },
+      "ExtrusionResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "rate": {
+            "type": "integer",
+            "title": "Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "rate"
+        ],
+        "title": "ExtrusionResponse"
+      },
+      "GcodeSendRequest": {
+        "properties": {
+          "line": {
+            "type": "string",
+            "title": "Line"
+          }
+        },
+        "type": "object",
+        "required": [
+          "line"
+        ],
+        "title": "GcodeSendRequest"
+      },
+      "GcodeSendResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "response": {
+            "type": "string",
+            "title": "Response"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "response"
+        ],
+        "title": "GcodeSendResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse"
+      },
+      "HistoryResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/PrintSession"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "title": "HistoryResponse"
+      },
+      "JogRequest": {
+        "properties": {
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "distance": {
+            "type": "number",
+            "title": "Distance"
+          },
+          "feed_rate": {
+            "type": "number",
+            "title": "Feed Rate",
+            "default": 300
+          }
+        },
+        "type": "object",
+        "required": [
+          "axis",
+          "distance"
+        ],
+        "title": "JogRequest"
+      },
+      "JogResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "distance": {
+            "type": "number",
+            "title": "Distance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "axis",
+          "distance"
+        ],
+        "title": "JogResponse"
+      },
+      "PauseResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "paused",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "PauseResponse"
+      },
+      "PortInfo": {
+        "properties": {
+          "device": {
+            "type": "string",
+            "title": "Device"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device",
+          "description"
+        ],
+        "title": "PortInfo"
+      },
+      "PortsResponse": {
+        "properties": {
+          "ports": {
+            "items": {
+              "$ref": "#/components/schemas/PortInfo"
+            },
+            "type": "array",
+            "title": "Ports"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ports"
+        ],
+        "title": "PortsResponse"
+      },
+      "PrintSession": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "syringe_config": {
+            "type": "string",
+            "title": "Syringe Config"
+          },
+          "total_lines": {
+            "type": "integer",
+            "title": "Total Lines"
+          },
+          "completed": {
+            "type": "boolean",
+            "title": "Completed"
+          },
+          "nozzle_diameter": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nozzle Diameter"
+          },
+          "syringe_diameter": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Syringe Diameter"
+          },
+          "layer_height": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layer Height"
+          },
+          "pressurize_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pressurize Mm"
+          },
+          "flow_multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Multiplier"
+          },
+          "travel_retract_multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Travel Retract Multiplier"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "stl",
+                  "gcode"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "end_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "stopped",
+                  "estop",
+                  "error"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Reason"
+          },
+          "resume_line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Line"
+          },
+          "extrusion_events": {
+            "items": {
+              "$ref": "#/components/schemas/ExtrusionChange"
+            },
+            "type": "array",
+            "title": "Extrusion Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "started_at",
+          "ended_at",
+          "filename",
+          "syringe_config",
+          "total_lines",
+          "completed",
+          "nozzle_diameter",
+          "syringe_diameter",
+          "layer_height",
+          "pressurize_mm",
+          "flow_multiplier",
+          "travel_retract_multiplier",
+          "source",
+          "end_reason",
+          "resume_line",
+          "extrusion_events"
+        ],
+        "title": "PrintSession",
+        "description": "One print in the history."
+      },
+      "PrintStartResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "printing",
+            "title": "Status"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "lines_total"
+        ],
+        "title": "PrintStartResponse"
+      },
+      "ResumeResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "printing",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ResumeResponse"
+      },
+      "SerialLogEntry": {
+        "properties": {
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "line_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line Number"
+          }
+        },
+        "required": [
+          "timestamp",
+          "direction",
+          "content"
+        ],
+        "title": "SerialLogEntry",
+        "type": "object"
+      },
+      "SerialLogResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SerialLogEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "SerialLogResponse"
+      },
+      "Snapshot": {
+        "properties": {
+          "printer_connected": {
+            "type": "boolean",
+            "title": "Printer Connected"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "print_status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "slicing",
+              "ready",
+              "printing",
+              "paused",
+              "stopped",
+              "completed"
+            ],
+            "title": "Print Status"
+          },
+          "lines_sent": {
+            "type": "integer",
+            "title": "Lines Sent"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          },
+          "calibrated": {
+            "type": "boolean",
+            "title": "Calibrated"
+          },
+          "flow_rate": {
+            "type": "number",
+            "title": "Flow Rate"
+          },
+          "resumable": {
+            "type": "boolean",
+            "title": "Resumable"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          }
+        },
+        "type": "object",
+        "required": [
+          "printer_connected",
+          "port",
+          "print_status",
+          "lines_sent",
+          "lines_total",
+          "calibrated",
+          "flow_rate",
+          "resumable",
+          "stop_reason",
+          "time_estimate_s"
+        ],
+        "title": "Snapshot",
+        "description": "Current connection and print state."
+      },
+      "StopResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "stopped",
+            "title": "Status"
+          },
+          "resumable": {
+            "type": "boolean",
+            "title": "Resumable"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "resumable",
+          "reason"
+        ],
+        "title": "StopResponse"
+      },
+      "UploadResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ready",
+            "title": "Status"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          },
+          "feed_log_entries": {
+            "type": "integer",
+            "title": "Feed Log Entries"
+          },
+          "preview_lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Preview Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "filename",
+          "lines_total",
+          "time_estimate_s",
+          "feed_log_entries",
+          "preview_lines"
+        ],
+        "title": "UploadResult"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "CalibrationEvent": {
+        "properties": {
+          "type": {
+            "const": "calibration",
+            "default": "calibration",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "enum": [
+              "calibrated",
+              "uncalibrated"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "title": "CalibrationEvent",
+        "type": "object"
+      },
+      "ErrorEvent": {
+        "properties": {
+          "type": {
+            "const": "error",
+            "default": "error",
+            "title": "Type",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "ErrorEvent",
+        "type": "object"
+      },
+      "ExtrusionRateEvent": {
+        "properties": {
+          "type": {
+            "const": "extrusion_rate",
+            "default": "extrusion_rate",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "title": "ExtrusionRateEvent",
+        "type": "object"
+      },
+      "PrintEndEvent": {
+        "description": "A print ended; resume_line is where a resumable stop halted.",
+        "properties": {
+          "type": {
+            "const": "print_end",
+            "default": "print_end",
+            "title": "Type",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "completed",
+              "stopped",
+              "estop",
+              "error"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "resume_line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Line"
+          }
+        },
+        "required": [
+          "type",
+          "reason",
+          "resume_line"
+        ],
+        "title": "PrintEndEvent",
+        "type": "object"
+      },
+      "PrintResumedEvent": {
+        "description": "A stopped print was resumed from its checkpoint.",
+        "properties": {
+          "type": {
+            "const": "print_resumed",
+            "default": "print_resumed",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "PrintResumedEvent",
+        "type": "object"
+      },
+      "PrinterEvent": {
+        "properties": {
+          "type": {
+            "const": "printer",
+            "default": "printer",
+            "title": "Type",
+            "type": "string"
+          },
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          }
+        },
+        "required": [
+          "type",
+          "connected",
+          "port"
+        ],
+        "title": "PrinterEvent",
+        "type": "object"
+      },
+      "ProgressEvent": {
+        "properties": {
+          "type": {
+            "const": "progress",
+            "default": "progress",
+            "title": "Type",
+            "type": "string"
+          },
+          "lines_sent": {
+            "title": "Lines Sent",
+            "type": "integer"
+          },
+          "lines_total": {
+            "title": "Lines Total",
+            "type": "integer"
+          },
+          "time_remaining_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Remaining S"
+          }
+        },
+        "required": [
+          "type",
+          "lines_sent",
+          "lines_total"
+        ],
+        "title": "ProgressEvent",
+        "type": "object"
+      },
+      "SerialLogEvent": {
+        "properties": {
+          "type": {
+            "const": "serial_log",
+            "default": "serial_log",
+            "title": "Type",
+            "type": "string"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/SerialLogEntry"
+          }
+        },
+        "required": [
+          "type",
+          "entry"
+        ],
+        "title": "SerialLogEvent",
+        "type": "object"
+      },
+      "SnapshotEvent": {
+        "description": "Sent once, right after a WebSocket connects.",
+        "properties": {
+          "printer_connected": {
+            "title": "Printer Connected",
+            "type": "boolean"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "print_status": {
+            "enum": [
+              "idle",
+              "slicing",
+              "ready",
+              "printing",
+              "paused",
+              "stopped",
+              "completed"
+            ],
+            "title": "Print Status",
+            "type": "string"
+          },
+          "lines_sent": {
+            "title": "Lines Sent",
+            "type": "integer"
+          },
+          "lines_total": {
+            "title": "Lines Total",
+            "type": "integer"
+          },
+          "calibrated": {
+            "title": "Calibrated",
+            "type": "boolean"
+          },
+          "flow_rate": {
+            "title": "Flow Rate",
+            "type": "number"
+          },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          },
+          "type": {
+            "const": "snapshot",
+            "default": "snapshot",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "printer_connected",
+          "port",
+          "print_status",
+          "lines_sent",
+          "lines_total",
+          "calibrated",
+          "flow_rate",
+          "resumable",
+          "stop_reason",
+          "time_estimate_s"
+        ],
+        "title": "SnapshotEvent",
+        "type": "object"
+      },
+      "StatusEvent": {
+        "properties": {
+          "type": {
+            "const": "status",
+            "default": "status",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "enum": [
+              "idle",
+              "slicing",
+              "ready",
+              "printing",
+              "paused",
+              "stopped",
+              "completed"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "title": "StatusEvent",
+        "type": "object"
+      },
+      "StopEvent": {
+        "description": "Sent after a stop once the backend knows whether the print can resume.",
+        "properties": {
+          "type": {
+            "const": "stop",
+            "default": "stop",
+            "title": "Type",
+            "type": "string"
+          },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line"
+          }
+        },
+        "required": [
+          "type",
+          "resumable",
+          "reason"
+        ],
+        "title": "StopEvent",
+        "type": "object"
+      },
+      "Temperature": {
+        "properties": {
+          "actual": {
+            "title": "Actual",
+            "type": "number"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "actual",
+          "target"
+        ],
+        "title": "Temperature",
+        "type": "object"
+      },
+      "TemperatureEvent": {
+        "properties": {
+          "type": {
+            "const": "temperature",
+            "default": "temperature",
+            "title": "Type",
+            "type": "string"
+          },
+          "temperatures": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Temperature"
+            },
+            "title": "Temperatures",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "temperatures"
+        ],
+        "title": "TemperatureEvent",
+        "type": "object"
+      },
+      "WarningEvent": {
+        "description": "E.g. a syringe running low during a print.",
+        "properties": {
+          "type": {
+            "const": "warning",
+            "default": "warning",
+            "title": "Type",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "WarningEvent",
+        "type": "object"
+      },
+      "WsEvent": {
+        "discriminator": {
+          "mapping": {
+            "calibration": "#/components/schemas/CalibrationEvent",
+            "error": "#/components/schemas/ErrorEvent",
+            "extrusion_rate": "#/components/schemas/ExtrusionRateEvent",
+            "print_end": "#/components/schemas/PrintEndEvent",
+            "print_resumed": "#/components/schemas/PrintResumedEvent",
+            "printer": "#/components/schemas/PrinterEvent",
+            "progress": "#/components/schemas/ProgressEvent",
+            "serial_log": "#/components/schemas/SerialLogEvent",
+            "snapshot": "#/components/schemas/SnapshotEvent",
+            "status": "#/components/schemas/StatusEvent",
+            "stop": "#/components/schemas/StopEvent",
+            "temperature": "#/components/schemas/TemperatureEvent",
+            "warning": "#/components/schemas/WarningEvent"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SnapshotEvent"
+          },
+          {
+            "$ref": "#/components/schemas/StatusEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ProgressEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ExtrusionRateEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ErrorEvent"
+          },
+          {
+            "$ref": "#/components/schemas/WarningEvent"
+          },
+          {
+            "$ref": "#/components/schemas/StopEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SerialLogEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TemperatureEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrinterEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CalibrationEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrintEndEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrintResumedEvent"
+          }
+        ]
+      },
+      "ErrorResponse": {
+        "description": "The body of every 4xx/5xx response.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      }
+    }
+  }
+}

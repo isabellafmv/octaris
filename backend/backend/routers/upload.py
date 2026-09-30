@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from backend.gcode_processor import GcodeValidationError, ProcessedGcode
 from backend.limits import LimitError
 from backend.routers import get_session
+from backend.schemas import UploadResult
 from backend.session import PrinterSession
 from backend.slicer import SlicingError
 
@@ -18,18 +19,18 @@ def _check_positive(**values: float | None) -> None:
             raise HTTPException(status_code=400, detail=f"{name} must be positive")
 
 
-def _upload_result(filename: str, gcode: ProcessedGcode) -> dict:
-    return {
-        "status": "ready",
-        "filename": filename,
-        "lines_total": len(gcode.lines),
-        "time_estimate_s": gcode.time_estimate_s,
-        "feed_log_entries": len(gcode.feed_log),
-        "preview_lines": gcode.lines[:40],
-    }
+def _upload_result(filename: str, gcode: ProcessedGcode) -> UploadResult:
+    return UploadResult(
+        status="ready",
+        filename=filename,
+        lines_total=len(gcode.lines),
+        time_estimate_s=gcode.time_estimate_s,
+        feed_log_entries=len(gcode.feed_log),
+        preview_lines=gcode.lines[:40],
+    )
 
 
-@router.post("/upload")
+@router.post("/upload", response_model=UploadResult)
 async def upload_model(
     file: UploadFile,
     syringe_mode: str = "left",
@@ -64,7 +65,7 @@ async def upload_model(
     return _upload_result(file.filename, gcode)
 
 
-@router.post("/upload/gcode")
+@router.post("/upload/gcode", response_model=UploadResult)
 async def upload_gcode(
     file: UploadFile, syringe_mode: str = "left", session: PrinterSession = Depends(get_session)
 ):

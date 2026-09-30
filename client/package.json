@@ -11,6 +11,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "gen:types": "(cd ../backend && python3 -m backend.openapi) > src/renderer/src/generated/openapi.json && npx --yes openapi-typescript@7.13.0 src/renderer/src/generated/openapi.json -o src/renderer/src/generated/api.ts --default-non-nullable false",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",

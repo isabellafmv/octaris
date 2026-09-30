@@ -15,6 +15,17 @@ from backend.checkpoint import (
 )
 from backend.gcode_processor import AXES, PRESSURIZE_FEED, MachineState, scale_flow, step
 from backend.limits import LOW_TRAVEL_FRACTION, PLUNGER_AXES, plunger_step
+from backend.schemas import (
+    ErrorEvent,
+    Event,
+    PrintEndEvent,
+    PrinterEvent,
+    PrintResumedEvent,
+    ProgressEvent,
+    StatusEvent,
+    StopEvent,
+    WarningEvent,
+)
 from backend.serial_manager import (
     ResendUnavailable,
     SerialError,
@@ -201,9 +212,9 @@ class QueueWorker:
         """Set runtime flow rate as percentage (100 = normal)."""
         self._flow_rate = max(0, rate)
 
-    def _emit(self, event: dict) -> None:
+    def _emit(self, event: Event) -> None:
         if self._on_event:
-            self._on_event(event)
+            self._on_event(event.dump())
 
     def _transition(self, new: PrintState) -> None:
         if new not in TRANSITIONS[self._state]:
@@ -217,13 +228,13 @@ class QueueWorker:
         if new != STOPPED_RESUMABLE:
             self._checkpoint = None
         if self.status != old_status:
-            self._emit({"type": "status", "value": self.status.value})
+            self._emit(StatusEvent(value=self.status.value))
 
     def _end_print(self, end_reason: str, resume_line: int | None = None) -> None:
         """Report the end of a print ("completed", "stopped", "estop" or
         "error") and the line a resumable stop halted on. Called once, right
         after the print leaves ACTIVE."""
-        self._emit({"type": "print_end", "reason": end_reason, "resume_line": resume_line})
+        self._emit(PrintEndEvent(reason=end_reason, resume_line=resume_line))
 
     def load_gcode(
         self,
@@ -309,8 +320,8 @@ class QueueWorker:
         if self._state == STOPPED_RESUMABLE:
             self._transition(STOPPED)
         self._stop_reason = reason
-        self._emit({"type": "stop", "resumable": False, "reason": reason})
-        self._emit({"type": "error", "message": f"The print can't be resumed: {reason}"})
+        self._emit(StopEvent(resumable=False, reason=reason))
+        self._emit(ErrorEvent(message=f"The print can't be resumed: {reason}"))
 
     def connection_lost(self) -> None:
         """The serial connection dropped. A running print is stopped for good:
@@ -349,7 +360,7 @@ class QueueWorker:
             await self._serial.emergency_write("M410")
         except SerialError:
             logger.error("Failed to send emergency stop (M410)")
-            self._emit({"type": "printer", "connected": False, "port": None})
+            self._emit(PrinterEvent(connected=False, port=None))
             if was_active:
                 self._not_resumable(CONNECTION_LOST)
                 self._end_print(end_reason)
@@ -357,7 +368,7 @@ class QueueWorker:
 
         if not was_active:
             if not self.resumable:
-                self._emit({"type": "stop", "resumable": False, "reason": None})
+                self._emit(StopEvent(resumable=False, reason=None))
             return
         await self._take_checkpoint()
         self._end_print(end_reason, self._checkpoint.line if self._checkpoint else None)
@@ -403,7 +414,7 @@ class QueueWorker:
         self._checkpoint = Checkpoint(line=line, position=position, after=after, retract=retract)
         self._stop_reason = None
         logger.info("E-stop checkpoint: line %d (%s) at %s", line, self._lines[line], position)
-        self._emit({"type": "stop", "resumable": True, "reason": None, "line": line})
+        self._emit(StopEvent(resumable=True, reason=None, line=line))
 
     async def resume_from_stop(self) -> None:
         """Return to the e-stop checkpoint and continue the print from there.
@@ -425,7 +436,7 @@ class QueueWorker:
         self._tracker.resume_at(checkpoint.line, checkpoint.after)
         self._next = checkpoint.line + 1
         self._transition(PRINTING)
-        self._emit({"type": "print_resumed"})
+        self._emit(PrintResumedEvent())
         self._emit_progress()
         self._task = asyncio.create_task(self._run(preamble=[], seed=False))
 
@@ -474,13 +485,10 @@ class QueueWorker:
             return
         self._low_travel_warned.add(axis)
         side = "left" if axis == "B" else "right"
-        self._emit({
-            "type": "warning",
-            "message": (
-                f"The {side} syringe ({axis}) is nearly empty: "
-                f"{max(remaining, 0):.1f} of {travel:g} mm plunger travel left."
-            ),
-        })
+        self._emit(WarningEvent(message=(
+            f"The {side} syringe ({axis}) is nearly empty: "
+            f"{max(remaining, 0):.1f} of {travel:g} mm plunger travel left."
+        )))
 
     async def _run(self, preamble: list[str], seed: bool = False) -> None:
         logger.info("Queue worker started at line %d/%d", self._next, len(self._lines))
@@ -542,14 +550,10 @@ class QueueWorker:
 
     def _emit_progress(self) -> None:
         total = len(self._lines)
-        event: dict = {
-            "type": "progress",
-            "lines_sent": self._next,
-            "lines_total": total,
-        }
+        remaining = None
         if self._time_estimate_s is not None and total:
-            event["time_remaining_s"] = self._time_estimate_s * (1 - self._next / total)
-        self._emit(event)
+            remaining = self._time_estimate_s * (1 - self._next / total)
+        self._emit(ProgressEvent(lines_sent=self._next, lines_total=total, time_remaining_s=remaining))
 
     async def _send(self, line: str, numbered: bool = False) -> bool:
         """Send one line. Returns False if it failed and must not be counted."""
@@ -560,7 +564,7 @@ class QueueWorker:
             logger.error("No usable reply to %s: %s", line, exc)
             if self._state == PRINTING:
                 self._transition(PAUSED)
-            self._emit({"type": "error", "message": f"{exc}. Print paused."})
+            self._emit(ErrorEvent(message=f"{exc}. Print paused."))
             return False
         except SerialError:
             logger.error("Failed to send: %s", line)
@@ -569,5 +573,5 @@ class QueueWorker:
                 # event, is already handling this print.
                 return False
             self.connection_lost()
-            self._emit({"type": "printer", "connected": False, "port": None})
+            self._emit(PrinterEvent(connected=False, port=None))
             return False
