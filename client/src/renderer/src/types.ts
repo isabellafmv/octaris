@@ -34,7 +34,13 @@ export interface ErrorEvent {
   message: string
 }
 
-// Sent after an e-stop once the backend knows whether the print can resume
+// E.g. a syringe running low during a print
+export interface WarningEvent {
+  type: 'warning'
+  message: string
+}
+
+// Sent after a stop once the backend knows whether the print can resume
 export interface StopEvent {
   type: 'stop'
   resumable: boolean
@@ -80,6 +86,7 @@ export type WsEvent =
   | StatusEvent
   | ExtrusionRateEvent
   | ErrorEvent
+  | WarningEvent
   | StopEvent
   | SerialLogWsEvent
   | PrinterEvent

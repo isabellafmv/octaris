@@ -82,6 +82,7 @@ export function useWebSocket() {
           case 'extrusion_rate':
             return { ...prev, extrusionRate: data.value ?? prev.extrusionRate }
           case 'error':
+          case 'warning':
             return {
               ...prev,
               lastError: {

@@ -27,6 +27,9 @@ class FakeSerial:
         self.log.append(("read", "ok"))
         return b"ok\n"
 
+    def open(self) -> None:
+        self.is_open = True
+
     def close(self) -> None:
         self.is_open = False
 

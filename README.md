@@ -21,6 +21,13 @@ This removes the macOS quarantine flag so the unsigned app can launch. You only 
 
 **Hardware**
 - Printess bioprinter connected via USB (STM32 Virtual COM Port or similar)
+- A hardware emergency stop that cuts power to the motors (see below)
+
+> **Safety: the Stop button is not an emergency stop.** It sends `M410` over
+> USB, which only works if the app, the USB link and the firmware are all
+> responding, and it doesn't cut motor power. M410 over USB is not a safety
+> function. The printer needs its own hardware emergency stop (a latching,
+> red-on-yellow switch that removes motor power) within reach of the operator.
 
 **Software (for users)**
 - macOS (Apple Silicon)
@@ -60,7 +67,7 @@ Accessible from the sidebar during a print or when idle:
 - **Quick commands** — buttons for common operations (Home, position query, settings, etc.).
 - **Jog panel** — move individual axes by fixed increments (0.1, 1, or 5 mm).
 - **Go to Origin** — returns the stage to X0 Y0.
-- **Emergency STOP** — sends `M410` and flushes the queue immediately.
+- **Stop** — sends `M410` and flushes the queue immediately. This is not an emergency stop; use the printer's hardware emergency stop for that.
 
 ---
 
@@ -119,5 +126,8 @@ This builds the Python backend into a standalone binary with PyInstaller, then p
 |-----|--------|-------------|
 | `target` | `macos` / `rpi` | Platform, affects where CuraEngine is looked up |
 | `baud_rate` | integer | Serial baud rate (default `115200`) |
+| `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the left nozzle may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60). Jogs (once zeroed) and prints that would leave it are refused. |
+| `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
+| `nozzle_offset_measured` | `true` / `false` | Set to `true` once `NOZZLE_OFFSET_X` in `backend/backend/gcode_processor.py` has been measured. Right-nozzle and dual prints are refused until then. |
 
 Slicer settings live in `context/octaris_settings.json` (CuraEngine profile). Printer geometry is in `context/fdmprinter.def.json`.

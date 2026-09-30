@@ -15,6 +15,7 @@ from backend.checkpoint import (
     parse_m114,
 )
 from backend.gcode_processor import AXES, PRESSURIZE_FEED, MachineState, step
+from backend.limits import LOW_TRAVEL_FRACTION, PLUNGER_AXES, plunger_step
 from backend.serial_manager import SerialError, SerialManager, SerialTimeout
 
 _BC_RUNTIME = re.compile(r"([BC])(-?\d+\.?\d*)")
@@ -23,6 +24,10 @@ _BC_RUNTIME = re.compile(r"([BC])(-?\d+\.?\d*)")
 # the printer's move buffer can hold, so the line it stopped on is always
 # among them.
 RECENT_LINES = 32
+
+# Why a print can't be resumed after the serial connection dropped. The board
+# may have reset (reopening the port can do that), losing its zero.
+CONNECTION_LOST = "Connection lost — re-zero before printing"
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,7 @@ class QueueWorker:
         on_print_end: Callable[[str, int | None], None] | None = None,
         on_print_resumed: Callable[[], None] | None = None,
         retract_on_estop: bool = True,
+        syringe_travel_mm: float | None = None,
     ):
         self._serial = serial_manager
         self._priority_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -85,6 +91,11 @@ class QueueWorker:
         self._print_active = False
         self._flow_rate: float = 100.0  # percentage, same semantics as M221
         self._time_estimate_s: float | None = None
+        # Plunger travel of a full syringe, and how far each plunger has been
+        # pushed (as sent) since the print was loaded.
+        self._syringe_travel_mm = syringe_travel_mm
+        self._plunger_pushed: dict[str, float] = {}
+        self._low_travel_warned: set[str] = set()
 
     @property
     def status(self) -> PrintStatus:
@@ -113,6 +124,11 @@ class QueueWorker:
     @property
     def stop_reason(self) -> str | None:
         return self._stop_reason
+
+    @property
+    def print_active(self) -> bool:
+        """A print is printing or paused (not yet stopped or finished)."""
+        return self._print_active
 
     def set_flow_rate(self, rate: float) -> None:
         """Set runtime flow rate as percentage (100 = normal)."""
@@ -167,6 +183,8 @@ class QueueWorker:
         self._time_estimate_s = time_estimate_s
         self._extrusion_axes = tuple(extrusion_axes)
         self._retract_mm = pressurize_mm
+        self._plunger_pushed = {axis: 0.0 for axis in PLUNGER_AXES}
+        self._low_travel_warned = set()
         self._clear_checkpoint()
 
     def enqueue_priority(self, command: str) -> None:
@@ -179,16 +197,23 @@ class QueueWorker:
             except asyncio.QueueEmpty:
                 break
 
-    def start(self) -> None:
+    def start(self, start_position: dict[str, float] | None = None) -> None:
+        """Start the loaded print. `start_position` is the printer's position
+        as just read with M114; without it the worker reads it itself."""
         if self._task and not self._task.done():
             return
         self._clear_checkpoint()
+        if start_position is not None:
+            self._sent_state = MachineState(pos={ax: start_position.get(ax) for ax in AXES})
+            self._seed_error = None
         self._status = PrintStatus.PRINTING
         self._print_active = True
         self._paused.set()
         self._emit({"type": "status", "value": self._status.value})
         # Keep idle motors enabled so a stopped print holds its position.
-        self._task = asyncio.create_task(self._run(preamble=["M84 S0"], seed=True))
+        self._task = asyncio.create_task(
+            self._run(preamble=["M84 S0"], seed=start_position is None)
+        )
 
     def pause(self) -> None:
         if self._status == PrintStatus.PRINTING:
@@ -214,6 +239,21 @@ class QueueWorker:
         self._stop_reason = reason
         self._emit({"type": "stop", "resumable": False, "reason": reason})
         self._emit({"type": "error", "message": f"The print can't be resumed: {reason}"})
+
+    def connection_lost(self) -> None:
+        """The serial connection dropped. A running print is stopped for good:
+        the board may have reset and lost its zero, so it can't be resumed."""
+        if not self._print_active:
+            self.invalidate_checkpoint(CONNECTION_LOST)
+            return
+        logger.error("Connection lost during a print; stopping it")
+        self._print_active = False
+        self._status = PrintStatus.STOPPED
+        self.flush_priority()
+        self._paused.set()  # unblock the worker so it can exit
+        self._emit({"type": "status", "value": self._status.value})
+        self._not_resumable(CONNECTION_LOST)
+        self._notify_end("error", None)
 
     def invalidate_checkpoint(self, reason: str) -> None:
         """Drop the resume checkpoint, e.g. after something moved the plungers
@@ -244,7 +284,7 @@ class QueueWorker:
             logger.error("Failed to send emergency stop (M410)")
             self._emit({"type": "printer", "connected": False, "port": None})
             if was_active:
-                self._not_resumable("The printer disconnected")
+                self._not_resumable(CONNECTION_LOST)
                 self._notify_end(end_reason, None)
             return
 
@@ -370,6 +410,27 @@ class QueueWorker:
         self._sent_state = after
         if index is not None:
             self._recent.append((index, before, after))
+        for axis, delta in plunger_step(before, after, line).items():
+            self._plunger_pushed[axis] = self._plunger_pushed.get(axis, 0.0) - delta
+            self._check_plunger_travel(axis)
+
+    def _check_plunger_travel(self, axis: str) -> None:
+        """Warn once per print when a syringe has under 10% of its travel left."""
+        travel = self._syringe_travel_mm
+        if not travel or axis in self._low_travel_warned:
+            return
+        remaining = travel - self._plunger_pushed[axis]
+        if remaining >= LOW_TRAVEL_FRACTION * travel:
+            return
+        self._low_travel_warned.add(axis)
+        side = "left" if axis == "B" else "right"
+        self._emit({
+            "type": "warning",
+            "message": (
+                f"The {side} syringe ({axis}) is nearly empty: "
+                f"{max(remaining, 0):.1f} of {travel:g} mm plunger travel left."
+            ),
+        })
 
     async def _run(self, preamble: list[str], seed: bool = False) -> None:
         logger.info("Queue worker started at line %d/%d", self._next, len(self._lines))
@@ -469,11 +530,9 @@ class QueueWorker:
         except SerialError:
             logger.error("Failed to send: %s", line)
             if self._status == PrintStatus.STOPPED:
-                return False  # an e-stop is already handling this print
-            self._status = PrintStatus.STOPPED
+                # An e-stop, or connection_lost() via the disconnect
+                # callback, is already handling this print.
+                return False
             self._emit({"type": "printer", "connected": False, "port": None})
-            self._emit({"type": "status", "value": self._status.value})
-            if self._print_active:
-                self._not_resumable("The printer disconnected")
-            self._finish("error")
+            self.connection_lost()
             return False

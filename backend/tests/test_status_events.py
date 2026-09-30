@@ -111,6 +111,8 @@ def test_disconnect_endpoint_publishes_printer_disconnected_event():
 
             client.post("/connect", json={"port": "/dev/ttyUSB0"})
             ws.receive_json()  # printer connected event
+            # Opening the port may reset the board, so calibration is reset
+            assert ws.receive_json() == {"type": "calibration", "value": "uncalibrated"}
 
             resp = client.post("/disconnect")
             assert resp.status_code == 200

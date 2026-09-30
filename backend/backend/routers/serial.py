@@ -16,6 +16,18 @@ class ConnectRequest(BaseModel):
     port: str
 
 
+def _refuse_during_print(request: Request) -> None:
+    # (Re)opening or closing the port can reset the board mid-print.
+    if request.app.state.queue_worker.print_active:
+        raise HTTPException(status_code=409, detail="Stop the print first")
+
+
+def _reset_calibration(request: Request) -> None:
+    """Opening the port can reset the board, which loses the G92 zero."""
+    request.app.state.is_calibrated = False
+    request.app.state.event_bus.publish({"type": "calibration", "value": "uncalibrated"})
+
+
 @router.get("/ports")
 async def list_ports(request: Request):
     from backend.serial_manager import SerialManager
@@ -29,6 +41,7 @@ async def list_ports(request: Request):
 async def connect(request: Request, body: ConnectRequest):
     from backend.serial_manager import SerialManager
 
+    _refuse_during_print(request)
     manager: SerialManager = request.app.state.serial_manager
     config = request.app.state.config
     try:
@@ -46,6 +59,7 @@ async def connect(request: Request, body: ConnectRequest):
     request.app.state.event_bus.publish(
         {"type": "printer", "connected": True, "port": body.port}
     )
+    _reset_calibration(request)
     return {"status": "connected", "port": body.port}
 
 
@@ -53,10 +67,12 @@ async def connect(request: Request, body: ConnectRequest):
 async def disconnect(request: Request):
     from backend.serial_manager import SerialManager
 
+    _refuse_during_print(request)
     manager: SerialManager = request.app.state.serial_manager
     await manager.disconnect()
     request.app.state.queue_worker.invalidate_checkpoint("The printer disconnected")
     request.app.state.event_bus.publish(
         {"type": "printer", "connected": False, "port": None}
     )
+    _reset_calibration(request)
     return {"status": "disconnected"}

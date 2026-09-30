@@ -25,6 +25,45 @@ from backend.serial_manager import SerialManager
 logger = logging.getLogger(__name__)
 
 
+def make_serial_manager(app: FastAPI) -> SerialManager:
+    """The app's SerialManager, wired to the event bus, calibration state and
+    queue worker (all looked up on app.state when the callbacks fire)."""
+
+    def _reset_calibration():
+        app.state.is_calibrated = False
+        app.state.event_bus.publish({"type": "calibration", "value": "uncalibrated"})
+
+    def _on_disconnect():
+        # Stops a running print for good (the board may reset on reconnect).
+        app.state.queue_worker.connection_lost()
+        app.state.event_bus.publish({"type": "printer", "connected": False, "port": None})
+        _reset_calibration()
+
+    def _on_connect(port: str):
+        app.state.event_bus.publish({"type": "printer", "connected": True, "port": port})
+        # Opening the port may have reset the board, losing the G92 zero.
+        _reset_calibration()
+
+    return SerialManager(
+        on_disconnect=_on_disconnect,
+        on_serial_log=lambda entry: app.state.event_bus.publish(entry),
+        on_connect=_on_connect,
+        # Never reconnect automatically during a print; see connection_lost().
+        can_reconnect=lambda: not app.state.queue_worker.print_active,
+    )
+
+
+def make_queue_worker(app: FastAPI) -> QueueWorker:
+    return QueueWorker(
+        serial_manager=app.state.serial_manager,
+        on_event=app.state.event_bus.publish,
+        on_print_end=app.state.history.end,
+        on_print_resumed=app.state.history.reopen,
+        retract_on_estop=app.state.config.retract_on_estop,
+        syringe_travel_mm=app.state.config.syringe_travel_mm,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not get_token():
@@ -33,29 +72,10 @@ async def lifespan(app: FastAPI):
         )
     app.state.config = load_config()
     app.state.event_bus = EventBus()
-    def _on_disconnect():
-        app.state.is_calibrated = False
-        app.state.queue_worker.invalidate_checkpoint("The printer disconnected")
-        app.state.event_bus.publish({"type": "printer", "connected": False, "port": None})
-        app.state.event_bus.publish({"type": "calibration", "value": "uncalibrated"})
-
-    def _on_connect(port: str):
-        app.state.event_bus.publish({"type": "printer", "connected": True, "port": port})
-
-    app.state.serial_manager = SerialManager(
-        on_disconnect=_on_disconnect,
-        on_serial_log=lambda entry: app.state.event_bus.publish(entry),
-        on_connect=_on_connect,
-    )
+    app.state.serial_manager = make_serial_manager(app)
     app.state.db = init_db()
     app.state.history = PrintHistory(app.state.db)
-    app.state.queue_worker = QueueWorker(
-        serial_manager=app.state.serial_manager,
-        on_event=app.state.event_bus.publish,
-        on_print_end=app.state.history.end,
-        on_print_resumed=app.state.history.reopen,
-        retract_on_estop=app.state.config.retract_on_estop,
-    )
+    app.state.queue_worker = make_queue_worker(app)
     app.state.processed_gcode = None
     app.state.print_source = None
     app.state.print_settings = {}

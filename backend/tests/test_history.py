@@ -15,21 +15,29 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 class FakeSerial:
     """Answers every command with "ok" after a short delay, so a print of a
-    few hundred lines is still running while the test talks to the API."""
+    few hundred lines is still running while the test talks to the API.
+    M114 reports the origin, except after M400 (the position read after a
+    stop), so stops are never resumable here."""
 
     def __init__(self, delay: float = 0.005):
         self.is_open = True
         self.delay = delay
         self.written: list[str] = []
+        self._pending: list[bytes] = []
 
     def write(self, data: bytes) -> None:
-        self.written.append(data.decode().strip())
+        line = data.decode().strip()
+        self.written.append(line)
+        if line == "M114" and self.written[-2:-1] != ["M400"]:
+            self._pending = [b"X:0.00 Y:0.00 Z:0.00 A:0.00 B:0.00 C:0.00 Count X:0\n"]
 
     def flush(self) -> None:
         pass
 
     def readline(self) -> bytes:
         time.sleep(self.delay)
+        if self._pending:
+            return self._pending.pop(0)
         return b"ok\n"
 
     def close(self) -> None:
@@ -42,11 +50,13 @@ def printer(client):
     app.state.serial_manager._serial = fake
     app.state.serial_manager._port = "/dev/fake"
     app.state.is_calibrated = True
+    # The synthetic prints below use both syringes
+    app.state.config.nozzle_offset_measured = True
     return fake
 
 
 async def upload_stl(client, tmp_path, n_lines: int, **params):
-    result = ProcessedGcode(lines=[f"G1 X{i} B0.01 F300" for i in range(n_lines)])
+    result = ProcessedGcode(lines=[f"G1 X{i % 20} B0.01 F300" for i in range(n_lines)])
     with patch("backend.routers.upload.slice_model", AsyncMock(return_value=result)), \
          patch("backend.routers.upload.DATA_DIR", tmp_path):
         resp = await client.post(

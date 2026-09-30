@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 
 from backend.gcode_processor import GcodeValidationError, SyringeMode, process_gcode
+from backend.limits import LimitError, check_path
 from backend.slicer import SlicingError, slice_model
 
 router = APIRouter()
@@ -80,6 +81,12 @@ async def upload_model(
         event_bus.publish({"type": "status", "value": "idle"})
         raise HTTPException(status_code=500, detail=str(exc))
 
+    try:
+        check_path(request.app.state.config.bed, result.lines)
+    except LimitError as exc:
+        event_bus.publish({"type": "status", "value": "idle"})
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Store processed gcode, and the settings it was made with, for print start
     request.app.state.queue_worker.invalidate_checkpoint("A new file was loaded")
     request.app.state.processed_gcode = result
@@ -124,6 +131,11 @@ async def upload_gcode(request: Request, file: UploadFile, syringe_mode: str = "
         result = process_gcode(raw_gcode, mode)
     except GcodeValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        check_path(request.app.state.config.bed, result.lines)
+    except LimitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     request.app.state.queue_worker.invalidate_checkpoint("A new file was loaded")
     request.app.state.processed_gcode = result
