@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from backend.queue_worker import PrintStatus, QueueWorker
-from backend.serial_manager import SerialError, SerialManager, SerialTimeout
+from backend.routers import get_session
+from backend.session import PrinterSession
 
 router = APIRouter(prefix="/calibration")
 
@@ -15,13 +15,15 @@ class CalibrateRequest(BaseModel):
 
 
 @router.get("/status")
-async def calibration_status(request: Request):
+async def calibration_status(session: PrinterSession = Depends(get_session)):
     """Check whether the printer has been calibrated this session."""
-    return {"calibrated": getattr(request.app.state, "is_calibrated", False)}
+    return {"calibrated": session.calibrated}
 
 
 @router.post("/zero")
-async def calibrate_zero(request: Request, body: CalibrateRequest | None = None):
+async def calibrate_zero(
+    body: CalibrateRequest | None = None, session: PrinterSession = Depends(get_session)
+):
     """
     Set the current nozzle position as the origin.
 
@@ -32,53 +34,13 @@ async def calibrate_zero(request: Request, body: CalibrateRequest | None = None)
     Jog the LEFT nozzle to the center of the print area at the correct Z
     height (~0.2 mm above surface) before calling this endpoint.
     """
-    worker: QueueWorker = request.app.state.queue_worker
-    if worker.status == PrintStatus.PRINTING:
-        raise HTTPException(status_code=409, detail="Pause the print first")
-    if worker.status == PrintStatus.PAUSED:
-        raise HTTPException(status_code=409, detail="Can't re-zero during a print")
-
-    serial: SerialManager = request.app.state.serial_manager
-    if not serial.is_connected:
-        raise HTTPException(status_code=400, detail="Printer not connected")
-
-    if body is None:
-        body = CalibrateRequest()
-
-    # Build the G92 command based on the current syringe mode and request
-    mode = getattr(request.app.state, "current_syringe_mode", "left")
-
-    axes = "X0 Y0"
-    if body.zero_z:
-        z_axis = "Z" if mode in ("left", "both") else "A"
-        axes += f" {z_axis}0"
-    if body.zero_b:
-        axes += " B0"
-    if body.zero_c or mode == "both":
-        axes += " C0"
-
-    worker.invalidate_checkpoint("The printer was re-zeroed")
-    try:
-        await serial.send(f"G92 {axes}")
-    except SerialTimeout as exc:
-        raise HTTPException(status_code=504, detail=str(exc)) from exc
-    except SerialError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    request.app.state.is_calibrated = True
-
-    event_bus = request.app.state.event_bus
-    event_bus.publish({"type": "calibration", "value": "calibrated"})
-
-    return {"status": "calibrated", "command": f"G92 {axes}"}
+    body = body or CalibrateRequest()
+    command = await session.calibrate(body.zero_z, body.zero_b, body.zero_c)
+    return {"status": "calibrated", "command": command}
 
 
 @router.post("/reset")
-async def reset_calibration(request: Request):
+async def reset_calibration(session: PrinterSession = Depends(get_session)):
     """Mark calibration as invalid (e.g. after a disconnect or power cycle)."""
-    request.app.state.is_calibrated = False
-
-    event_bus = request.app.state.event_bus
-    event_bus.publish({"type": "calibration", "value": "uncalibrated"})
-
+    session.reset_calibration()
     return {"status": "uncalibrated"}

@@ -51,7 +51,7 @@ class FakeSerial:
 async def printer(client):
     fake = FakeSerial()
     attach(app.state.serial_manager, fake)
-    app.state.is_calibrated = True
+    app.state.session.calibrated = True
     # The synthetic prints below use both syringes
     app.state.config.nozzle_offset_measured = True
     return fake
@@ -59,8 +59,8 @@ async def printer(client):
 
 async def upload_stl(client, tmp_path, n_lines: int, **params):
     result = ProcessedGcode(lines=[f"G1 X{i % 20} B0.01 F300" for i in range(n_lines)])
-    with patch("backend.routers.upload.slice_model", AsyncMock(return_value=result)), \
-         patch("backend.routers.upload.DATA_DIR", tmp_path):
+    with patch("backend.session.slice_model", AsyncMock(return_value=result)), \
+         patch("backend.session.DATA_DIR", tmp_path):
         resp = await client.post(
             "/upload",
             params={"syringe_mode": "both", **params},

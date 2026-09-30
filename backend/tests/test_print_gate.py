@@ -4,7 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from backend.main import app
+from backend.gcode_processor import ProcessedGcode
 from backend.queue_worker import PrintState, PrintStatus
+from backend.session import LoadedPrint
 
 
 def set_status(status: PrintStatus) -> None:
@@ -110,7 +112,7 @@ async def test_pause_without_print_is_409(client):
 
 async def test_start_while_printing_is_409(client):
     connect_fake_serial()
-    app.state.processed_gcode = object()  # never reached
+    app.state.session.loaded = LoadedPrint(ProcessedGcode(lines=[]))
     set_status(PrintStatus.PRINTING)
 
     resp = await client.post("/print/start")

@@ -171,7 +171,7 @@ async def test_full_print_lifecycle(client):
     resp = await client.post("/calibration/zero")
     assert resp.status_code == 200
     assert resp.json()["command"] == "G92 X0 Y0 Z0 B0"
-    assert app.state.is_calibrated is True
+    assert app.state.session.calibrated is True
 
     # 3. upload the fixture G-code
     await upload_sample(client)
@@ -399,7 +399,7 @@ async def test_timeout_pauses_print_and_retries_on_resume(client, monkeypatch):
     worker = app.state.queue_worker
     fake = FakePrinter()
     attach(app.state.serial_manager, fake)
-    app.state.is_calibrated = True
+    app.state.session.calibrated = True
 
     await upload_sample(client)
 

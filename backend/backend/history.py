@@ -6,6 +6,7 @@ import sqlite3
 from backend.database import (
     create_session,
     end_session,
+    list_sessions,
     log_extrusion_event,
     reopen_session,
 )
@@ -43,6 +44,10 @@ class PrintHistory:
             source=source, settings=settings,
         )
         return self._session_id
+
+    def list(self, limit: int) -> list[dict]:
+        """Recent sessions, newest first, with their extrusion events."""
+        return list_sessions(self._conn, limit)
 
     def log_extrusion(self, rate: int, lines_sent: int) -> None:
         if self._session_id is not None:

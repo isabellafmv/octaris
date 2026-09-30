@@ -9,6 +9,7 @@ from backend.checkpoint import Checkpoint, build_resume_commands, locate_line, p
 from backend.gcode_processor import MachineState, ProcessedGcode, process_gcode, simulate_states
 from backend.main import app
 from backend.queue_worker import PrintStatus
+from backend.session import LoadedPrint
 from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -114,7 +115,7 @@ async def wait_for(condition, timeout: float = 3.0) -> None:
 async def printer(client):
     fake = FakePrinter()
     attach(app.state.serial_manager, fake)
-    app.state.is_calibrated = True
+    app.state.session.calibrated = True
     events: list[dict] = []
     app.state.queue_worker._on_event = events.append
     fake.events = events
@@ -405,10 +406,10 @@ async def test_g91_only_file_resumable_after_seed(client, printer):
     # No G90/absolute move anywhere in this file — without the print-start
     # M114 seed, every axis would stay None forever (nothing to accumulate
     # relative deltas from) and the stop could never be located.
-    app.state.processed_gcode = ProcessedGcode(
-        lines=list(G91_ONLY), extrusion_axes=("B",), pressurize_mm=0.2,
+    app.state.session.loaded = LoadedPrint(
+        ProcessedGcode(lines=list(G91_ONLY), extrusion_axes=("B",), pressurize_mm=0.2),
+        source="gcode",
     )
-    app.state.print_source = "gcode"
 
     # Seeded at (0,0,0,0,0,0). After lines 1-2: X=10, Y=5, B=-1.0. Stopped
     # mid line 3 (X10->10, Y5->10, B-1.0->-1.5); midpoint of that segment:

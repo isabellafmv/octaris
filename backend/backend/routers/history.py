@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query
 
-from backend.database import list_sessions
+from backend.routers import get_session
+from backend.session import PrinterSession
 
 router = APIRouter()
 
 
 @router.get("/history")
-async def get_history(request: Request, limit: int = Query(50, ge=1, le=500)):
+async def get_history(
+    limit: int = Query(50, ge=1, le=500), session: PrinterSession = Depends(get_session)
+):
     """Recent print sessions, newest first, with their extrusion events."""
-    return {"sessions": list_sessions(request.app.state.db, limit)}
+    return {"sessions": session.print_history(limit)}

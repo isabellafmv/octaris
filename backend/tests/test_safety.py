@@ -23,6 +23,7 @@ from backend.limits import (
 from backend.main import app
 from backend.queue_worker import CONNECTION_LOST, PrintState, PrintStatus, QueueWorker
 from backend.serial_manager import SerialError, SerialManager, _open_port
+from backend.session import LoadedPrint
 from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -87,7 +88,7 @@ async def wait_for(condition, timeout: float = 3.0) -> None:
 async def printer(client):
     fake = FakePrinter()
     attach(app.state.serial_manager, fake)
-    app.state.is_calibrated = True
+    app.state.session.calibrated = True
     return fake
 
 
@@ -180,7 +181,7 @@ async def test_connection_lost_mid_print_stops_for_good(client, printer, events)
     assert not app.state.serial_manager.is_connected
     assert not worker.resumable
     assert worker.stop_reason == CONNECTION_LOST
-    assert app.state.is_calibrated is False
+    assert app.state.session.calibrated is False
     published = events()
     assert {"type": "status", "value": "stopped"} in published
     assert {"type": "printer", "connected": False, "port": None} in published
@@ -211,7 +212,7 @@ async def test_connection_lost_while_paused_stops_print(client, printer):
     opener.assert_not_called()
     assert worker.status == PrintStatus.STOPPED
     assert worker.stop_reason == CONNECTION_LOST
-    assert app.state.is_calibrated is False
+    assert app.state.session.calibrated is False
 
 
 async def test_idle_reconnect_resets_calibration(client, printer, events):
@@ -224,7 +225,7 @@ async def test_idle_reconnect_resets_calibration(client, printer, events):
     assert resp.status_code == 500
     assert "not re-sent" in resp.json()["detail"]
     assert app.state.serial_manager.is_connected
-    assert app.state.is_calibrated is False
+    assert app.state.session.calibrated is False
     published = events()
     assert {"type": "printer", "connected": True, "port": "/dev/fake"} in published
     # (Ignoring serial log entries, e.g. the M155 sent after reconnecting.)
@@ -246,10 +247,10 @@ async def test_port_changes_refused_during_print(client, printer, route, body):
 
 
 async def test_manual_connect_resets_calibration(client):
-    app.state.is_calibrated = True
+    app.state.session.calibrated = True
     with patch("backend.serial_manager.serial.Serial", return_value=FakePrinter()):
         assert (await client.post("/connect", json={"port": "/dev/fake"})).status_code == 200
-    assert app.state.is_calibrated is False
+    assert app.state.session.calibrated is False
 
 
 # --- 2. bed limits ------------------------------------------------------------
@@ -295,13 +296,13 @@ async def test_upload_rejects_print_leaving_bed(client):
     assert resp.status_code == 422
     assert "leaves the bed" in resp.json()["detail"]
     assert "X to 45 mm" in resp.json()["detail"]
-    assert app.state.processed_gcode is None
+    assert app.state.session.loaded is None
 
 
 async def test_upload_stl_rejects_print_leaving_bed(client, tmp_path):
     result = ProcessedGcode(lines=["G90", "G1 X0 Y-40 F300"])
-    with patch("backend.routers.upload.slice_model", AsyncMock(return_value=result)), \
-         patch("backend.routers.upload.DATA_DIR", tmp_path):
+    with patch("backend.session.slice_model", AsyncMock(return_value=result)), \
+         patch("backend.session.DATA_DIR", tmp_path):
         resp = await client.post(
             "/upload", files={"file": ("cube.stl", b"solid", "application/octet-stream")},
         )
@@ -311,7 +312,7 @@ async def test_upload_stl_rejects_print_leaving_bed(client, tmp_path):
 
 
 async def test_print_start_checks_path_from_actual_position(client, printer):
-    app.state.processed_gcode = ProcessedGcode(lines=["G91", "G1 X10 F200", "G90"])
+    app.state.session.loaded = LoadedPrint(ProcessedGcode(lines=["G91", "G1 X10 F200", "G90"]))
     printer.position = m114(X=25, Y=0, Z=1, A=0, B=0, C=0)
 
     resp = await client.post("/print/start")
@@ -325,7 +326,7 @@ async def test_refused_start_keeps_resume_checkpoint(client, printer):
     worker = app.state.queue_worker
     worker._state = PrintState.STOPPED_RESUMABLE
     worker._checkpoint = object()  # stands in for a real one
-    app.state.processed_gcode = ProcessedGcode(lines=["G90", "G1 X50 F200"])
+    app.state.session.loaded = LoadedPrint(ProcessedGcode(lines=["G90", "G1 X50 F200"]))
 
     assert (await client.post("/print/start")).status_code == 400
     assert worker.resumable
@@ -356,7 +357,7 @@ async def test_jog_seeds_unknown_position_from_m114(client, printer):
 
 
 async def test_jog_unlimited_before_calibration(client, printer):
-    app.state.is_calibrated = False
+    app.state.session.calibrated = False
 
     resp = await client.post("/jog", json={"axis": "X", "distance": 100})
 

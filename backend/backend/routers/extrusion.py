@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from backend.queue_worker import QueueWorker
+from backend.routers import get_session
+from backend.session import PrinterSession
 
 router = APIRouter()
 
@@ -11,17 +12,6 @@ class ExtrusionRequest(BaseModel):
 
 
 @router.post("/extrusion")
-async def set_extrusion_rate(request: Request, body: ExtrusionRequest):
-    if body.rate < 50 or body.rate > 150:
-        raise HTTPException(status_code=400, detail="Rate must be between 50 and 150")
-
-    worker: QueueWorker = request.app.state.queue_worker
-    worker.set_flow_rate(body.rate)
-
-    # No-op unless a print session is active
-    request.app.state.history.log_extrusion(body.rate, worker.lines_sent)
-
-    event_bus = request.app.state.event_bus
-    event_bus.publish({"type": "extrusion_rate", "value": body.rate})
-
+async def set_extrusion_rate(body: ExtrusionRequest, session: PrinterSession = Depends(get_session)):
+    session.set_flow_rate(body.rate)
     return {"status": "ok", "rate": body.rate}

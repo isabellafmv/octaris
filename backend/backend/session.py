@@ -1,0 +1,381 @@
+"""The printer as the app sees it: connection, calibration, the loaded print
+and the print itself. Routers translate HTTP to calls on PrinterSession and
+its exceptions back to HTTP (see main.py for the status codes)."""
+from __future__ import annotations
+
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+from backend.checkpoint import parse_m114
+from backend.config import Config
+from backend.gcode_processor import (
+    NOZZLE_OFFSET_X,
+    ProcessedGcode,
+    SyringeMode,
+    parse_words,
+    process_gcode,
+    scale_flow,
+)
+from backend.history import PrintHistory
+from backend.limits import (
+    check_jog,
+    check_path,
+    check_plunger_travel,
+    plunger_travel_needed,
+    start_state,
+)
+from backend.queue_worker import InvalidTransition, PrintStatus, QueueWorker
+from backend.serial_manager import SerialError, SerialManager
+from backend.slicer import slice_model
+
+# Where uploaded models are written for the slicer
+DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
+
+JOG_AXES = ("X", "Y", "Z", "A", "B", "C")
+
+# Steps/mm, sent on every connect: EEPROM is disabled on this board
+STEPS_PER_MM = "M92 X800 Y800 Z800 A800 B800 C800"
+
+NOZZLE_OFFSET_UNMEASURED = (
+    f"Right-nozzle and dual prints are disabled: the nozzle offset "
+    f"(NOZZLE_OFFSET_X = {NOZZLE_OFFSET_X:g} mm) is a placeholder that hasn't been "
+    f"measured. Zero at the left nozzle, jog until the right nozzle is over the "
+    f"same point, and read the X distance. Set NOZZLE_OFFSET_X in "
+    f"backend/backend/gcode_processor.py to it, then set "
+    f'"nozzle_offset_measured": true in config.json and restart.'
+)
+
+
+class NotReady(Exception):
+    """The request needs something that isn't there yet (a connection,
+    calibration, a loaded file) or has invalid input."""
+
+
+class Conflict(Exception):
+    """The request isn't allowed in the printer's current state."""
+
+
+@dataclass
+class LoadedPrint:
+    gcode: ProcessedGcode
+    filename: str = "unknown"
+    mode: SyringeMode = "left"
+    source: Literal["stl", "gcode"] | None = None
+    # The upload settings it was made with, recorded in the print history
+    settings: dict[str, float | None] = field(default_factory=dict)
+
+
+class PrinterSession:
+    def __init__(
+        self,
+        config: Config,
+        serial: SerialManager,
+        worker: QueueWorker,
+        history: PrintHistory,
+        publish: Callable[[dict[str, Any]], None],
+    ):
+        self.config = config
+        self.serial = serial
+        self.worker = worker
+        self.history = history
+        self._publish = publish
+        self.loaded: LoadedPrint | None = None
+        # The G92 zero was set since the printer was last (re)connected
+        self.calibrated = False
+
+    @property
+    def syringe_mode(self) -> SyringeMode:
+        return self.loaded.mode if self.loaded else "left"
+
+    def snapshot(self) -> dict[str, Any]:
+        """Current connection/print state, for GET /status and the ws snapshot."""
+        worker = self.worker
+        return {
+            "printer_connected": self.serial.is_connected,
+            "port": self.serial.port,
+            "print_status": worker.status.value,
+            "lines_sent": worker.lines_sent,
+            "lines_total": worker.lines_total,
+            "calibrated": self.calibrated,
+            "flow_rate": worker.flow_rate,
+            "resumable": worker.resumable,
+            "stop_reason": worker.stop_reason,
+            "time_estimate_s": self.loaded.gcode.time_estimate_s if self.loaded else None,
+        }
+
+    # --- connection -----------------------------------------------------------
+
+    def _refuse_during_print(self) -> None:
+        # (Re)opening or closing the port can reset the board mid-print.
+        if self.worker.print_active:
+            raise Conflict("Stop the print first")
+
+    async def connect(self, port: str) -> None:
+        """Open `port`. Raises SerialError if it can't be opened."""
+        self._refuse_during_print()
+        await self.serial.connect(port, self.config.baud_rate)
+        self.worker.invalidate_checkpoint("The printer was reconnected")
+        try:
+            await self.serial.send(STEPS_PER_MM)
+        except SerialError:
+            pass  # non-fatal — printer still usable
+        self._publish({"type": "printer", "connected": True, "port": port})
+        self.reset_calibration()
+
+    async def disconnect(self) -> None:
+        self._refuse_during_print()
+        await self.serial.disconnect()
+        self.worker.invalidate_checkpoint("The printer disconnected")
+        self._publish({"type": "printer", "connected": False, "port": None})
+        self.reset_calibration()
+
+    def connection_lost(self) -> None:
+        """The port failed. Stops a running print for good (the board may
+        reset on reconnect)."""
+        self.worker.connection_lost()
+        self._publish({"type": "printer", "connected": False, "port": None})
+        self.reset_calibration()
+
+    def reconnected(self, port: str) -> None:
+        """The serial manager reopened the port by itself."""
+        self._publish({"type": "printer", "connected": True, "port": port})
+        # Opening the port may have reset the board, losing the G92 zero.
+        self.reset_calibration()
+
+    def can_reconnect(self) -> bool:
+        # Never reconnect automatically during a print; see connection_lost().
+        # A line the worker queued before the connection dropped must not
+        # reopen the port either, hence `sending`.
+        return not (self.worker.print_active or self.worker.sending)
+
+    def list_ports(self) -> list[dict[str, str]]:
+        return self.serial.list_ports()
+
+    def _require_connection(self) -> None:
+        if not self.serial.is_connected:
+            raise NotReady("Printer not connected")
+
+    # --- calibration ------------------------------------------------------------
+
+    async def calibrate(self, zero_z: bool = True, zero_b: bool = True, zero_c: bool = False) -> str:
+        """Set the current nozzle position as the origin; returns the G92 sent.
+
+        Always zero at the LEFT nozzle, even for right or dual prints: the
+        right nozzle's offset (NOZZLE_OFFSET_X) is applied in post-processing.
+        """
+        if self.worker.status == PrintStatus.PRINTING:
+            raise Conflict("Pause the print first")
+        if self.worker.status == PrintStatus.PAUSED:
+            raise Conflict("Can't re-zero during a print")
+        self._require_connection()
+
+        mode = self.syringe_mode
+        axes = "X0 Y0"
+        if zero_z:
+            axes += " Z0" if mode in ("left", "both") else " A0"
+        if zero_b:
+            axes += " B0"
+        if zero_c or mode == "both":
+            axes += " C0"
+        command = f"G92 {axes}"
+
+        self.worker.invalidate_checkpoint("The printer was re-zeroed")
+        await self.serial.send(command)
+        self.calibrated = True
+        self._publish({"type": "calibration", "value": "calibrated"})
+        return command
+
+    def reset_calibration(self) -> None:
+        """Mark calibration as invalid (e.g. after a disconnect or power cycle)."""
+        self.calibrated = False
+        self._publish({"type": "calibration", "value": "uncalibrated"})
+
+    # --- manual control -----------------------------------------------------------
+
+    async def jog(self, axis: str, distance: float, feed_rate: float) -> str:
+        """Move one axis by `distance`; returns the axis, upper-cased.
+        Raises LimitError if the move would leave the bed."""
+        axis = axis.upper()
+        if axis not in JOG_AXES:
+            raise NotReady(f"Invalid axis: {axis}")
+        if self.worker.status == PrintStatus.PRINTING:
+            raise Conflict("Pause the print first")
+        self._require_connection()
+        await self._check_jog_limits(axis, distance)
+
+        if axis in ("B", "C"):
+            self.worker.invalidate_checkpoint(f"The {axis} plunger was jogged")
+        await self.serial.send_lines(["G91", f"G1 {axis}{distance} F{feed_rate}", "G90"])
+        return axis
+
+    async def _check_jog_limits(self, axis: str, distance: float) -> None:
+        """Only once calibrated: before the G92 zero the bed's position is
+        unknown, and the nozzle has to be jogged freely to find it."""
+        if axis not in ("X", "Y", "Z") or not self.calibrated:
+            return
+        current = self.serial.position[axis]
+        if current is None:
+            await self.serial.send("M114")  # the reply updates serial.position
+            current = self.serial.position[axis]
+        if current is None:
+            raise SerialError(f"Couldn't read the printer's {axis} position to check the bed limits")
+        check_jog(self.config.bed, axis, current, distance)
+
+    async def send_gcode(self, line: str) -> str:
+        """Send one raw line and return the printer's reply."""
+        if self.worker.status == PrintStatus.PRINTING:
+            raise Conflict("Pause the print first")
+        self._require_connection()
+        line = line.strip()
+        if not line:
+            raise NotReady("Empty G-code line")
+        if self.worker.status == PrintStatus.PAUSED and line.upper().startswith("G92"):
+            raise Conflict("Can't re-zero during a print")
+
+        reason = _invalidates_checkpoint(line)
+        if reason:
+            self.worker.invalidate_checkpoint(reason)
+        return await self.serial.send(line)
+
+    def serial_log(self, limit: int) -> list[dict[str, Any]]:
+        entries = self.serial.log_buffer
+        return entries[-limit:] if limit > 0 else entries
+
+    def print_history(self, limit: int) -> list[dict[str, Any]]:
+        return self.history.list(limit)
+
+    def set_flow_rate(self, rate: int) -> None:
+        if rate < 50 or rate > 150:
+            raise NotReady("Rate must be between 50 and 150")
+        self.worker.set_flow_rate(rate)
+        # No-op unless a print session is active
+        self.history.log_extrusion(rate, self.worker.lines_sent)
+        self._publish({"type": "extrusion_rate", "value": rate})
+
+    # --- loading a print --------------------------------------------------------
+
+    async def load_model(
+        self, filename: str, content: bytes, mode: SyringeMode, settings: dict[str, float | None]
+    ) -> ProcessedGcode:
+        """Slice an STL/3MF model and load the result.
+
+        Raises SlicingError or GcodeValidationError if slicing fails, and
+        LimitError if the print would leave the bed.
+        """
+        self._publish({"type": "status", "value": "slicing"})
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        model_path = DATA_DIR / filename
+        model_path.write_bytes(content)
+        try:
+            gcode = await slice_model(model_path, mode, **settings)
+            check_path(self.config.bed, gcode.lines)
+        except Exception:
+            self._publish({"type": "status", "value": "idle"})
+            raise
+        self._load(LoadedPrint(gcode, filename, mode, "stl", settings))
+        return gcode
+
+    def load_gcode(self, filename: str, raw: str, mode: SyringeMode) -> ProcessedGcode:
+        """Post-process and load an uploaded G-code file.
+
+        Raises GcodeValidationError or LimitError if it can't be printed.
+        """
+        gcode = process_gcode(raw, mode)
+        check_path(self.config.bed, gcode.lines)
+        self._load(LoadedPrint(gcode, filename, mode, "gcode"))
+        return gcode
+
+    def _load(self, loaded: LoadedPrint) -> None:
+        self.worker.invalidate_checkpoint("A new file was loaded")
+        self.loaded = loaded
+        self._publish({"type": "status", "value": "ready"})
+
+    # --- printing ---------------------------------------------------------------
+
+    async def start_print(self) -> int:
+        """Start the loaded print; returns its line count. Raises LimitError
+        if it would leave the bed or run a syringe empty."""
+        worker = self.worker
+        loaded = self.loaded
+        if loaded is None:
+            raise NotReady("No G-code loaded. Upload an STL first.")
+        if worker.print_active:
+            raise Conflict("A print is already running")
+        await worker.wait_until_sent()
+        self._require_connection()
+        if not self.calibrated:
+            raise NotReady(
+                "Printer not calibrated. Jog the nozzle to position and call /calibration/zero first."
+            )
+        if loaded.mode in ("right", "both") and not self.config.nozzle_offset_measured:
+            raise NotReady(NOZZLE_OFFSET_UNMEASURED)
+
+        # The printer's actual position, so relative moves can be checked too.
+        # Also seeds the worker's as-sent tracker (see QueueWorker.start).
+        reply = await self.serial.send("M114")
+        position = parse_m114(reply)
+        if position is None:
+            raise SerialError(f"Couldn't read the printer's position (M114 replied {reply!r})")
+
+        # Checked before load_gcode, which would drop a resumable checkpoint.
+        gcode = loaded.gcode
+        check_path(self.config.bed, gcode.lines, start_state(position))
+        # As it will be sent: the flow override scales every B/C value.
+        lines = [scale_flow(line, worker.flow_rate / 100.0) for line in gcode.lines]
+        needed = plunger_travel_needed(lines, start_state(position))
+        check_plunger_travel(needed, self.config.syringe_travel_mm)
+
+        # Raises InvalidTransition if another start got in while M114 was read.
+        worker.load_gcode(
+            gcode.lines,
+            time_estimate_s=gcode.time_estimate_s,
+            state_before=gcode.state_before or None,
+            state_after=gcode.state_after or None,
+            extrusion_axes=gcode.extrusion_axes,
+            pressurize_mm=gcode.pressurize_mm,
+        )
+        self.history.start(
+            filename=loaded.filename,
+            syringe_config=loaded.mode,
+            total_lines=worker.lines_total,
+            source=loaded.source,
+            settings=loaded.settings,
+        )
+        worker.start(start_position=position)
+        return worker.lines_total
+
+    async def stop(self, end_reason: str = "stopped") -> tuple[bool, str | None]:
+        """Stop any print; returns whether it can be resumed, and if not, why."""
+        await self.worker.estop(end_reason=end_reason)
+        return self.worker.resumable, self.worker.stop_reason
+
+    def pause(self) -> None:
+        try:
+            self.worker.pause()
+        except InvalidTransition as exc:
+            raise Conflict("No running print to pause") from exc
+
+    async def resume(self) -> None:
+        """Continue a paused print, or a stopped one from its checkpoint.
+        Raises NotResumable if the stop can't be resumed."""
+        if self.worker.status == PrintStatus.PAUSED:
+            self.worker.resume()
+            return
+        if self.worker.status != PrintStatus.STOPPED:
+            raise Conflict("No paused or stopped print to resume")
+        await self.worker.resume_from_stop()
+
+
+def _invalidates_checkpoint(line: str) -> str | None:
+    """Why a manual line would make an e-stop checkpoint unusable, if it does."""
+    words = parse_words(line)
+    if not words or words[0][0] != "G":
+        return None
+    if words[0][1] == 92:
+        return "G92 changed the coordinate system"
+    if words[0][1] in (0, 1) and any(letter in ("B", "C") for letter, _ in words[1:]):
+        return "A plunger was moved manually"
+    return None
+
