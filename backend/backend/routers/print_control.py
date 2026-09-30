@@ -9,7 +9,7 @@ from backend.limits import (
     plunger_travel_needed,
     start_state,
 )
-from backend.queue_worker import NotResumable, PrintStatus, QueueWorker
+from backend.queue_worker import InvalidTransition, NotResumable, PrintStatus, QueueWorker
 from backend.serial_manager import SerialError, SerialTimeout
 
 router = APIRouter(prefix="/print")
@@ -31,6 +31,10 @@ async def start_print(request: Request):
 
     if processed is None:
         raise HTTPException(status_code=400, detail="No G-code loaded. Upload an STL first.")
+
+    if worker.print_active:
+        raise HTTPException(status_code=409, detail="A print is already running")
+    await worker.wait_until_sent()
 
     if not request.app.state.serial_manager.is_connected:
         raise HTTPException(status_code=400, detail="Printer not connected")
@@ -71,14 +75,18 @@ async def start_print(request: Request):
     except LimitError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    worker.load_gcode(
-        processed.lines,
-        time_estimate_s=processed.time_estimate_s,
-        state_before=processed.state_before or None,
-        state_after=processed.state_after or None,
-        extrusion_axes=processed.extrusion_axes,
-        pressurize_mm=processed.pressurize_mm,
-    )
+    try:
+        # Another start may have got in while M114 was being read.
+        worker.load_gcode(
+            processed.lines,
+            time_estimate_s=processed.time_estimate_s,
+            state_before=processed.state_before or None,
+            state_after=processed.state_after or None,
+            extrusion_axes=processed.extrusion_axes,
+            pressurize_mm=processed.pressurize_mm,
+        )
+    except InvalidTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     state.history.start(
         filename=getattr(state, "current_filename", None) or "unknown",
@@ -120,7 +128,10 @@ def _stop_result(worker: QueueWorker) -> dict:
 @router.post("/pause")
 async def pause_print(request: Request):
     worker: QueueWorker = request.app.state.queue_worker
-    worker.pause()
+    try:
+        worker.pause()
+    except InvalidTransition as exc:
+        raise HTTPException(status_code=409, detail="No running print to pause") from exc
     return {"status": "paused"}
 
 

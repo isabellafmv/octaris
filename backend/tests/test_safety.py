@@ -21,7 +21,7 @@ from backend.limits import (
     start_state,
 )
 from backend.main import app
-from backend.queue_worker import CONNECTION_LOST, PrintStatus, QueueWorker
+from backend.queue_worker import CONNECTION_LOST, PrintState, PrintStatus, QueueWorker
 from backend.serial_manager import SerialError, SerialManager, _open_port
 from tests.serial_fakes import attach, unframe
 
@@ -237,7 +237,7 @@ async def test_idle_reconnect_resets_calibration(client, printer, events):
     ("/disconnect", None),
 ])
 async def test_port_changes_refused_during_print(client, printer, route, body):
-    app.state.queue_worker._print_active = True
+    app.state.queue_worker._state = PrintState.PRINTING
 
     resp = await client.post(route, json=body)
 
@@ -323,7 +323,7 @@ async def test_print_start_checks_path_from_actual_position(client, printer):
 
 async def test_refused_start_keeps_resume_checkpoint(client, printer):
     worker = app.state.queue_worker
-    worker._status = PrintStatus.STOPPED
+    worker._state = PrintState.STOPPED_RESUMABLE
     worker._checkpoint = object()  # stands in for a real one
     app.state.processed_gcode = ProcessedGcode(lines=["G90", "G1 X50 F200"])
 

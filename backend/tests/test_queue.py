@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.queue_worker import PrintStatus, QueueWorker
+from backend.queue_worker import (
+    TRANSITIONS,
+    InvalidTransition,
+    PrintState,
+    PrintStatus,
+    QueueWorker,
+)
 from backend.serial_manager import SerialManager
 from tests.serial_fakes import attach
 
@@ -233,3 +239,47 @@ async def test_lines_counter():
 
     assert worker.lines_sent == 3
     assert worker.lines_total == 3
+
+
+# --- state machine ---------------------------------------------------------
+
+
+def test_every_state_has_transitions():
+    assert set(TRANSITIONS) == set(PrintState)
+
+
+def test_illegal_requests_are_rejected():
+    worker, serial, events = make_worker()
+    with pytest.raises(InvalidTransition):
+        worker.pause()  # nothing is printing
+    with pytest.raises(InvalidTransition):
+        worker.resume()  # nothing is paused
+    assert worker.state == PrintState.IDLE
+    assert events == []
+
+
+async def test_no_second_start_or_load_while_printing():
+    worker, serial, events = make_worker(send_delay=0.01)
+    worker.load_gcode([f"G1 X{i}" for i in range(50)])
+    worker.start()
+    with pytest.raises(InvalidTransition):
+        worker.start()
+    with pytest.raises(InvalidTransition):
+        worker.load_gcode(["G1 X99"])
+    assert worker.lines_total == 50
+    serial.send_lines = AsyncMock(return_value=["ok", "ok"])
+    await worker.estop()
+
+
+async def test_resumable_stop_reports_stopped():
+    worker, serial, events = make_worker()
+    worker._state = PrintState.STOPPED_RESUMABLE
+    worker._checkpoint = object()  # stands in for a real one
+    assert worker.status == PrintStatus.STOPPED
+    assert worker.resumable
+
+    worker.invalidate_checkpoint("test")
+
+    assert worker.state == PrintState.STOPPED
+    assert worker.checkpoint is None
+    assert not [e for e in events if e["type"] == "status"]  # still "stopped"

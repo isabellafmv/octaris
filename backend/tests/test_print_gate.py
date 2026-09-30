@@ -4,11 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from backend.main import app
-from backend.queue_worker import PrintStatus
+from backend.queue_worker import PrintState, PrintStatus
 
 
 def set_status(status: PrintStatus) -> None:
-    app.state.queue_worker._status = status
+    app.state.queue_worker._state = PrintState(status.value)
 
 
 def connect_fake_serial() -> None:
@@ -101,3 +101,19 @@ async def test_calibration_zero_allowed_when_idle(client):
     resp = await client.post("/calibration/zero")
 
     assert resp.status_code == 200
+
+
+async def test_pause_without_print_is_409(client):
+    resp = await client.post("/print/pause")
+    assert resp.status_code == 409
+
+
+async def test_start_while_printing_is_409(client):
+    connect_fake_serial()
+    app.state.processed_gcode = object()  # never reached
+    set_status(PrintStatus.PRINTING)
+
+    resp = await client.post("/print/start")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "A print is already running"

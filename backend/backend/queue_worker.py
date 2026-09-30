@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 class PrintStatus(str, Enum):
+    """The print status reported to clients."""
+
     IDLE = "idle"
     PRINTING = "printing"
     PAUSED = "paused"
@@ -42,8 +44,77 @@ class PrintStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class PrintState(str, Enum):
+    """The worker's state. Clients see STOPPED_RESUMABLE as STOPPED, plus
+    `resumable`."""
+
+    IDLE = "idle"
+    PRINTING = "printing"
+    PAUSED = "paused"
+    STOPPED_RESUMABLE = "stopped_resumable"  # holds a checkpoint to resume from
+    STOPPED = "stopped"
+    COMPLETED = "completed"
+
+
+IDLE, PRINTING, PAUSED, STOPPED_RESUMABLE, STOPPED, COMPLETED = PrintState
+
+# The states each state may move to. Anything else raises InvalidTransition.
+TRANSITIONS: dict[PrintState, frozenset[PrintState]] = {
+    IDLE: frozenset({PRINTING, STOPPED}),
+    PRINTING: frozenset({PAUSED, STOPPED, COMPLETED}),
+    PAUSED: frozenset({PRINTING, STOPPED}),
+    # A stop becomes resumable once its checkpoint is taken, and stops being
+    # resumable when something invalidates the checkpoint.
+    STOPPED: frozenset({PRINTING, STOPPED_RESUMABLE}),
+    STOPPED_RESUMABLE: frozenset({PRINTING, STOPPED}),
+    COMPLETED: frozenset({PRINTING, STOPPED}),
+}
+
+# A print is running: its lines are being sent, or will be after a pause.
+ACTIVE = frozenset({PRINTING, PAUSED})
+
+
+class InvalidTransition(Exception):
+    pass
+
+
 class NotResumable(Exception):
     pass
+
+
+class SentTracker:
+    """The machine state as print lines are actually sent (flow scaling
+    included), and the recently sent lines, for locating an e-stop.
+
+    Seeded from a real M114 at the start of each print, so even a fully
+    relative (G91) file has a known absolute reference to build from.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.state = MachineState(pos={ax: None for ax in AXES})
+        # (index into the print's lines, as-sent state before, after)
+        self.recent: deque[tuple[int, MachineState, MachineState]] = deque(maxlen=RECENT_LINES)
+        # Why the starting position is unknown, if it is. Any stop of this
+        # print is then not resumable.
+        self.error: str | None = None
+
+    def seed(self, position: dict[str, float]) -> None:
+        self.state = MachineState(pos={ax: position.get(ax) for ax in AXES})
+        self.error = None
+
+    def track(self, line: str, index: int | None) -> tuple[MachineState, MachineState]:
+        before = self.state
+        self.state = step(before, line)
+        if index is not None:
+            self.recent.append((index, before, self.state))
+        return before, self.state
+
+    def resume_at(self, index: int, after: MachineState) -> None:
+        self.state = after
+        self.recent.append((index, after, after))
 
 
 class QueueWorker:
@@ -58,31 +129,21 @@ class QueueWorker:
     ):
         self._serial = serial_manager
         self._priority_queue: asyncio.Queue[str] = asyncio.Queue()
-        self._status = PrintStatus.IDLE
+        self._state = IDLE
+        # Set in every state but PAUSED; the worker waits on it between lines.
+        self._unpaused = asyncio.Event()
+        self._unpaused.set()
         # The loaded print. Stopping or pausing never discards lines; _next is
         # the index of the next line to send.
         self._lines: list[str] = []
-        self._state_before: list[MachineState] = []
-        self._state_after: list[MachineState] = []
         self._next = 0
-        # (index into _lines, as-sent state before, as-sent state after) for
-        # each recently sent print line — reflects what was actually written
-        # to the printer (flow scaling included), not the planned path.
-        self._recent: deque[tuple[int, MachineState, MachineState]] = deque(maxlen=RECENT_LINES)
-        # Tracks the machine state as lines are actually sent (see _track_send).
-        # Seeded from a real M114 at the start of each print so even a fully
-        # relative (G91) file has a known absolute reference to build from.
-        self._sent_state = MachineState(pos={ax: None for ax in AXES})
-        # Why _sent_state couldn't be seeded from M114 at print start, if it
-        # couldn't — makes any later stop unconditionally not resumable.
-        self._seed_error: str | None = None
+        self._tracker = SentTracker()
         self._extrusion_axes: tuple[str, ...] = ()
         self._retract_mm = 0.0
         self._retract_on_estop = retract_on_estop
+        # Set exactly while the state is STOPPED_RESUMABLE
         self._checkpoint: Checkpoint | None = None
         self._stop_reason: str | None = None  # why the last stop can't be resumed
-        self._paused = asyncio.Event()
-        self._paused.set()  # not paused initially
         self._task: asyncio.Task | None = None
         self._on_event = on_event
         # Called once per print with the end reason ("completed", "stopped",
@@ -90,7 +151,6 @@ class QueueWorker:
         self._on_print_end = on_print_end
         # Called when an e-stopped print is resumed.
         self._on_print_resumed = on_print_resumed
-        self._print_active = False
         self._flow_rate: float = 100.0  # percentage, same semantics as M221
         self._time_estimate_s: float | None = None
         # Plunger travel of a full syringe, and how far each plunger has been
@@ -100,8 +160,14 @@ class QueueWorker:
         self._low_travel_warned: set[str] = set()
 
     @property
+    def state(self) -> PrintState:
+        return self._state
+
+    @property
     def status(self) -> PrintStatus:
-        return self._status
+        if self._state == STOPPED_RESUMABLE:
+            return PrintStatus.STOPPED
+        return PrintStatus(self._state.value)
 
     @property
     def lines_sent(self) -> int:
@@ -121,7 +187,7 @@ class QueueWorker:
 
     @property
     def resumable(self) -> bool:
-        return self._status == PrintStatus.STOPPED and self._checkpoint is not None
+        return self._state == STOPPED_RESUMABLE
 
     @property
     def stop_reason(self) -> str | None:
@@ -130,7 +196,7 @@ class QueueWorker:
     @property
     def print_active(self) -> bool:
         """A print is printing or paused (not yet stopped or finished)."""
-        return self._print_active
+        return self._state in ACTIVE
 
     @property
     def sending(self) -> bool:
@@ -146,13 +212,22 @@ class QueueWorker:
         if self._on_event:
             self._on_event(event)
 
-    def _finish(self, end_reason: str, resume_line: int | None = None) -> None:
-        if not self._print_active:
-            return
-        self._print_active = False
-        self._notify_end(end_reason, resume_line)
+    def _transition(self, new: PrintState) -> None:
+        if new not in TRANSITIONS[self._state]:
+            raise InvalidTransition(f"Can't go from {self._state.value} to {new.value}")
+        old_status = self.status
+        self._state = new
+        if new == PAUSED:
+            self._unpaused.clear()
+        else:
+            self._unpaused.set()  # also wakes a paused worker so it can exit
+        if new != STOPPED_RESUMABLE:
+            self._checkpoint = None
+        if self.status != old_status:
+            self._emit({"type": "status", "value": self.status.value})
 
-    def _notify_end(self, end_reason: str, resume_line: int | None) -> None:
+    def _end_print(self, end_reason: str, resume_line: int | None = None) -> None:
+        """Report the end of a print. Called once, right after it leaves ACTIVE."""
         if self._on_print_end:
             try:
                 self._on_print_end(end_reason, resume_line)
@@ -169,31 +244,33 @@ class QueueWorker:
         extrusion_axes: Sequence[str] = (),
         pressurize_mm: float = 0.0,
     ) -> None:
-        """Load a print. The optional per-line states (from ProcessedGcode)
-        are what make an e-stop resumable."""
+        """Load a print, replacing any stopped or finished one.
+
+        state_before/state_after (the planned per-line states from
+        ProcessedGcode) are checked for consistency only: resuming works
+        from the as-sent states the worker tracks itself.
+        """
+        if self._state in ACTIVE:
+            raise InvalidTransition("Can't load a new print while one is running")
         has_states = state_before is not None and state_after is not None
         if has_states and not (len(state_before) == len(state_after) == len(lines)):
             raise ValueError("state_before/state_after must match lines")
 
         self.flush_priority()
-        self._lines, self._state_before, self._state_after = [], [], []
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped and not stripped.startswith(";"):
-                self._lines.append(stripped)
-                if has_states:
-                    self._state_before.append(state_before[i])
-                    self._state_after.append(state_after[i])
+        self._lines = [
+            stripped for line in lines
+            if (stripped := line.strip()) and not stripped.startswith(";")
+        ]
         self._next = 0
-        self._recent.clear()
-        self._sent_state = MachineState(pos={ax: None for ax in AXES})
-        self._seed_error = None
+        self._tracker.reset()
         self._time_estimate_s = time_estimate_s
         self._extrusion_axes = tuple(extrusion_axes)
         self._retract_mm = pressurize_mm
         self._plunger_pushed = {axis: 0.0 for axis in PLUNGER_AXES}
         self._low_travel_warned = set()
-        self._clear_checkpoint()
+        if self._state == STOPPED_RESUMABLE:
+            self._transition(STOPPED)  # the old checkpoint is for the old lines
+        self._stop_reason = None
 
     def enqueue_priority(self, command: str) -> None:
         self._priority_queue.put_nowait(command.strip())
@@ -205,19 +282,21 @@ class QueueWorker:
             except asyncio.QueueEmpty:
                 break
 
+    async def wait_until_sent(self) -> None:
+        """Wait for the worker of a stopped or finished print to send its
+        last in-flight line, so a new one can start."""
+        if self._state not in ACTIVE and self._task and not self._task.done():
+            await self._task
+
     def start(self, start_position: dict[str, float] | None = None) -> None:
         """Start the loaded print. `start_position` is the printer's position
         as just read with M114; without it the worker reads it itself."""
-        if self._task and not self._task.done():
-            return
-        self._clear_checkpoint()
+        if self.sending:
+            raise InvalidTransition("The previous print is still stopping")
+        self._transition(PRINTING)
+        self._stop_reason = None
         if start_position is not None:
-            self._sent_state = MachineState(pos={ax: start_position.get(ax) for ax in AXES})
-            self._seed_error = None
-        self._status = PrintStatus.PRINTING
-        self._print_active = True
-        self._paused.set()
-        self._emit({"type": "status", "value": self._status.value})
+            self._tracker.seed(start_position)
         # Keep idle motors enabled so a stopped print holds its position.
         self._task = asyncio.create_task(
             # M110 N0 starts line numbering: print lines go out from N1.
@@ -225,26 +304,19 @@ class QueueWorker:
         )
 
     def pause(self) -> None:
-        if self._status == PrintStatus.PRINTING:
-            self._status = PrintStatus.PAUSED
-            self._paused.clear()
-            self._emit({"type": "status", "value": self._status.value})
+        self._transition(PAUSED)
 
     def resume(self) -> None:
         """Continue a paused print."""
-        if self._status == PrintStatus.PAUSED:
-            self._status = PrintStatus.PRINTING
-            self._paused.set()
-            self._emit({"type": "status", "value": self._status.value})
+        if self._state != PAUSED:
+            raise InvalidTransition(f"Can't resume from {self._state.value}")
+        self._transition(PRINTING)
 
     # --- e-stop / checkpoint ------------------------------------------------
 
-    def _clear_checkpoint(self) -> None:
-        self._checkpoint = None
-        self._stop_reason = None
-
     def _not_resumable(self, reason: str) -> None:
-        self._checkpoint = None
+        if self._state == STOPPED_RESUMABLE:
+            self._transition(STOPPED)
         self._stop_reason = reason
         self._emit({"type": "stop", "resumable": False, "reason": reason})
         self._emit({"type": "error", "message": f"The print can't be resumed: {reason}"})
@@ -252,22 +324,19 @@ class QueueWorker:
     def connection_lost(self) -> None:
         """The serial connection dropped. A running print is stopped for good:
         the board may have reset and lost its zero, so it can't be resumed."""
-        if not self._print_active:
+        if self._state not in ACTIVE:
             self.invalidate_checkpoint(CONNECTION_LOST)
             return
         logger.error("Connection lost during a print; stopping it")
-        self._print_active = False
-        self._status = PrintStatus.STOPPED
+        self._transition(STOPPED)
         self.flush_priority()
-        self._paused.set()  # unblock the worker so it can exit
-        self._emit({"type": "status", "value": self._status.value})
         self._not_resumable(CONNECTION_LOST)
-        self._notify_end("error", None)
+        self._end_print("error")
 
     def invalidate_checkpoint(self, reason: str) -> None:
         """Drop the resume checkpoint, e.g. after something moved the plungers
         or changed the coordinate system."""
-        if self._checkpoint is None:
+        if self._state != STOPPED_RESUMABLE:
             return
         logger.info("Resume checkpoint invalidated: %s", reason)
         self._not_resumable(reason)
@@ -281,12 +350,10 @@ class QueueWorker:
         so the print can be resumed from there.
         `end_reason` is reported to on_print_end if a print was running.
         """
-        was_active = self._print_active
-        self._print_active = False  # the worker's exit must not end the print as "error"
-        self._status = PrintStatus.STOPPED  # worker won't send another line
+        was_active = self._state in ACTIVE
+        if self._state not in (STOPPED, STOPPED_RESUMABLE):
+            self._transition(STOPPED)  # the worker won't send another line
         self.flush_priority()
-        self._paused.set()  # unblock worker so it can exit
-        self._emit({"type": "status", "value": self._status.value})
         try:
             await self._serial.emergency_write("M410")
         except SerialError:
@@ -294,21 +361,19 @@ class QueueWorker:
             self._emit({"type": "printer", "connected": False, "port": None})
             if was_active:
                 self._not_resumable(CONNECTION_LOST)
-                self._notify_end(end_reason, None)
+                self._end_print(end_reason)
             return
 
         if not was_active:
-            if self._checkpoint is None:
+            if not self.resumable:
                 self._emit({"type": "stop", "resumable": False, "reason": None})
             return
         await self._take_checkpoint()
-        self._notify_end(
-            end_reason, self._checkpoint.line if self._checkpoint else None
-        )
+        self._end_print(end_reason, self._checkpoint.line if self._checkpoint else None)
 
     async def _take_checkpoint(self) -> None:
-        if self._seed_error:
-            self._not_resumable(self._seed_error)
+        if self._tracker.error:
+            self._not_resumable(self._tracker.error)
             return
         try:
             # send_lines queues behind the line in flight, so this also waits for the
@@ -323,7 +388,7 @@ class QueueWorker:
             self._not_resumable(f"Couldn't parse the printer position from {replies[1]!r}")
             return
 
-        located = locate_line(list(self._recent), self._lines, position)
+        located = locate_line(list(self._tracker.recent), self._lines, position)
         if located is None:
             where = " ".join(f"{axis}{fmt(value)}" for axis, value in position.items())
             reason = f"The stop position ({where}) is not on any recently sent line"
@@ -343,6 +408,7 @@ class QueueWorker:
                 return
             retract = {axis: self._retract_mm for axis in axes}
 
+        self._transition(STOPPED_RESUMABLE)
         self._checkpoint = Checkpoint(line=line, position=position, after=after, retract=retract)
         self._stop_reason = None
         logger.info("E-stop checkpoint: line %d (%s) at %s", line, self._lines[line], position)
@@ -355,30 +421,24 @@ class QueueWorker:
         return moves fail (the checkpoint is kept, so this can be retried).
         """
         checkpoint = self._checkpoint
-        if self._status != PrintStatus.STOPPED or checkpoint is None:
+        if self._state != STOPPED_RESUMABLE or checkpoint is None:
             raise NotResumable(self._stop_reason or "No stopped print to resume")
-        if self._task and not self._task.done():
-            await self._task  # exits right after its in-flight line
+        await self.wait_until_sent()
+        await self._serial.send_lines(build_resume_commands(checkpoint))
+        if self._checkpoint is not checkpoint:
+            # Invalidated while the return moves were being sent
+            raise NotResumable(self._stop_reason or "The checkpoint was invalidated")
 
-        k = checkpoint.line
-        commands = build_resume_commands(checkpoint)
-        await self._serial.send_lines(commands)
-
-        self._clear_checkpoint()
         # The tracker continues from where the resume commands actually left
         # the machine — the checkpoint's as-sent after-state.
-        self._sent_state = checkpoint.after
-        self._recent.append((k, checkpoint.after, checkpoint.after))
-        self._next = k + 1
-        self._status = PrintStatus.PRINTING
-        self._print_active = True
-        self._paused.set()
+        self._tracker.resume_at(checkpoint.line, checkpoint.after)
+        self._next = checkpoint.line + 1
+        self._transition(PRINTING)
         if self._on_print_resumed:
             try:
                 self._on_print_resumed()
             except Exception:
                 logger.exception("on_print_resumed callback failed")
-        self._emit({"type": "status", "value": self._status.value})
         self._emit_progress()
         self._task = asyncio.create_task(self._run(preamble=[], seed=False))
 
@@ -391,21 +451,19 @@ class QueueWorker:
         Without this, a fully relative (G91) file would never establish an
         absolute reference, and every position would stay unknown. If the
         read fails or can't be parsed, the print still runs — it just won't
-        be resumable, with `_seed_error` explaining why.
+        be resumable, with the tracker's `error` explaining why.
         """
         try:
             reply = await self._serial.send("M114")
         except SerialError as exc:
-            self._seed_error = f"Couldn't read the printer's starting position: {exc}"
+            self._tracker.error = f"Couldn't read the printer's starting position: {exc}"
             return
 
         position = parse_m114(reply)
         if position is None:
-            self._seed_error = f"Couldn't parse the printer's starting position from {reply!r}"
+            self._tracker.error = f"Couldn't parse the printer's starting position from {reply!r}"
             return
-
-        self._seed_error = None
-        self._sent_state = MachineState(pos={ax: position.get(ax) for ax in AXES})
+        self._tracker.seed(position)
 
     def _track_send(self, line: str, index: int | None) -> None:
         """Advance the as-sent position tracker for a line about to be sent.
@@ -414,11 +472,7 @@ class QueueWorker:
         "ok" may still have reached and been acted on by the printer, so it's
         still a candidate for where an e-stop actually landed.
         """
-        before = self._sent_state
-        after = step(before, line)
-        self._sent_state = after
-        if index is not None:
-            self._recent.append((index, before, after))
+        before, after = self._tracker.track(line, index)
         for axis, delta in plunger_step(before, after, line).items():
             self._plunger_pushed[axis] = self._plunger_pushed.get(axis, 0.0) - delta
             self._check_plunger_travel(axis)
@@ -462,19 +516,18 @@ class QueueWorker:
                 except asyncio.QueueEmpty:
                     pass
 
-                if self._status == PrintStatus.STOPPED:
+                if self._state not in ACTIVE:
                     break
 
                 # Wait if paused
-                await self._paused.wait()
+                await self._unpaused.wait()
 
-                if self._status == PrintStatus.STOPPED:
+                if self._state not in ACTIVE:
                     break
 
                 if self._next >= len(self._lines):
-                    self._status = PrintStatus.COMPLETED
-                    self._emit({"type": "status", "value": self._status.value})
-                    self._finish("completed")
+                    self._transition(COMPLETED)
+                    self._end_print("completed")
                     break
 
                 index = self._next
@@ -489,12 +542,13 @@ class QueueWorker:
         except Exception:
             logger.exception("Queue worker error")
         finally:
-            # No-op if the print already ended; otherwise the worker crashed or
-            # was cancelled mid-print.
-            self._finish("error")
+            if self._state in ACTIVE:
+                # The worker crashed or was cancelled mid-print.
+                self._transition(STOPPED)
+                self._end_print("error")
             logger.info(
-                "Queue worker finished: status=%s, sent=%d/%d",
-                self._status.value,
+                "Queue worker finished: state=%s, sent=%d/%d",
+                self._state.value,
                 self._next,
                 len(self._lines),
             )
@@ -517,15 +571,13 @@ class QueueWorker:
             return True
         except (SerialTimeout, ResendUnavailable) as exc:
             logger.error("No usable reply to %s: %s", line, exc)
-            if self._status != PrintStatus.STOPPED:
-                self._status = PrintStatus.PAUSED
-                self._paused.clear()
-                self._emit({"type": "status", "value": self._status.value})
+            if self._state == PRINTING:
+                self._transition(PAUSED)
             self._emit({"type": "error", "message": f"{exc}. Print paused."})
             return False
         except SerialError:
             logger.error("Failed to send: %s", line)
-            if self._status == PrintStatus.STOPPED:
+            if self._state not in ACTIVE:
                 # An e-stop, or connection_lost() via the disconnect
                 # callback, is already handling this print.
                 return False

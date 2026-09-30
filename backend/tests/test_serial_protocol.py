@@ -153,7 +153,7 @@ async def test_unsolicited_temperature_reports_while_printing(rig):
     worker = await run_print(manager, moves)
 
     assert worker.status == PrintStatus.COMPLETED
-    assert worker._seed_error is None  # the seed M114 parsed despite the reports
+    assert worker._tracker.error is None  # the seed M114 parsed despite the reports
     assert [c for c in printer.executed if c.startswith("G1")] == moves
     reports = [e for e in events[before:] if e["type"] == "temperature"]
     assert len(reports) >= 5  # arrived while the print was running
