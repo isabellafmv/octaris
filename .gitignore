@@ -8,11 +8,13 @@ build/
 .venv/
 venv/
 *.db
-*.md
+.pytest_cache/
+pytest-cache-files-*/
 
 # Node
 node_modules/
 out/
+*.tsbuildinfo
 .DS_Store
 
 # IDE
@@ -21,9 +23,6 @@ out/
 
 # Data
 backend/data/
-
-# Context docs
-context/
 
 # Logs
 *.log
