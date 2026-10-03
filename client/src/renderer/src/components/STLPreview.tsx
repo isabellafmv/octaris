@@ -78,7 +78,7 @@ export function STLPreview({ file }: STLPreviewProps): React.JSX.Element {
       const material = new THREE.MeshPhongMaterial({
         color: themeColor('--color-primary'),
         specular: new THREE.Color('#ffffff'),
-        shininess: 40,
+        shininess: 40
       })
       const mesh = new THREE.Mesh(geometry, material)
       scene.add(mesh)
@@ -87,7 +87,7 @@ export function STLPreview({ file }: STLPreviewProps): React.JSX.Element {
 
     // Animate
     let animId: number
-    const animate = () => {
+    const animate = (): void => {
       animId = requestAnimationFrame(animate)
       controls.update()
       renderer.render(scene, camera)

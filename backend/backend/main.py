@@ -3,17 +3,19 @@ import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
+from backend import virtual_printer
 from backend.auth import get_token, token_is_valid
 from backend.config import Config, load_config
 from backend.database import init_db
 from backend.events import EventBus
 from backend.history import PrintHistory
 from backend.limits import LimitError
+from backend.logs import setup_logging
 from backend.queue_worker import InvalidTransition, NotResumable, QueueWorker
 from backend.routers.calibration import router as calibration_router
 from backend.routers.extrusion import router as extrusion_router
@@ -24,8 +26,8 @@ from backend.routers.print_control import router as print_router
 from backend.routers.serial import router as serial_router
 from backend.routers.upload import router as upload_router
 from backend.routers.ws import router as ws_router
-from backend.serial_manager import SerialError, SerialManager, SerialTimeout
 from backend.schemas import ErrorResponse, HealthResponse, WsEvent
+from backend.serial_manager import SerialError, SerialManager, SerialTimeout
 from backend.session import Conflict, NotReady, PrinterSession
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
     serial_manager = SerialManager(
         on_event=event_bus.publish,
         can_reconnect=lambda: session.can_reconnect(),
+        on_traffic=history.log_traffic,
     )
     queue_worker = QueueWorker(
         serial_manager=serial_manager,
@@ -60,10 +63,12 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log_file = setup_logging()
+    logger.info("Logging to %s", log_file)
+    if virtual_printer.enabled():
+        logger.info("Dev mode: the virtual printer is offered as port %r", virtual_printer.VIRTUAL_PORT)
     if not get_token():
-        logger.warning(
-            "OCTARIS_TOKEN is not set — request authentication is disabled (dev mode)"
-        )
+        logger.warning("OCTARIS_TOKEN is not set — request authentication is disabled (dev mode)")
     wire(app, load_config(), init_db())
     yield
     if app.state.serial_manager.is_connected:
@@ -138,7 +143,7 @@ def openapi_schema() -> dict:
     return schema
 
 
-app.openapi = openapi_schema
+app.openapi = openapi_schema  # type: ignore[method-assign]  # FastAPI's documented override
 
 
 app.add_middleware(

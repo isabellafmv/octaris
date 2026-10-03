@@ -220,7 +220,11 @@ app.on('window-all-closed', () => {
 let quitConfirmed = false
 let quitCheckInProgress = false
 
-async function backendRequest(path: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+async function backendRequest(
+  path: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
   return fetch(`${BACKEND_URL}${path}`, {
     ...init,
     headers: { 'X-Octaris-Token': AUTH_TOKEN },

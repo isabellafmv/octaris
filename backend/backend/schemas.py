@@ -4,9 +4,10 @@ The client's TypeScript types are generated from the OpenAPI schema, which
 includes the event models too (see backend/openapi.py and the client's
 `gen:types` script).
 """
+
 from __future__ import annotations
 
-from typing import Annotated, Any, ClassVar, Literal, Union
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -159,21 +160,19 @@ class PrintResumedEvent(Event):
 
 
 WsEvent = Annotated[
-    Union[
-        SnapshotEvent,
-        StatusEvent,
-        ProgressEvent,
-        ExtrusionRateEvent,
-        ErrorEvent,
-        WarningEvent,
-        StopEvent,
-        SerialLogEvent,
-        TemperatureEvent,
-        PrinterEvent,
-        CalibrationEvent,
-        PrintEndEvent,
-        PrintResumedEvent,
-    ],
+    SnapshotEvent
+    | StatusEvent
+    | ProgressEvent
+    | ExtrusionRateEvent
+    | ErrorEvent
+    | WarningEvent
+    | StopEvent
+    | SerialLogEvent
+    | TemperatureEvent
+    | PrinterEvent
+    | CalibrationEvent
+    | PrintEndEvent
+    | PrintResumedEvent,
     Field(discriminator="type"),
 ]
 
@@ -291,6 +290,7 @@ class PrintSession(BaseModel):
     source: Literal["stl", "gcode"] | None
     end_reason: EndReason | None
     resume_line: int | None
+    serial_log: str | None = None  # path of the file with the print's serial traffic
     extrusion_events: list[ExtrusionChange]
 
 

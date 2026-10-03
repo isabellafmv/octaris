@@ -4,11 +4,12 @@ After M410 the printer reports its position with M114. The stop point lies on
 the path of one of the recently sent lines; that line is re-sent as an
 absolute move and the print continues after it.
 """
+
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from backend.gcode_processor import (
     AXES,
@@ -124,6 +125,21 @@ def fmt(value: float) -> str:
     return "0" if text in ("-0", "") else text
 
 
+def return_moves(target: Mapping[str, float], lift_axes: Sequence[str]) -> list[str]:
+    """Lift `lift_axes` clear of the print, travel over `target` in X/Y and
+    lower back onto it. Leaves the printer in absolute mode (G90)."""
+    commands = ["G91"]
+    if lift_axes:
+        lift = " ".join(f"{axis}{fmt(CLEARANCE_Z_MM)}" for axis in lift_axes)
+        commands.append(f"G1 {lift} F{TRAVEL_FEED}")
+    commands.append("G90")
+    commands.append(f"G1 X{fmt(target['X'])} Y{fmt(target['Y'])} F{TRAVEL_FEED}")
+    if lift_axes:
+        lower = " ".join(f"{axis}{fmt(target[axis])}" for axis in lift_axes)
+        commands.append(f"G1 {lower} F{TRAVEL_FEED}")
+    return commands
+
+
 def build_resume_commands(checkpoint: Checkpoint) -> list[str]:
     """Commands that bring the nozzle back to the stop point and finish the
     stopped line, ending at the checkpoint's as-sent after-state — not the
@@ -131,17 +147,7 @@ def build_resume_commands(checkpoint: Checkpoint) -> list[str]:
     under a flow override). The caller continues with the line after it."""
     pos = checkpoint.position
     line_after = checkpoint.after
-    lift_axes = [axis for axis in ("Z", "A") if axis in pos]
-
-    commands = ["G91"]
-    if lift_axes:
-        lift = " ".join(f"{axis}{fmt(CLEARANCE_Z_MM)}" for axis in lift_axes)
-        commands.append(f"G1 {lift} F{TRAVEL_FEED}")
-    commands.append("G90")
-    commands.append(f"G1 X{fmt(pos['X'])} Y{fmt(pos['Y'])} F{TRAVEL_FEED}")
-    if lift_axes:
-        lower = " ".join(f"{axis}{fmt(pos[axis])}" for axis in lift_axes)
-        commands.append(f"G1 {lower} F{TRAVEL_FEED}")
+    commands = return_moves(pos, [axis for axis in ("Z", "A") if axis in pos])
     if checkpoint.retract:
         restore = " ".join(f"{axis}{fmt(pos[axis])}" for axis in checkpoint.retract)
         commands.append(f"G1 {restore} F{PRESSURIZE_FEED}")
@@ -149,13 +155,47 @@ def build_resume_commands(checkpoint: Checkpoint) -> list[str]:
     # Finish the stopped line as an absolute move to where it was headed, on
     # every known axis so any drift within the match tolerance is corrected.
     # The F also restores the modal feedrate the following lines rely on.
-    known = [axis for axis in AXES if line_after.pos[axis] is not None]
+    known = {axis: value for axis in AXES if (value := line_after.pos[axis]) is not None}
     feed = f" F{fmt(line_after.feed)}" if line_after.feed is not None else ""
     if known:
-        target = " ".join(f"{axis}{fmt(line_after.pos[axis])}" for axis in known)
+        target = " ".join(f"{axis}{fmt(value)}" for axis, value in known.items())
         commands.append(f"G1 {target}{feed}")
     elif feed:
         commands.append(f"G1{feed}")
     if line_after.relative:
         commands.append("G91")  # the following lines are in a relative block
+    return commands
+
+
+def build_return_commands(actual: Mapping[str, float], target: MachineState) -> list[str]:
+    """Commands that undo manual commands sent while a print was paused.
+
+    `actual` is the printer's position (M114) and `target` the as-sent state
+    where the print left off. The stage goes back to it if it was moved; a
+    plunger moved by hand stays where it is (priming, say) and is re-aligned
+    with G92, so the print's coordinates carry on from there. The print's
+    feedrate and distance mode are restored either way, since a manual
+    command may have changed them without moving anything.
+
+    Raises ValueError if the target position isn't known on the stage axes.
+    """
+    stage = [axis for axis in ("X", "Y", "Z", "A") if axis in actual]
+    unknown = [axis for axis in stage if target.pos[axis] is None]
+    if unknown or "X" not in stage or "Y" not in stage:
+        missing = ", ".join(unknown) or "X/Y"
+        raise ValueError(f"where the print left off isn't known ({missing})")
+    goal = {axis: value for axis in AXES if (value := target.pos[axis]) is not None}
+
+    def moved(axis: str) -> bool:
+        return abs(actual[axis] - goal[axis]) > POSITION_TOLERANCE_MM
+
+    commands: list[str] = []
+    if any(moved(axis) for axis in stage):
+        commands += return_moves(goal, [axis for axis in ("Z", "A") if axis in stage])
+    plungers = [axis for axis in ("B", "C") if axis in actual and axis in goal and moved(axis)]
+    if plungers:
+        commands.append("G92 " + " ".join(f"{axis}{fmt(goal[axis])}" for axis in plungers))
+    if target.feed is not None:
+        commands.append(f"G1 F{fmt(target.feed)}")
+    commands.append("G91" if target.relative else "G90")
     return commands

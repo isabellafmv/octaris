@@ -1193,6 +1193,17 @@
             ],
             "title": "Resume Line"
           },
+          "serial_log": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial Log"
+          },
           "extrusion_events": {
             "items": {
               "$ref": "#/components/schemas/ExtrusionChange"

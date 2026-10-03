@@ -97,7 +97,7 @@ def test_substitute_extrusion_both():
     result = run(substitute_extrusion, lines, "both")
     assert "B-0.5" in result[0]  # B is negated
     assert result[1] == "T1"
-    assert "C-1" in result[2]    # C is also negated
+    assert "C-1" in result[2]  # C is also negated
     assert result[3] == "T0"
     assert "B-1.5" in result[4]  # B is negated
 
@@ -129,7 +129,7 @@ def test_clamp_feed_rates_no_change():
 
 def test_build_preamble_left():
     preamble = build_preamble("left")
-    non_comment = [l for l in preamble if not l.strip().startswith(";")]
+    non_comment = [line for line in preamble if not line.strip().startswith(";")]
     assert non_comment[0] == "G90"
     joined = "".join(preamble)
     assert "B-0.2" in joined  # B pressurizes in negative direction
@@ -231,7 +231,7 @@ def test_insert_layer_depressurize_right_mode():
     ]
     result = run(insert_layer_depressurize, lines, "right")
     joined = "\n".join(result)
-    assert "C0.2" in joined   # depressurize (retract = positive for C)
+    assert "C0.2" in joined  # depressurize (retract = positive for C)
     assert "C-0.2" in joined  # repressurize (push = negative for C)
 
 
@@ -242,7 +242,7 @@ def test_process_gcode_integration():
     assert result.time_estimate_s == 847
 
     # Preamble should start with G90
-    non_comment = [l for l in result.lines if not l.strip().startswith(";")]
+    non_comment = [line for line in result.lines if not line.strip().startswith(";")]
     assert non_comment[0].startswith("G90")
 
     # No E commands should remain
@@ -289,7 +289,7 @@ def test_insert_travel_retract_wraps_g0():
     """In-layer G0 travel moves should get retract/prime brackets."""
     lines = [
         "G1 X10 Y10 B-0.5 F200",
-        "G0 X50 Y50 F300",          # travel move — should trigger retract
+        "G0 X50 Y50 F300",  # travel move — should trigger retract
         "G1 X60 Y60 B-1.0 F200",
     ]
     result = run(insert_travel_retract, lines, "left")
@@ -306,7 +306,7 @@ def test_insert_travel_retract_skips_layer_change():
     """G0 moves with Z (layer changes) should NOT get retract brackets."""
     lines = [
         "G1 X10 Y10 B-0.5 F200",
-        "G0 X50 Y50 Z0.5 F300",     # layer change — skip
+        "G0 X50 Y50 Z0.5 F300",  # layer change — skip
         "G1 X60 Y60 B-1.0 F200",
     ]
     result = run(insert_travel_retract, lines, "left")
@@ -320,7 +320,7 @@ def test_insert_travel_retract_consecutive_g0():
     lines = [
         "G1 X10 Y10 B-0.5 F200",
         "G0 X30 Y30 F300",
-        "G0 X50 Y50 F300",          # second travel — already retracted
+        "G0 X50 Y50 F300",  # second travel — already retracted
         "G1 X60 Y60 B-1.0 F200",
     ]
     result = run(insert_travel_retract, lines, "left")
@@ -358,6 +358,7 @@ def test_substitute_both_multi():
 def test_build_preamble_both():
     """Both mode should pressurize B and C."""
     from backend.gcode_processor import build_preamble
+
     lines = build_preamble("both")
     joined = "\n".join(lines)
     assert "B-" in joined  # pressurize B (negative direction)
@@ -369,6 +370,7 @@ def test_build_preamble_both():
 def test_build_footer_both():
     """Both mode should depressurize B and C."""
     from backend.gcode_processor import build_footer
+
     lines = build_footer("both")
     joined = "\n".join(lines)
     # Depressurize is opposite of extrude: positive for B/C

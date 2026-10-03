@@ -18,8 +18,10 @@ interface SetupScreenProps {
 }
 
 function nextStepHint(upload: Upload, calibrated: boolean): string {
-  if (upload.result) return calibrated ? 'Ready to print' : 'Jog to position and set origin to continue'
-  if (upload.mode === 'stl') return upload.stlFile ? 'Slice the file to continue' : 'Upload an STL to get started'
+  if (upload.result)
+    return calibrated ? 'Ready to print' : 'Jog to position and set origin to continue'
+  if (upload.mode === 'stl')
+    return upload.stlFile ? 'Slice the file to continue' : 'Upload an STL to get started'
   return upload.gcodeFile ? 'Processing…' : 'Upload a pre-sliced G-code file'
 }
 
@@ -63,7 +65,10 @@ export function SetupScreen({
           <pre className="whitespace-pre-wrap break-all font-sans overflow-y-auto max-h-40 flex-1">
             {error}
           </pre>
-          <button onClick={() => setError(null)} className="font-bold text-lg leading-none shrink-0">
+          <button
+            onClick={() => setError(null)}
+            className="font-bold text-lg leading-none shrink-0"
+          >
             &times;
           </button>
         </div>
@@ -102,7 +107,9 @@ export function SetupScreen({
             <span>Proceed to Preview</span>
             <span className="text-lg">→</span>
           </button>
-          <p className="text-center text-xs -mt-2 text-text-subtle">{nextStepHint(upload, calibrated)}</p>
+          <p className="text-center text-xs -mt-2 text-text-subtle">
+            {nextStepHint(upload, calibrated)}
+          </p>
         </div>
       </div>
     </div>

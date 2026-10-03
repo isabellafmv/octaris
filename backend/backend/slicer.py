@@ -8,6 +8,7 @@ import struct
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import TypedDict
 
 from backend.config import PROJECT_ROOT, load_config
 from backend.gcode_processor import PRESSURIZE_MM, ProcessedGcode, SyringeMode, process_gcode
@@ -65,10 +66,10 @@ def _check_stl_dimensions(stl_path: Path) -> None:
     if not vertices:
         raise SlicingError("Could not read any vertices from the STL file.")
 
-    xs, ys, zs = zip(*vertices)
+    xs, ys, zs = zip(*vertices, strict=True)
     dims = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
     labels = ("X", "Y", "Z")
-    for dim, limit, label in zip(dims, PRINT_BED_MM, labels):
+    for dim, limit, label in zip(dims, PRINT_BED_MM, labels, strict=True):
         if dim > limit:
             raise SlicingError(
                 f"Model is too large for the print bed: "
@@ -113,6 +114,17 @@ def _find_cura_engine() -> str:
     return found
 
 
+class PrintSettings(TypedDict, total=False):
+    """The print settings an upload may override; None keeps the profile's value."""
+
+    nozzle_diameter: float | None
+    syringe_diameter: float | None
+    layer_height: float | None
+    pressurize_mm: float | None
+    flow_multiplier: float | None
+    travel_retract_multiplier: float | None
+
+
 async def slice_model(
     model_path: Path,
     syringe_mode: SyringeMode,
@@ -133,7 +145,7 @@ async def slice_model(
     if profile_path is None:
         profile_path = PROFILE_PATH
 
-    if not model_path.exists():
+    if not model_path.exists():  # noqa: ASYNC240 - a quick metadata call
         raise SlicingError(f"Model file not found: {model_path}")
 
     if not profile_path.exists():
@@ -167,8 +179,10 @@ async def slice_model(
     cmd = [
         cura_bin,
         "slice",
-        "-j", str(profile_path),
-        "-s", f"machine_extruder_count={extruder_count}",
+        "-j",
+        str(profile_path),
+        "-s",
+        f"machine_extruder_count={extruder_count}",
     ]
 
     # Extruder 0 settings
@@ -219,17 +233,20 @@ async def slice_model(
         out = stdout.decode("utf-8", errors="replace").strip()
         logger.error("CuraEngine failed (rc=%d):\nSTDERR: %s\nSTDOUT: %s", proc.returncode, err, out)
         relevant = err or "\n".join(
-            line for line in out.splitlines()
+            line
+            for line in out.splitlines()
             if not any(kw in line for kw in ("version", "Copyright", "GNU", "Free Software", "warranty"))
         )
         raise SlicingError(f"Slicing failed: {(relevant or out)[:1500]}")
 
-    raw_gcode = output_path.read_text()
-    output_path.unlink(missing_ok=True)
+    raw_gcode = await asyncio.to_thread(output_path.read_text)
+    output_path.unlink(missing_ok=True)  # noqa: ASYNC240 - a quick metadata call
 
-    logger.info("CuraEngine succeeded. Gcode lines: %d. First 3 lines: %s",
-                len(raw_gcode.splitlines()),
-                raw_gcode.splitlines()[:3])
+    logger.info(
+        "CuraEngine succeeded. Gcode lines: %d. First 3 lines: %s",
+        len(raw_gcode.splitlines()),
+        raw_gcode.splitlines()[:3],
+    )
 
     return process_gcode(
         raw_gcode,

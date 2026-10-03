@@ -7,6 +7,7 @@ once the reader has seen its "ok" (or its deadline has passed). Print lines
 carry line numbers and checksums, so the printer can ask for a corrupted line
 to be sent again.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,9 +17,10 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 import serial
 import serial.tools.list_ports
@@ -53,9 +55,7 @@ _RESEND = re.compile(r"^(?:resend:?|rs)\s*N?:?\s*(\d+)", re.IGNORECASE)
 # A temperature report starts with a sensor key, optionally after "ok":
 # "T:21.30 /0.00 B:20.10 /0.00 @:0 B@:0". M114's "X:... B:... C:..." does not.
 _TEMPERATURE_REPORT = re.compile(r"^(?:ok\s+)?(?:T\d*|B|C|P|R|W):\s*-?\d")
-_TEMPERATURE = re.compile(
-    r"\b(T\d*|B|C|P|R|W):\s*(-?\d+(?:\.\d+)?)(?:\s*/\s*(-?\d+(?:\.\d+)?))?"
-)
+_TEMPERATURE = re.compile(r"\b(T\d*|B|C|P|R|W):\s*(-?\d+(?:\.\d+)?)(?:\s*/\s*(-?\d+(?:\.\d+)?))?")
 _M110 = re.compile(r"^M110\b.*?\bN(\d+)", re.IGNORECASE)
 # Errors Marlin sends just before a "Resend:" request — not a reply by themselves.
 _RESEND_ERRORS = ("checksum", "line number", "last line")
@@ -159,6 +159,7 @@ class SerialManager:
         self,
         on_event: Callable[[dict[str, Any]], None] | None = None,
         can_reconnect: Callable[[], bool] | None = None,
+        on_traffic: Callable[[SerialLogEntry], None] | None = None,
     ):
         self._serial: serial.Serial | None = None
         self._port: str | None = None
@@ -175,6 +176,11 @@ class SerialManager:
         self._state_lock = threading.Lock()
         self._pending: _Pending | None = None
         self._history: deque[tuple[int, str]] = deque(maxlen=RESEND_HISTORY)
+        # One entry per emergency line written whose own "ok" is still to
+        # come: the command that was in flight when it went out (or None).
+        # Marlin acks an M410 once its turn in the command queue comes, so
+        # that "ok" follows the in-flight command's and belongs to neither.
+        self._emergency_oks: deque[_Pending | None] = deque()
         self._next_line_number = 1
         # Set when the printer's idea of the last line number may differ from
         # ours (fresh port, or a numbered line that failed); the next numbered
@@ -198,6 +204,9 @@ class SerialManager:
         # Axes are None while unknown.
         self._state = _unknown_position()
         self._log_buffer: deque[SerialLogEntry] = deque(maxlen=SERIAL_LOG_MAX_ENTRIES)
+        # Receives every serial log entry as it is made, from whichever thread
+        # made it, in order (unlike on_event, which runs later on the loop).
+        self._on_traffic = on_traffic
 
     @property
     def log_buffer(self) -> list[dict[str, Any]]:
@@ -219,22 +228,7 @@ class SerialManager:
 
     @staticmethod
     def list_ports() -> list[dict[str, str]]:
-        ports = serial.tools.list_ports.comports()
-        system = platform.system()
-
-        if system == "Darwin":
-            return [
-                {"device": p.device, "description": p.description}
-                for p in ports
-                if "cu.usbmodem" in p.device or "cu.usbserial" in p.device
-            ]
-        if system == "Linux":
-            return [
-                {"device": p.device, "description": p.description}
-                for p in ports
-                if "ttyUSB" in p.device or "ttyACM" in p.device
-            ]
-        return [{"device": p.device, "description": p.description} for p in ports]
+        return _virtual_ports() + _hardware_ports()
 
     # --- events ---------------------------------------------------------------
 
@@ -255,7 +249,9 @@ class SerialManager:
             line_number=line_number,
         )
         self._log_buffer.append(entry)
-        self._emit(SerialLogEvent(entry=entry.to_dict()))
+        if self._on_traffic is not None:
+            self._on_traffic(entry)
+        self._emit(SerialLogEvent.model_validate({"entry": entry.to_dict()}))
 
     # --- connection -------------------------------------------------------------
 
@@ -280,6 +276,8 @@ class SerialManager:
             self._baud_rate = baud_rate
         self._resync = True
         self._state = _unknown_position()
+        with self._state_lock:
+            self._emergency_oks.clear()
         stop = threading.Event()
         self._reader_stop = stop
         threading.Thread(
@@ -374,6 +372,8 @@ class SerialManager:
         # A quick stop (M410) halts mid-move: the position is unknown until
         # the next M114.
         self._state = _unknown_position(self._state.relative)
+        with self._state_lock:
+            self._emergency_oks.append(self._pending)
         try:
             self._log("sent", stripped)
             await asyncio.to_thread(self._write, ser, stripped)
@@ -395,9 +395,8 @@ class SerialManager:
         line is never re-sent: it may already have reached the printer, and
         the board may have reset and lost its zero.
         """
-        if not self.is_connected:
-            if not await self.reconnect():
-                raise SerialError("Not connected")
+        if not self.is_connected and not await self.reconnect():
+            raise SerialError("Not connected")
         try:
             return await self._transact(line, numbered, log)
         except _PortLost as exc:
@@ -410,8 +409,7 @@ class SerialManager:
                 logger.info("Attempting reconnect after serial error…")
                 if await self.reconnect():
                     raise SerialError(
-                        f"Connection lost and re-established ({exc}); "
-                        f"'{line}' was not re-sent"
+                        f"Connection lost and re-established ({exc}); '{line}' was not re-sent"
                     ) from exc
             raise SerialError(f"Connection lost: {exc}") from exc
 
@@ -423,7 +421,7 @@ class SerialManager:
             if not command:
                 raise ValueError(f"Nothing to send in {line!r}")
             number: int | None = self._next_line_number
-            wire = number_line(number, command)
+            wire = number_line(self._next_line_number, command)
         else:
             command, number, wire = line, None, line
             m110 = _M110.match(command)
@@ -516,8 +514,7 @@ class SerialManager:
             except RuntimeError:
                 pass
 
-    def _finish(self, pending: _Pending, result: str | None = None,
-                exc: BaseException | None = None) -> None:
+    def _finish(self, pending: _Pending, result: str | None = None, exc: BaseException | None = None) -> None:
         with self._state_lock:
             if self._pending is not pending:
                 return
@@ -544,9 +541,10 @@ class SerialManager:
 
         temperatures = parse_temperatures(line)
         if temperatures is not None:
-            self._emit(TemperatureEvent(temperatures=temperatures))
-            if (pending is None or not pending.wants_temperatures) and self._autoreport_seen:
-                self._loop.call_soon_threadsafe(self._autoreport_seen.set)
+            self._emit(TemperatureEvent.model_validate({"temperatures": temperatures}))
+            autoreport_seen, loop = self._autoreport_seen, self._loop
+            if (pending is None or not pending.wants_temperatures) and autoreport_seen and loop:
+                loop.call_soon_threadsafe(autoreport_seen.set)
 
         resend = _RESEND.match(line)
         if resend:
@@ -558,6 +556,8 @@ class SerialManager:
         if lowered.startswith("ok"):
             if temperatures is None:
                 self._log("received", line)
+            if self._is_emergency_ok(pending):
+                return
             if pending is not None:
                 self._on_ok(ser, pending, line)
             return
@@ -578,19 +578,32 @@ class SerialManager:
             return
         pending.lines.append(line)
 
+    def _is_emergency_ok(self, pending: _Pending | None) -> bool:
+        """Whether an "ok" is the ack of an emergency line, not a reply to
+        `pending`: the command that was in flight when it went out has had
+        its own "ok" already."""
+        with self._state_lock:
+            if self._emergency_oks and self._emergency_oks[0] is not pending:
+                self._emergency_oks.popleft()
+                return True
+        return False
+
     def _on_ok(self, ser: Any, pending: _Pending, line: str) -> None:
         if pending.resend_from is not None:
             wanted, pending.resend_from = pending.resend_from, None
-            if wanted == pending.number + 1:
+            if pending.number is not None and wanted == pending.number + 1:
                 # The printer already has this line (e.g. it was sent twice).
                 self._finish(pending, "\n".join([*pending.lines, line]))
                 return
             with self._state_lock:
                 lines = [(n, wire) for n, wire in self._history if n >= wanted]
             if not lines or lines[0][0] != wanted:
-                self._finish(pending, exc=ResendUnavailable(
-                    f"The printer asked to resend line {wanted}, which is no longer available"
-                ))
+                self._finish(
+                    pending,
+                    exc=ResendUnavailable(
+                        f"The printer asked to resend line {wanted}, which is no longer available"
+                    ),
+                )
                 return
             pending.resend_queue = deque(lines)
 
@@ -646,6 +659,10 @@ def _open_port(port: str, baud_rate: int) -> serial.Serial:
     USB (STM32, SAMD, LPC) don't reset on DTR at all; if one of those stops
     answering, check whether its firmware waits for DTR before sending.
     """
+    from backend import virtual_printer
+
+    if port == virtual_printer.VIRTUAL_PORT and virtual_printer.enabled():
+        return virtual_printer.open_virtual()  # type: ignore[return-value]
     ser = serial.Serial()
     ser.port = port
     ser.baudrate = baud_rate
@@ -654,3 +671,35 @@ def _open_port(port: str, baud_rate: int) -> serial.Serial:
     ser.rts = False
     ser.open()
     return ser
+
+
+def _virtual_ports() -> list[dict[str, str]]:
+    """The virtual printer, in dev mode (OCTARIS_VIRTUAL_PRINTER=1)."""
+    from backend import virtual_printer
+
+    if not virtual_printer.enabled():
+        return []
+    return [
+        {
+            "device": virtual_printer.VIRTUAL_PORT,
+            "description": virtual_printer.VIRTUAL_PORT_DESCRIPTION,
+        }
+    ]
+
+
+def _hardware_ports() -> list[dict[str, str]]:
+    ports = serial.tools.list_ports.comports()
+    system = platform.system()
+    if system == "Darwin":
+        return [
+            {"device": p.device, "description": p.description}
+            for p in ports
+            if "cu.usbmodem" in p.device or "cu.usbserial" in p.device
+        ]
+    if system == "Linux":
+        return [
+            {"device": p.device, "description": p.description}
+            for p in ports
+            if "ttyUSB" in p.device or "ttyACM" in p.device
+        ]
+    return [{"device": p.device, "description": p.description} for p in ports]

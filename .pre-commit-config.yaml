@@ -1,0 +1,42 @@
+# Install once with `pre-commit install` (pre-commit is in the backend's dev
+# dependencies). The mypy and client hooks use the tools already installed
+# for development: backend/.venv (or the active Python) and client/node_modules.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (backend)
+        language: system
+        entry: bash -c 'cd backend && if [ -x .venv/bin/mypy ]; then .venv/bin/mypy; else python -m mypy; fi'
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+      - id: client-typecheck
+        name: typecheck (client)
+        language: system
+        entry: npm --prefix client run typecheck
+        files: ^client/.*\.(ts|tsx|json)$
+        pass_filenames: false
+
+      - id: client-lint
+        name: eslint (client)
+        language: system
+        entry: npm --prefix client run lint
+        files: ^client/.*\.(ts|tsx|js|mjs|cjs)$
+        pass_filenames: false

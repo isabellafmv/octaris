@@ -17,7 +17,9 @@ export const useSerialLog = create<SerialLogState>()((set) => ({
   append: (entry) =>
     set((s) => {
       const updated = [...s.entries, entry]
-      return { entries: updated.length > MAX_LOG_ENTRIES ? updated.slice(-MAX_LOG_ENTRIES) : updated }
+      return {
+        entries: updated.length > MAX_LOG_ENTRIES ? updated.slice(-MAX_LOG_ENTRIES) : updated
+      }
     }),
   setEntries: (entries) => set({ entries }),
   clear: () => set({ entries: [] })

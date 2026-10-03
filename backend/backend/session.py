@@ -1,12 +1,14 @@
 """The printer as the app sees it: connection, calibration, the loaded print
 and the print itself. Routers translate HTTP to calls on PrinterSession and
 its exceptions back to HTTP (see main.py for the status codes)."""
+
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from backend.checkpoint import parse_m114
 from backend.config import Config
@@ -36,7 +38,7 @@ from backend.schemas import (
     StatusEvent,
 )
 from backend.serial_manager import SerialError, SerialManager
-from backend.slicer import slice_model
+from backend.slicer import PrintSettings, slice_model
 
 # Where uploaded models are written for the slicer
 DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
@@ -72,7 +74,7 @@ class LoadedPrint:
     mode: SyringeMode = "left"
     source: Literal["stl", "gcode"] | None = None
     # The upload settings it was made with, recorded in the print history
-    settings: dict[str, float | None] = field(default_factory=dict)
+    settings: PrintSettings = field(default_factory=lambda: PrintSettings())
 
 
 class PrinterSession:
@@ -216,6 +218,7 @@ class PrinterSession:
 
         if axis in ("B", "C"):
             self.worker.invalidate_checkpoint(f"The {axis} plunger was jogged")
+        self.worker.manual_command()
         await self.serial.send_lines(["G91", f"G1 {axis}{distance} F{feed_rate}", "G90"])
         return axis
 
@@ -246,6 +249,7 @@ class PrinterSession:
         reason = _invalidates_checkpoint(line)
         if reason:
             self.worker.invalidate_checkpoint(reason)
+        self.worker.manual_command()
         return await self.serial.send(line)
 
     def serial_log(self, limit: int) -> list[dict[str, Any]]:
@@ -266,7 +270,7 @@ class PrinterSession:
     # --- loading a print --------------------------------------------------------
 
     async def load_model(
-        self, filename: str, content: bytes, mode: SyringeMode, settings: dict[str, float | None]
+        self, filename: str, content: bytes, mode: SyringeMode, settings: PrintSettings
     ) -> ProcessedGcode:
         """Slice an STL/3MF model and load the result.
 
@@ -374,7 +378,12 @@ class PrinterSession:
             return
         if self.worker.status != PrintStatus.STOPPED:
             raise Conflict("No paused or stopped print to resume")
-        await self.worker.resume_from_stop()
+        self.history.resuming()
+        try:
+            await self.worker.resume_from_stop()
+        except BaseException:
+            self.history.resume_failed()
+            raise
 
 
 def _invalidates_checkpoint(line: str) -> str | None:
@@ -387,4 +396,3 @@ def _invalidates_checkpoint(line: str) -> str | None:
     if words[0][1] in (0, 1) and any(letter in ("B", "C") for letter, _ in words[1:]):
         return "A plunger was moved manually"
     return None
-

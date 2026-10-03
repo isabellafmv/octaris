@@ -51,7 +51,9 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
       const settings = usePrintSettings.getState()
       setResult(await api.upload(stlFile, settings.syringeMode, sliceOptions(settings)))
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Slicing failed. Check that CuraEngine is installed.')
+      setError(
+        e instanceof Error ? e.message : 'Slicing failed. Check that CuraEngine is installed.'
+      )
     } finally {
       setSlicing(false)
     }

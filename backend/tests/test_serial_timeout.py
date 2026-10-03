@@ -30,8 +30,12 @@ class ScriptedSerial:
     thread keeps reading when idle).
     """
 
-    def __init__(self, clock: FakeClock, replies: dict[str, list[str | None]] | None = None,
-                 default: list[str | None] | None = None):
+    def __init__(
+        self,
+        clock: FakeClock,
+        replies: dict[str, list[str | None]] | None = None,
+        default: list[str | None] | None = None,
+    ):
         self.is_open = True
         self.clock = clock
         self.replies = replies or {}
@@ -87,11 +91,19 @@ def silent_for(seconds: int) -> list[None]:
 async def test_slow_ok_with_busy_lines_succeeds(clock):
     # Nothing for 4 s, busy, nothing for 4 s, busy, nothing for 4 s, then ok:
     # 12 s in total, well past the old 5 s readline timeout.
-    fake = ScriptedSerial(clock, {"M400": [
-        *silent_for(4), "echo:busy: processing",
-        *silent_for(4), "echo:busy: processing",
-        *silent_for(4), "ok",
-    ]})
+    fake = ScriptedSerial(
+        clock,
+        {
+            "M400": [
+                *silent_for(4),
+                "echo:busy: processing",
+                *silent_for(4),
+                "echo:busy: processing",
+                *silent_for(4),
+                "ok",
+            ]
+        },
+    )
     manager = make_manager(fake)
 
     response = await manager.send("M400")
@@ -103,10 +115,18 @@ async def test_slow_ok_with_busy_lines_succeeds(clock):
 async def test_busy_lines_extend_deadline_and_other_lines_are_kept(clock):
     # 50 s silent + busy + 50 s silent + ok = 100 s, over the 60 s deadline,
     # but the busy line restarts it.
-    fake = ScriptedSerial(clock, {"G1 X10 F300": [
-        *silent_for(50), "echo:busy: processing",
-        *silent_for(50), "X:10.00 Y:0.00", "ok",
-    ]})
+    fake = ScriptedSerial(
+        clock,
+        {
+            "G1 X10 F300": [
+                *silent_for(50),
+                "echo:busy: processing",
+                *silent_for(50),
+                "X:10.00 Y:0.00",
+                "ok",
+            ]
+        },
+    )
     manager = make_manager(fake)
 
     response = await manager.send("G1 X10 F300")
@@ -152,9 +172,16 @@ async def test_late_reply_is_not_taken_for_the_next_command(clock):
 
 
 async def test_error_reply_is_returned(clock):
-    fake = ScriptedSerial(clock, {"G1 X999": [
-        "echo:busy: processing", "error:Move out of range", "ok",
-    ]})
+    fake = ScriptedSerial(
+        clock,
+        {
+            "G1 X999": [
+                "echo:busy: processing",
+                "error:Move out of range",
+                "ok",
+            ]
+        },
+    )
     manager = make_manager(fake)
 
     response = await manager.send("G1 X999")
@@ -190,7 +217,15 @@ async def test_print_pauses_on_timeout_and_retries_line_on_resume(clock):
     assert worker.status == PrintStatus.COMPLETED
     assert worker.lines_sent == 3
     assert fake.written == [
-        "M114", "M84 S0", "M110 N0", "G1 X1", "G1 X2", "M110 N1", "G1 X2", "G1 X3",
+        "M114",
+        "M84 S0",
+        "M110 N0",
+        "G1 X1",
+        "G1 X2",
+        "M110 N1",
+        "G1 X2",
+        "G1 X3",
+        "M400",  # the planner drained before COMPLETED
     ]
 
 

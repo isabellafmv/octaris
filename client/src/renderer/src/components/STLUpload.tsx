@@ -52,9 +52,7 @@ export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps): 
           </svg>
         </div>
         <div className="flex-1 text-left">
-          <p className="font-semibold text-sm text-text">
-            {file ? file.name : 'Upload Model'}
-          </p>
+          <p className="font-semibold text-sm text-text">{file ? file.name : 'Upload Model'}</p>
           <p className="text-xs mt-0.5 text-text-muted">
             {file ? 'Click to replace file' : 'Select a .stl or .3mf file'}
           </p>
@@ -70,14 +68,14 @@ export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps): 
       </button>
       {dualMode && !file && (
         <p className="text-[9px] mt-1.5 text-text-tinted">
-          Upload a .3mf file for multi-material printing (different material per syringe).
-          A single .stl will extrude from both syringes simultaneously.
+          Upload a .3mf file for multi-material printing (different material per syringe). A single
+          .stl will extrude from both syringes simultaneously.
         </p>
       )}
       {dualMode && file && !is3mf && (
         <p className="text-[9px] mt-1.5 text-text-muted">
-          Both syringes will extrude the same path. Use a .3mf file to assign
-          different regions to each syringe.
+          Both syringes will extrude the same path. Use a .3mf file to assign different regions to
+          each syringe.
         </p>
       )}
     </>

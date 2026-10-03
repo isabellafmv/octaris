@@ -48,7 +48,15 @@ async def test_load_and_print():
 
     assert worker.status == PrintStatus.COMPLETED
     assert worker.lines_sent == 3
-    assert sent_lines(serial) == ["M114", "M84 S0", "M110 N0", "G1 X10 F200", "G1 Y5 F200", "G1 Z1 F100"]
+    assert sent_lines(serial) == [
+        "M114",
+        "M84 S0",
+        "M110 N0",
+        "G1 X10 F200",
+        "G1 Y5 F200",
+        "G1 Z1 F100",
+        "M400",
+    ]
 
     progress_events = [e for e in events if e["type"] == "progress"]
     assert len(progress_events) == 3
@@ -104,7 +112,7 @@ async def test_estop_while_idle_leaves_nothing_queued():
     await asyncio.sleep(0.3)
 
     assert worker.status == PrintStatus.COMPLETED
-    assert sent_lines(serial) == ["M114", "M84 S0", "M110 N0", "G1 X1", "G1 X2"]
+    assert sent_lines(serial) == ["M114", "M84 S0", "M110 N0", "G1 X1", "G1 X2", "M400"]
 
 
 async def test_load_gcode_drains_priority_queue():
@@ -115,7 +123,7 @@ async def test_load_gcode_drains_priority_queue():
     worker.start()
     await asyncio.sleep(0.3)
 
-    assert sent_lines(serial) == ["M114", "M84 S0", "M110 N0", "G1 X1"]
+    assert sent_lines(serial) == ["M114", "M84 S0", "M110 N0", "G1 X1", "M400"]
 
 
 async def test_estop_mid_print_bypasses_in_flight_send():

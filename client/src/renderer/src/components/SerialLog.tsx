@@ -17,7 +17,7 @@ export function SerialLog({ entries, onClear }: SerialLogProps): React.JSX.Eleme
     }
   }, [entries, autoScroll])
 
-  const handleScroll = () => {
+  const handleScroll = (): void => {
     if (!containerRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current
     // If user is within 40px of bottom, keep auto-scrolling
@@ -25,10 +25,15 @@ export function SerialLog({ entries, onClear }: SerialLogProps): React.JSX.Eleme
     setAutoScroll(atBottom)
   }
 
-  const formatTime = (iso: string) => {
+  const formatTime = (iso: string): string => {
     try {
       const d = new Date(iso)
-      return d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      return d.toLocaleTimeString('en-GB', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      })
     } catch {
       return ''
     }
@@ -36,10 +41,10 @@ export function SerialLog({ entries, onClear }: SerialLogProps): React.JSX.Eleme
 
   return (
     <div className="flex flex-col h-full">
-      <div
-        className="flex items-center justify-between px-3 py-2 border-b shrink-0 bg-surface-card border-border"
-      >
-        <h3 className="text-xs font-semibold uppercase tracking-widest text-text-muted">Serial Log</h3>
+      <div className="flex items-center justify-between px-3 py-2 border-b shrink-0 bg-surface-card border-border">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-text-muted">
+          Serial Log
+        </h3>
         <div className="flex items-center gap-2">
           {!autoScroll && (
             <button
@@ -57,7 +62,10 @@ export function SerialLog({ entries, onClear }: SerialLogProps): React.JSX.Eleme
           <button
             onClick={() => {
               const text = entries
-                .map(e => `${formatTime(e.timestamp)} ${e.direction === 'sent' ? '>' : '<'} ${e.content}`)
+                .map(
+                  (e) =>
+                    `${formatTime(e.timestamp)} ${e.direction === 'sent' ? '>' : '<'} ${e.content}`
+                )
                 .join('\n')
               navigator.clipboard.writeText(text)
             }}

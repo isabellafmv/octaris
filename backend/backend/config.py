@@ -26,7 +26,7 @@ class AxisRange(BaseModel):
     max: float
 
     @model_validator(mode="after")
-    def _check_order(self) -> "AxisRange":
+    def _check_order(self) -> AxisRange:
         if self.min >= self.max:
             raise ValueError(f"min ({self.min}) must be below max ({self.max})")
         return self

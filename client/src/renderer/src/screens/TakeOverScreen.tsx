@@ -14,7 +14,7 @@ interface TakeOverScreenProps {
 export function TakeOverScreen({
   printerConnected,
   printStatus,
-  onBack,
+  onBack
 }: TakeOverScreenProps): React.JSX.Element {
   const entries = useSerialLog((s) => s.entries)
   const clear = useSerialLog((s) => s.clear)
@@ -22,11 +22,16 @@ export function TakeOverScreen({
   // Backfill lines logged before this screen was opened
   useEffect(() => {
     let cancelled = false
-    api.getSerialLog(200).then(({ entries }) => {
-      if (cancelled || entries.length === 0) return
-      useSerialLog.getState().setEntries(entries)
-    }).catch(() => {})
-    return () => { cancelled = true }
+    api
+      .getSerialLog(200)
+      .then(({ entries }) => {
+        if (cancelled || entries.length === 0) return
+        useSerialLog.getState().setEntries(entries)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (
@@ -37,8 +42,18 @@ export function TakeOverScreen({
           onClick={onBack}
           className="flex items-center gap-1.5 text-sm font-medium transition-opacity active:opacity-60 text-text-muted"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            className="w-4 h-4"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
+            />
           </svg>
           Back
         </button>

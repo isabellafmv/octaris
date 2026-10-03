@@ -75,14 +75,16 @@ def test_connect_endpoint_publishes_printer_connected_event():
     client = TestClient(app)
     fake = _fake_connected_serial()
 
-    with patch("backend.serial_manager.serial.Serial", return_value=fake):
-        with client.websocket_connect("/ws") as ws:
-            ws.receive_json()  # initial snapshot
+    with (
+        patch("backend.serial_manager.serial.Serial", return_value=fake),
+        client.websocket_connect("/ws") as ws,
+    ):
+        ws.receive_json()  # initial snapshot
 
-            resp = client.post("/connect", json={"port": "/dev/ttyUSB0"})
-            assert resp.status_code == 200
+        resp = client.post("/connect", json={"port": "/dev/ttyUSB0"})
+        assert resp.status_code == 200
 
-            event = receive_state_event(ws)
+        event = receive_state_event(ws)
 
     assert event == {"type": "printer", "connected": True, "port": "/dev/ttyUSB0"}
 
@@ -92,19 +94,21 @@ def test_disconnect_endpoint_publishes_printer_disconnected_event():
     client = TestClient(app)
     fake = _fake_connected_serial()
 
-    with patch("backend.serial_manager.serial.Serial", return_value=fake):
-        with client.websocket_connect("/ws") as ws:
-            ws.receive_json()  # initial snapshot
+    with (
+        patch("backend.serial_manager.serial.Serial", return_value=fake),
+        client.websocket_connect("/ws") as ws,
+    ):
+        ws.receive_json()  # initial snapshot
 
-            client.post("/connect", json={"port": "/dev/ttyUSB0"})
-            receive_state_event(ws)  # printer connected event
-            # Opening the port may reset the board, so calibration is reset
-            assert receive_state_event(ws) == {"type": "calibration", "value": "uncalibrated"}
+        client.post("/connect", json={"port": "/dev/ttyUSB0"})
+        receive_state_event(ws)  # printer connected event
+        # Opening the port may reset the board, so calibration is reset
+        assert receive_state_event(ws) == {"type": "calibration", "value": "uncalibrated"}
 
-            resp = client.post("/disconnect")
-            assert resp.status_code == 200
+        resp = client.post("/disconnect")
+        assert resp.status_code == 200
 
-            event = receive_state_event(ws)
+        event = receive_state_event(ws)
 
     assert event == {"type": "printer", "connected": False, "port": None}
 

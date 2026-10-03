@@ -75,7 +75,14 @@ async def test_send_lines_is_atomic_against_concurrent_send_line():
 
     assert len(fake.log) == 8
     assert [entry[0] for entry in fake.log] == [
-        "write", "read", "write", "read", "write", "read", "write", "read",
+        "write",
+        "read",
+        "write",
+        "read",
+        "write",
+        "read",
+        "write",
+        "read",
     ]
 
     lines_in_order = [entry[1] for entry in fake.log if entry[0] == "write"]
@@ -110,9 +117,11 @@ async def test_send_line_reconnect_does_not_deadlock():
 
 def connection_events(ports: list[str]):
     """An on_event handler that records the port of each "printer connected" event."""
+
     def on_event(event: dict) -> None:
         if event["type"] == "printer" and event["connected"]:
             ports.append(event["port"])
+
     return on_event
 
 

@@ -46,6 +46,8 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(null)
+  // connect() schedules itself after a close, through this ref
+  const connectRef = useRef<() => void>(() => {})
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -126,13 +128,17 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
 
     ws.onclose = () => {
       setState((s) => ({ ...s, wsConnected: false }))
-      reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY)
+      reconnectTimer.current = setTimeout(() => connectRef.current(), RECONNECT_DELAY)
     }
 
     ws.onerror = () => {
       ws.close()
     }
   }, [])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   useEffect(() => {
     connect()
@@ -149,7 +155,7 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
       linesSent: 0,
       linesTotal: 0,
       timeRemainingS: null,
-      extrusionRate: 100,
+      extrusionRate: 100
     }))
   }, [])
 

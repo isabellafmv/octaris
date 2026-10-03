@@ -1,4 +1,5 @@
 """Helpers shared by the fake serial ports in the tests."""
+
 from __future__ import annotations
 
 import queue

@@ -1,4 +1,5 @@
 """The client's generated types must match the backend's models."""
+
 import json
 from pathlib import Path
 
@@ -29,10 +30,15 @@ def test_optional_fields_are_left_out_of_the_message():
     from backend.schemas import ProgressEvent, StopEvent
 
     assert StopEvent(resumable=False, reason="x").dump() == {
-        "type": "stop", "resumable": False, "reason": "x",
+        "type": "stop",
+        "resumable": False,
+        "reason": "x",
     }
     assert ProgressEvent(lines_sent=1, lines_total=2).dump() == {
-        "type": "progress", "lines_sent": 1, "lines_total": 2,
+        "type": "progress",
+        "lines_sent": 1,
+        "lines_total": 2,
     }
     adapter = TypeAdapter(WsEvent)
-    assert isinstance(adapter.validate_python({"type": "stop", "resumable": True, "reason": None, "line": 3}), StopEvent)
+    stop = {"type": "stop", "resumable": True, "reason": None, "line": 3}
+    assert isinstance(adapter.validate_python(stop), StopEvent)

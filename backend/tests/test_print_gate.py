@@ -3,8 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from backend.main import app
 from backend.gcode_processor import ProcessedGcode
+from backend.main import app
 from backend.queue_worker import PrintState, PrintStatus
 from backend.session import LoadedPrint
 

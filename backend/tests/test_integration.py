@@ -1,120 +1,37 @@
 """End-to-end print lifecycle through the FastAPI test client.
 
-Exercises the real HTTP routes (not the QueueWorker/SerialManager directly)
-against a fake serial device, and checks the serial log, the WebSocket event
-stream (via the real EventBus), the mid-print 409 gating, timeout -> pause
-recovery, and the SQLite session rows the run leaves behind.
+Exercises the real HTTP routes against the virtual printer, connected the
+way dev mode does it (the "virtual" port from /ports), and checks the serial
+log, the WebSocket event stream (via the real EventBus), the mid-print 409
+gating, timeout -> pause recovery, resends, and the SQLite session rows the
+run leaves behind. Stops are placed by holding the printer's motion part way
+through a chosen move.
 """
+
 from __future__ import annotations
 
 import asyncio
-import threading
-import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from pydantic import TypeAdapter
 
 from backend import serial_manager as serial_module
+from backend import virtual_printer
 from backend.main import app
 from backend.queue_worker import PrintStatus
 from backend.schemas import WsEvent
-from tests.serial_fakes import attach, unframe
+from backend.virtual_printer import VirtualPrinter
+from tests.serial_fakes import attach
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RAW_SAMPLE = (FIXTURES / "raw_sample.gcode").read_text()
 
-
-def m114(**pos: float) -> str:
-    logical = " ".join(f"{axis}:{value:.2f}" for axis, value in pos.items())
-    return f"{logical} Count X:0 Y:0 Z:0"
-
-
-class FakePrinter:
-    """Mimics a Marlin printer on the serial port for the test client.
-
-    Every line is answered "ok" after a short delay (so a print is still
-    in flight while the test talks to the API). M114 answers with
-    `position` — except the very first M114, which QueueWorker.start() sends
-    before anything else to seed its as-sent position tracker, and which
-    gets `start_position` instead (a real printer's actual position at print
-    start, not wherever the test wants the *stop* to be found). M115
-    answers with a firmware string. While `block_on` is in flight, its "ok"
-    is held back until M410 arrives (EMERGENCY_PARSER semantics), letting
-    the test e-stop deterministically mid-line. A line named in
-    `fail_once_on` gets no reply at all the first time it's sent (so it
-    times out), then answers normally on any later attempt (retry).
-    """
-
-    def __init__(self, delay: float = 0.005, start_position: str | None = None):
-        self.is_open = True
-        self.delay = delay
-        self.position = ""
-        self.start_position = start_position if start_position is not None else m114(
-            X=0, Y=0, Z=0, A=0, B=0, C=0
-        )
-        self.firmware = "FIRMWARE_NAME:Marlin bugfix-2.1.2 MACHINE_TYPE:Octaris EXTRUDER_COUNT:1"
-        self.block_on: str | None = None
-        self.fail_once_on: str | None = None
-        self.written: list[str] = []
-        self.reached = threading.Event()  # block_on was written
-        self._released = threading.Event()  # M410 arrived
-        self._held: list[str] = []
-        self._blocked_at = 0.0
-        self._m114_calls = 0
-        self._already_failed: set[str] = set()
-        self._pending: list[str] = []
-
-    def write(self, data: bytes) -> None:
-        _, line = unframe(data.decode().strip())
-        self.written.append(line)
-        if line == "M410":
-            self._released.set()  # emergency parser: acts on it immediately
-            return
-
-        if line == "M114":
-            self._m114_calls += 1
-            position = self.start_position if self._m114_calls == 1 else self.position
-            reply = [position, "ok"]
-        elif line == "M115":
-            reply = [self.firmware, "ok"]
-        elif line == self.fail_once_on and line not in self._already_failed:
-            self._already_failed.add(line)
-            reply = []  # never answers this attempt -> timeout
-        else:
-            reply = ["ok"]
-
-        if line == self.block_on:
-            # Its "ok" is held back (never visible to readline) until M410.
-            self.block_on = None
-            self._held = reply
-            self._blocked_at = time.monotonic()
-            self.reached.set()
-        else:
-            self._pending = reply
-
-    def flush(self) -> None:
-        pass
-
-    def reset_input_buffer(self) -> None:
-        pass
-
-    def readline(self) -> bytes:
-        if self._held and (self._released.is_set() or time.monotonic() - self._blocked_at > 5):
-            self._pending, self._held = self._held, []
-        if not self._pending:
-            time.sleep(0.01)
-            return b""
-        time.sleep(self.delay)
-        return (self._pending.pop(0) + "\n").encode()
-
-    def open(self) -> None:
-        self.is_open = True
-
-    def close(self) -> None:
-        self.is_open = False
+# A two-move planner keeps the host just ahead of the motion: when the
+# printer is held mid-move, one more move is planned and the next line is in
+# flight, blocked on the full planner.
+PRINTER_OPTIONS = {"planner_depth": 2, "speed": 200, "busy_interval_s": 0.05, "ok_delay_s": 0}
 
 
 async def wait_for(condition, timeout: float = 5.0) -> None:
@@ -148,26 +65,32 @@ async def upload_sample(client, mode: str = "left"):
     assert resp.status_code == 200, resp.text
 
 
+@pytest.fixture
+def dev_mode(monkeypatch):
+    monkeypatch.setenv("OCTARIS_VIRTUAL_PRINTER", "1")
+    monkeypatch.setattr(virtual_printer, "DEV_OPTIONS", PRINTER_OPTIONS)
+
+
 # --- the full lifecycle -----------------------------------------------------
 
 
-async def test_full_print_lifecycle(client):
+async def test_full_print_lifecycle(client, dev_mode, data_dir):
     worker = app.state.queue_worker
     sub_id, event_queue = app.state.event_bus.subscribe()
 
-    fake1 = FakePrinter()
-
-    # 1. connect — through the real endpoint, not by poking _serial directly.
-    with patch("backend.serial_manager.serial.Serial", return_value=fake1):
-        resp = await client.post("/connect", json={"port": "/dev/fake"})
+    # 1. connect to the virtual printer, as dev mode offers it
+    resp = await client.get("/ports")
+    assert {"device": "virtual", "description": "Virtual printer"} in resp.json()["ports"]
+    resp = await client.post("/connect", json={"port": "virtual"})
     assert resp.status_code == 200
     assert app.state.serial_manager.is_connected
+    printer: VirtualPrinter = app.state.serial_manager._serial
+    assert isinstance(printer, VirtualPrinter)
 
-    # Mock device answers M115 too (not exercised elsewhere, but required
-    # of the mock, so check it directly).
     resp = await client.post("/gcode/send", json={"line": "M115"})
     assert resp.status_code == 200
     assert "FIRMWARE_NAME:Marlin" in resp.json()["response"]
+    assert "Cap:EMERGENCY_PARSER:1" in resp.json()["response"]
 
     # 2. calibrate
     resp = await client.post("/calibration/zero")
@@ -178,16 +101,12 @@ async def test_full_print_lifecycle(client):
     # 3. upload the fixture G-code
     await upload_sample(client)
 
-    # 4. start — and arm the soft-stop point before any line can reach it.
-    # Both as actually sent at the 80% flow override set up below (line 6's
-    # planned B-1.5 scales to B-1.2; the checkpoint position sits at the
-    # midpoint of the *scaled* segment, B0 -> B-0.4, not the planned one).
-    fake1.block_on = "G1 F200 X10 Y20 B-1.2"  # worker line 6, flow-scaled
-    fake1.position = m114(X=15, Y=10, Z=0.3, A=0, B=-0.2, C=0)
-
+    # 4. start, with motion held half way along the first travel move
+    printer.hold_at("X10 Y10 Z0.3", 0.5)
     resp = await client.post("/print/start")
     assert resp.status_code == 200
     assert worker.status == PrintStatus.PRINTING
+    await wait_for(printer.held.is_set)
 
     # -- 409s on manual commands while PRINTING --
     resp = await client.post("/jog", json={"axis": "X", "distance": 1})
@@ -202,26 +121,27 @@ async def test_full_print_lifecycle(client):
     assert resp.status_code == 409
     assert resp.json()["detail"] == "Pause the print first"
 
-    await wait_for(lambda: worker.lines_sent >= 2)
-
-    # 5. change flow — allowed regardless of print status
+    # 5. change flow — allowed regardless of print status. Two print lines
+    # after the travel move are already sent at 100%; the rest go out at
+    # 80%, through the stop and resume below.
     resp = await client.post("/extrusion", json={"rate": 80})
     assert resp.status_code == 200
     assert worker.flow_rate == 80
-    # Left at 80% through the soft stop below on purpose: the checkpoint
-    # tracks what's actually sent (post-scaling), so a stop under a flow
-    # override is still resumable, at the *scaled* plunger position.
 
-    # 6. pause
+    # 6. pause, and let the moves already sent run out
     resp = await client.post("/print/pause")
     assert resp.status_code == 200
     assert worker.status == PrintStatus.PAUSED
+    # Next, stop half way along the first line of layer 2 (planned B-2.5).
+    printer.hold_at("X20 Y10 B-2", 0.5)
+    printer.release()
+    await wait_for(lambda: printer.moves_planned == 0)
 
     # -- while PAUSED: jog and raw G-code are allowed, G92/calibration are not --
     resp = await client.post("/jog", json={"axis": "X", "distance": 1})
     assert resp.status_code == 200
 
-    resp = await client.post("/gcode/send", json={"line": "G28"})
+    resp = await client.post("/gcode/send", json={"line": "G4 P10"})
     assert resp.status_code == 200
 
     resp = await client.post("/gcode/send", json={"line": "G92 X0 Y0"})
@@ -237,18 +157,20 @@ async def test_full_print_lifecycle(client):
     assert resp.status_code == 200
     assert worker.status == PrintStatus.PRINTING
 
-    # 8. soft stop, while a specific line is in flight
-    await wait_for(fake1.reached.is_set)
-    k = worker_index("G1 F200 X20 Y10 B-0.5")
+    # 8. stop at the hold
+    await wait_for(printer.held.is_set)
+    k = worker_index("G1 F200 X20 Y10 B-2.5")
 
     resp = await client.post("/print/stop")
     assert resp.status_code == 200
-    stop_result = resp.json()
-    assert stop_result == {"status": "stopped", "resumable": True, "reason": None}
+    assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
     assert worker.status == PrintStatus.STOPPED
     assert worker.checkpoint.line == k
-    # As actually sent (flow-scaled -0.4), not the planned -0.5.
-    assert worker.checkpoint.after.pos["B"] == pytest.approx(-0.4)
+    # As actually sent at 80%: B goes from -1.6 to -2, not -2 to -2.5.
+    assert worker.checkpoint.position == pytest.approx(
+        {"X": 15, "Y": 10, "Z": 0.5, "A": 0, "B": -1.8, "C": 0}
+    )
+    assert worker.checkpoint.after.pos["B"] == pytest.approx(-2.0)
 
     [session] = (await client.get("/history")).json()["sessions"]
     session1_id = session["id"]
@@ -266,6 +188,10 @@ async def test_full_print_lifecycle(client):
     # 10. complete
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
     assert worker.lines_sent == worker.lines_total
+    await wait_for(lambda: printer.moves_planned == 0)
+    # Where the uninterrupted print would have ended at this flow: the
+    # footer's depressurize is scaled too (+0.16 from B-3.2).
+    assert printer.position == pytest.approx({"X": 0, "Y": 0, "Z": 5.5, "A": 0, "B": -3.04, "C": 0})
 
     [session] = (await client.get("/history")).json()["sessions"]
     assert session["id"] == session1_id  # the same session was reopened
@@ -273,31 +199,27 @@ async def test_full_print_lifecycle(client):
     assert session["completed"] is True
     assert session["resume_line"] is None
 
-    # Print #1 is fully done sending; safe to reset flow now (no in-flight
-    # line whose scaling this could race with) so print #2 below is back to
-    # its original, unscaled expectations.
     resp = await client.post("/extrusion", json={"rate": 100})
     assert resp.status_code == 200
     assert worker.flow_rate == 100
 
     # --- second print, stopped the same way --------------------------------
 
-    fake2 = FakePrinter()
-    attach(app.state.serial_manager, fake2)  # still "connected"; swap the wire
-    fake2.block_on = "G1 F200 X10 Y20 B-1.5"
-    fake2.position = m114(X=15, Y=10, Z=0.3, A=0, B=-0.25, C=0)
-
     await upload_sample(client)
+    printer.hold_at("X20 Y20 B-1*", 0.5)
     resp = await client.post("/print/start")
     assert resp.status_code == 200
 
-    await wait_for(fake2.reached.is_set)
-    k2 = worker_index("G1 F200 X20 Y10 B-0.5")
+    await wait_for(printer.held.is_set)
+    k2 = worker_index("G1 F200 X20 Y20 B-1")
 
     resp = await client.post("/print/stop")
     assert resp.status_code == 200
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
     assert worker.status == PrintStatus.STOPPED
+    assert worker.checkpoint.position == pytest.approx(
+        {"X": 20, "Y": 15, "Z": 0.3, "A": 0, "B": -0.75, "C": 0}
+    )
 
     sessions = (await client.get("/history")).json()["sessions"]
     assert len(sessions) == 2
@@ -309,8 +231,7 @@ async def test_full_print_lifecycle(client):
     # --- SQLite rows, read straight off the connection ----------------------
 
     rows = app.state.db.execute(
-        "SELECT id, filename, source, completed, end_reason, resume_line "
-        "FROM sessions ORDER BY id"
+        "SELECT id, filename, source, completed, end_reason, resume_line FROM sessions ORDER BY id"
     ).fetchall()
     assert len(rows) == 2
     assert rows[0] == (session1_id, "sample.gcode", "gcode", 1, "completed", None)
@@ -327,37 +248,60 @@ async def test_full_print_lifecycle(client):
     i_preamble = sent.index("M84 S0")  # print/start's "keep motors enabled" preamble
     i_pressurize = sent.index("G1 B-0.2 F400")  # numbered, so sent without its comment
     i_manual_jog = sent.index("G1 X1.0 F300")  # sent only while PAUSED
-    i_manual_g28 = sent.index("G28")  # only ever sent manually; fixture's own G28 is stripped
-    i_m410_soft = sent.index("M410")
-    i_m410_hard = sent.index("M410", i_m410_soft + 1)
+    i_manual_raw = sent.index("G4 P10")
+    i_m410_first = sent.index("M410")
+    i_m410_second = sent.index("M410", i_m410_first + 1)
 
     assert i_m92 < i_m115 < i_g92_zero < i_preamble < i_pressurize
-    assert i_preamble < i_manual_jog < i_manual_g28 < i_m410_soft < i_m410_hard
+    assert i_preamble < i_manual_jog < i_manual_raw < i_m410_first < i_m410_second
 
-    # The soft-stop checkpoint sequence: read position, then retract.
-    after_soft_stop = sent[i_m410_soft + 1:i_m410_soft + 6]
-    assert after_soft_stop == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
-
-    # The second stop does the same thing.
-    after_hard_stop = sent[i_m410_hard + 1:i_m410_hard + 6]
-    assert after_hard_stop == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
+    # Each stop reads the position, then retracts.
+    for i_m410 in (i_m410_first, i_m410_second):
+        assert sent[i_m410 + 1 : i_m410 + 6] == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
 
     # The resumed checkpoint returns to the stop point before continuing —
     # at the *scaled* B values (flow was still 80% at the stop and stays so
     # for the rest of this print), not the planned, unscaled ones.
-    resumed = sent[i_m410_soft + 6:]
+    resumed = sent[i_m410_first + 6 :]
     assert resumed[:8] == [
         "G91",
-        "G1 Z5 A5 F300",  # lift clear of the print (both Z and A: A=0 is known too)
+        "G1 Z5 A5 F300",  # lift clear of the print
         "G90",
         "G1 X15 Y10 F300",  # back over the stop point
-        "G1 Z0.3 A0 F300",  # down to it
-        "G1 B-0.2 F400",  # undo the plunger retract, at the scaled checkpoint position
-        "G1 X20 Y10 Z0.3 A0 B-0.4 C0 F200",  # finish the stopped line, at its scaled target
-        "G1 F200 X20 Y20 B-0.8",  # and carry on after it, still flow-scaled
+        "G1 Z0.5 A0 F300",  # down to it
+        "G1 B-1.8 F400",  # undo the plunger retract, at the stop position
+        "G1 X20 Y10 Z0.5 A0 B-2 C0 F200",  # finish the stopped line, at its scaled target
+        "G1 F400 X20 Y20 B-2.4",  # and carry on after it, still flow-scaled
     ]
 
-    # --- the WebSocket event stream (drained from the real event bus) -------
+    # The printer itself saw every M410 acked in order, with nothing mixed up:
+    # each stop's M114 reply carried the stop position.
+    m114_replies = [
+        e["content"]
+        for e in entries
+        if e["direction"] == "received" and e["content"].startswith("X:15.00 Y:10.00 Z:0.50")
+    ]
+    assert m114_replies
+
+    # --- each print's serial traffic, in its own file ------------------------
+
+    session1 = next(s for s in sessions if s["id"] == session1_id)
+    log1 = Path(session1["serial_log"]).read_text().splitlines()
+    log2 = Path(session2["serial_log"]).read_text().splitlines()
+    assert Path(session1["serial_log"]).parent == data_dir / "logs" / "prints"
+    assert session1["serial_log"] != session2["serial_log"]
+    # Print #1: from its first line, through the stop's position read, the
+    # resume (appended to the same file) and the footer.
+    assert log1[0].endswith("> M84 S0")
+    assert any(line.endswith("> N1 G90") for line in log1)
+    assert any(line.endswith("> M410") for line in log1)
+    assert any("< X:15.00 Y:10.00 Z:0.50" in line for line in log1)
+    assert any(line.endswith("> G1 Z5 A5 F300") for line in log1)  # resume's lift
+    assert log1[-1].endswith("< ok")
+    # A manual command sent while it was paused is part of its traffic.
+    assert any(line.endswith("> G4 P10") for line in log1)
+    assert not any("G4 P10" in line for line in log2)
+    assert any(line.endswith("> M410") for line in log2)
 
     events = []
     while not event_queue.empty():
@@ -371,16 +315,16 @@ async def test_full_print_lifecycle(client):
 
     status_values = [e["value"] for e in events if e["type"] == "status"]
     assert status_values == [
-        "ready",       # upload #1
-        "printing",    # start #1
-        "paused",      # pause
-        "printing",    # resume
-        "stopped",     # soft stop
-        "printing",    # resume from checkpoint
-        "completed",   # natural completion
-        "ready",       # upload #2
-        "printing",    # start #2
-        "stopped",     # second stop
+        "ready",  # upload #1
+        "printing",  # start #1
+        "paused",  # pause
+        "printing",  # resume
+        "stopped",  # stop
+        "printing",  # resume from checkpoint
+        "completed",  # natural completion
+        "ready",  # upload #2
+        "printing",  # start #2
+        "stopped",  # second stop
     ]
 
     stop_events = [e for e in events if e["type"] == "stop"]
@@ -392,26 +336,33 @@ async def test_full_print_lifecycle(client):
     assert {"type": "extrusion_rate", "value": 80} in events
     assert {"type": "extrusion_rate", "value": 100} in events
     assert {"type": "calibration", "value": "calibrated"} in events
-    assert {"type": "printer", "connected": True, "port": "/dev/fake"} in events
+    assert {"type": "printer", "connected": True, "port": "virtual"} in events
     assert any(e["type"] == "progress" for e in events)
+    assert any(e["type"] == "temperature" for e in events)  # M155 auto-reports
 
 
-# --- timeout -> pause behaviour ----------------------------------------------
+# --- faults on the wire ---------------------------------------------------------
 
 
-async def test_timeout_pauses_print_and_retries_on_resume(client, monkeypatch):
-    # Make the reply deadline short so a genuine SerialTimeout is fast to hit.
-    monkeypatch.setattr(serial_module, "REPLY_DEADLINE_S", 0.08)
+SAMPLE_END = {"X": 0.0, "Y": 0.0, "Z": 5.5, "A": 0.0, "B": -3.8, "C": 0.0}
 
-    worker = app.state.queue_worker
-    fake = FakePrinter()
-    attach(app.state.serial_manager, fake)
+
+@pytest.fixture
+async def printer(client):
+    printer = VirtualPrinter(**PRINTER_OPTIONS)
+    attach(app.state.serial_manager, printer)
     app.state.session.calibrated = True
+    return printer
 
+
+async def test_timeout_pauses_print_and_retries_on_resume(client, printer, monkeypatch):
+    # Make the reply deadline short so a genuine SerialTimeout is fast to hit.
+    monkeypatch.setattr(serial_module, "REPLY_DEADLINE_S", 0.2)
+    worker = app.state.queue_worker
     await upload_sample(client)
 
-    target = "G1 F200 X20 Y10 B-0.5"  # worker line 4
-    fake.fail_once_on = target
+    target = "G1 F200 X20 Y10 B-0.5"
+    printer.drop_next(target)  # lost on the wire: no reply at all
 
     resp = await client.post("/print/start")
     assert resp.status_code == 200
@@ -419,21 +370,36 @@ async def test_timeout_pauses_print_and_retries_on_resume(client, monkeypatch):
     await wait_for(lambda: worker.status == PrintStatus.PAUSED)
     stall_index = worker_index(target)
     assert worker.lines_sent == stall_index  # never advanced past the stalled line
-
-    entries = await all_log_entries(client)
-    sent = sent_commands(entries)
-    assert sent.count(target) == 1  # only the failed attempt so far
+    assert sent_commands(await all_log_entries(client)).count(target) == 1
 
     resp = await client.post("/print/resume")
     assert resp.status_code == 200
 
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
     assert worker.lines_sent == worker.lines_total
-
-    entries = await all_log_entries(client)
-    sent = sent_commands(entries)
-    assert sent.count(target) == 2  # the failed attempt, then the successful retry
+    # The failed attempt, then the retry, after agreeing on line numbers again.
+    assert sent_commands(await all_log_entries(client)).count(target) == 2
+    assert printer.executed.count(target) == 1
+    await wait_for(lambda: printer.moves_planned == 0)
+    assert printer.position == pytest.approx(SAMPLE_END)
 
     [session] = (await client.get("/history")).json()["sessions"]
     assert session["end_reason"] == "completed"
     assert session["completed"] is True
+
+
+async def test_corrupted_line_is_resent_mid_print(client, printer):
+    worker = app.state.queue_worker
+    await upload_sample(client)
+    printer.corrupt_next("X10 Y20 B-1.5")
+
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+    received = [e["content"] for e in await all_log_entries(client) if e["direction"] == "received"]
+    assert any(line.startswith("Error:checksum mismatch") for line in received)
+    assert any(line.startswith("Resend: ") for line in received)
+    # Ran once, in order, and the print ends where it should.
+    assert printer.executed.count("G1 F200 X10 Y20 B-1.5") == 1
+    await wait_for(lambda: printer.moves_planned == 0)
+    assert printer.position == pytest.approx(SAMPLE_END)

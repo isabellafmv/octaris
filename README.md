@@ -79,7 +79,8 @@ If you want to run from source instead of the packaged app:
 
 ```bash
 cd backend
-pip install -e .
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
 ### 2. Frontend
@@ -106,6 +107,33 @@ npm run dev
 ```
 
 The Electron app opens automatically. The backend must be running for any printer communication to work.
+
+### Without a printer
+
+Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time.
+
+```bash
+OCTARIS_VIRTUAL_PRINTER=1 uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+### Tests and checks
+
+```bash
+cd backend
+pytest              # tests (most run against the virtual printer)
+ruff check .        # lint
+ruff format .       # format
+mypy                # type check
+
+cd ../client
+npm run typecheck && npm run lint
+```
+
+`pre-commit install` (from the repository root, with the backend's dev dependencies installed) runs all of these on every commit. CI runs them on every push and pull request; pushing a tag builds the macOS app with `build.sh` and attaches the `.dmg` and `.zip` to the workflow run.
+
+### Logs
+
+The backend writes a rotating log to `~/Library/Application Support/Octaris/logs/octaris-backend.log`. Each print's serial traffic goes to its own file in `logs/prints/`, named in the print's history entry (`serial_log`). Set `OCTARIS_DATA_DIR` to put them elsewhere.
 
 ### Building the desktop app
 

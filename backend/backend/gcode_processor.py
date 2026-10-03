@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from typing import Callable, Iterable, Literal
+from typing import Literal
 
 SyringeMode = Literal["left", "right", "both"]
 
@@ -241,7 +242,7 @@ def trim_to_print(cmds: list[Command]) -> list[Command]:
         (i for i, c in enumerate(cmds) if c.is_move and any(c.has(a) for a in "XYZ")),
         default=len(cmds) - 1,
     )
-    return cmds[first:max(first, last) + 1]
+    return cmds[first : max(first, last) + 1]
 
 
 def substitute_extrusion(cmds: list[Command], mode: SyringeMode) -> list[Command]:
@@ -298,9 +299,7 @@ def scale_flow(line: str, multiplier: float) -> str:
     return render_line(parse_line(line).map_axis("BC", lambda v: v * multiplier))
 
 
-def clamp_feed_rates(
-    cmds: list[Command], max_f: float = MAX_FEED
-) -> tuple[list[Command], list[str]]:
+def clamp_feed_rates(cmds: list[Command], max_f: float = MAX_FEED) -> tuple[list[Command], list[str]]:
     result = []
     log_entries = []
     for i, cmd in enumerate(cmds):
@@ -324,8 +323,7 @@ def _plunger_moves(axes: list[str], pull_back_mm: float, label: str = "") -> lis
     """Move each plunger `pull_back_mm` away from its extrude direction
     (negative pushes), as one relative G91 … G90 block."""
     moves = [
-        f"G1 {ax}{pull_back_mm:g} F{PRESSURIZE_FEED}" + (f" ; {label} {ax}" if label else "")
-        for ax in axes
+        f"G1 {ax}{pull_back_mm:g} F{PRESSURIZE_FEED}" + (f" ; {label} {ax}" if label else "") for ax in axes
     ]
     return parse(["G91", *moves, "G90"])
 
@@ -399,11 +397,13 @@ def build_footer(mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> lis
     lines = ["; Octaris — footer", "G91"]
     for ax in _extrusion_axes(mode):
         lines.append(f"G1 {ax}{pressurize_mm:g} F{PRESSURIZE_FEED} ; depressurize {ax}")
-    lines.extend([
-        f"G1 {_z_axis(mode)}{CLEARANCE_Z_MM} F{TRAVEL_FEED} ; raise nozzle",
-        "G90",
-        f"G1 X0 Y0 F{TRAVEL_FEED} ; return to origin",
-    ])
+    lines.extend(
+        [
+            f"G1 {_z_axis(mode)}{CLEARANCE_Z_MM} F{TRAVEL_FEED} ; raise nozzle",
+            "G90",
+            f"G1 X0 Y0 F{TRAVEL_FEED} ; return to origin",
+        ]
+    )
     return lines
 
 
@@ -428,9 +428,7 @@ def validate(cmds: list[Command]) -> None:
             )
         for w in cmd.words:
             if w.letter == "F" and w.value > MAX_FEED:
-                raise GcodeValidationError(
-                    f"Line {i + 1}: F value {str(w)[1:]} exceeds {MAX_FEED}"
-                )
+                raise GcodeValidationError(f"Line {i + 1}: F value {str(w)[1:]} exceeds {MAX_FEED}")
 
 
 def process_gcode(

@@ -56,9 +56,8 @@ def test_ws_rejected_without_token(monkeypatch):
     _setup_app_state()
     client = TestClient(app)
 
-    with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect("/ws"):
-            pass
+    with pytest.raises(WebSocketDisconnect) as exc_info, client.websocket_connect("/ws"):
+        pass
 
     assert exc_info.value.code == 1008
 

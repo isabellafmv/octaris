@@ -8,6 +8,14 @@ from backend.database import init_db
 from backend.main import app, wire
 
 
+@pytest.fixture(autouse=True)
+def data_dir(tmp_path, monkeypatch) -> Path:
+    """Keep log files and per-print serial logs out of the real app data folder."""
+    path = tmp_path / "data"
+    monkeypatch.setenv("OCTARIS_DATA_DIR", str(path))
+    return path
+
+
 @pytest.fixture
 async def client():
     wire(app, load_config(), init_db(Path(":memory:")))
@@ -17,4 +25,5 @@ async def client():
         yield ac
     # Stops the serial reader thread of any port a test attached.
     await app.state.serial_manager.disconnect()
+    app.state.history._traffic.stop()
     app.state.db.close()

@@ -40,9 +40,7 @@ def test_session_lifecycle():
     assert row[6] == 0  # completed
 
     end_session(conn, sid, "completed")
-    row = conn.execute(
-        "SELECT ended_at, completed, end_reason FROM sessions WHERE id = ?", (sid,)
-    ).fetchone()
+    row = conn.execute("SELECT ended_at, completed, end_reason FROM sessions WHERE id = ?", (sid,)).fetchone()
     assert row[0] is not None  # ended_at
     assert row[1] == 1  # completed
     assert row[2] == "completed"
@@ -57,9 +55,7 @@ def test_extrusion_events():
     log_extrusion_event(conn, sid, 95, 50)
     log_extrusion_event(conn, sid, 80, 100)
 
-    rows = conn.execute(
-        "SELECT * FROM extrusion_events WHERE session_id = ?", (sid,)
-    ).fetchall()
+    rows = conn.execute("SELECT * FROM extrusion_events WHERE session_id = ?", (sid,)).fetchall()
     assert len(rows) == 2
     assert rows[0][3] == 95  # extrusion_rate
     assert rows[1][4] == 100  # lines_sent
@@ -72,9 +68,7 @@ def test_session_stopped_incomplete():
     sid = create_session(conn, "test.stl", "right", 300)
     end_session(conn, sid, "stopped")
 
-    row = conn.execute(
-        "SELECT completed, end_reason FROM sessions WHERE id = ?", (sid,)
-    ).fetchone()
+    row = conn.execute("SELECT completed, end_reason FROM sessions WHERE id = ?", (sid,)).fetchone()
     assert row == (0, "stopped")
 
     conn.close()
@@ -91,7 +85,10 @@ def test_end_session_rejects_unknown_reason():
 def test_create_session_stores_source_and_settings():
     conn = init_db(Path(":memory:"))
     sid = create_session(
-        conn, "cube.stl", "both", 500,
+        conn,
+        "cube.stl",
+        "both",
+        500,
         source="stl",
         settings={"nozzle_diameter": 0.41, "layer_height": 0.3, "flow_multiplier": 1.2},
     )
@@ -130,8 +127,14 @@ def test_init_db_migrates_old_sessions_table(tmp_path):
     conn = init_db(db_path)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
     assert {
-        "nozzle_diameter", "syringe_diameter", "layer_height", "pressurize_mm",
-        "flow_multiplier", "travel_retract_multiplier", "source", "end_reason",
+        "nozzle_diameter",
+        "syringe_diameter",
+        "layer_height",
+        "pressurize_mm",
+        "flow_multiplier",
+        "travel_retract_multiplier",
+        "source",
+        "end_reason",
         "resume_line",
     } <= columns
 
@@ -161,7 +164,8 @@ def test_list_sessions_newest_first_with_events():
     assert sessions[1]["completed"] is True
     assert sessions[1]["end_reason"] == "completed"
     assert [(e["extrusion_rate"], e["lines_sent"]) for e in sessions[1]["extrusion_events"]] == [
-        (90, 3), (120, 7),
+        (90, 3),
+        (120, 7),
     ]
     assert [e["extrusion_rate"] for e in sessions[0]["extrusion_events"]] == [110]
 

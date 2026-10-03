@@ -12,7 +12,7 @@ const QUICK_COMMANDS = [
   { label: 'Position', gcode: 'M114' },
   { label: 'Settings', gcode: 'M503' },
   { label: 'Relative', gcode: 'G91' },
-  { label: 'Absolute', gcode: 'G90' },
+  { label: 'Absolute', gcode: 'G90' }
 ] as const
 
 const MAX_HISTORY = 50
@@ -42,8 +42,8 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
       })
       setInput('')
       setHistoryIndex(-1)
-    } catch (e: any) {
-      setError(e.message || 'Command failed. Check the connection.')
+    } catch (e) {
+      setError((e instanceof Error && e.message) || 'Command failed. Check the connection.')
     } finally {
       setSending(false)
       // Delay focus to ensure React has re-rendered the enabled input
@@ -56,14 +56,14 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
     setSending(true)
     try {
       await api.printStop()
-    } catch (e: any) {
-      setError(e.message || 'Stop failed. Check the connection.')
+    } catch (e) {
+      setError((e instanceof Error && e.message) || 'Stop failed. Check the connection.')
     } finally {
       setSending(false)
     }
   }, [])
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === 'Enter' && !sending) {
       sendCommand(input)
     } else if (e.key === 'ArrowUp') {
@@ -90,7 +90,9 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
     <div className="flex flex-col gap-4 h-full">
       {/* Header */}
       <div className="px-3 py-2 border-b shrink-0 bg-surface-card border-border">
-        <h3 className="text-xs font-semibold uppercase tracking-widest text-text-muted">Send G-code</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-text-muted">
+          Send G-code
+        </h3>
       </div>
 
       {/* Input area */}
@@ -114,14 +116,14 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
             {sending ? '...' : 'Send'}
           </button>
         </div>
-        {error && (
-          <p className="mt-2 text-sm text-warning">{error}</p>
-        )}
+        {error && <p className="mt-2 text-sm text-warning">{error}</p>}
         {disabled && (
           <p className="mt-2 text-sm text-text-subtle">Connect to the printer to send commands.</p>
         )}
         {!disabled && printing && (
-          <p className="mt-2 text-sm text-text-subtle">Print running — use Monitor to pause or stop</p>
+          <p className="mt-2 text-sm text-text-subtle">
+            Print running — use Monitor to pause or stop
+          </p>
         )}
       </div>
 

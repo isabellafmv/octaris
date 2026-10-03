@@ -1,11 +1,13 @@
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
-from backend.gcode_processor import GcodeValidationError, ProcessedGcode
+from backend.gcode_processor import GcodeValidationError, ProcessedGcode, SyringeMode
 from backend.limits import LimitError
 from backend.routers import get_session
 from backend.schemas import UploadResult
 from backend.session import PrinterSession
-from backend.slicer import SlicingError
+from backend.slicer import PrintSettings, SlicingError
 
 router = APIRouter()
 
@@ -46,7 +48,7 @@ async def upload_model(
         raise HTTPException(status_code=400, detail="Only .stl and .3mf files are accepted")
     if syringe_mode not in SYRINGE_MODES:
         raise HTTPException(status_code=400, detail="Invalid syringe_mode")
-    settings = {
+    settings: PrintSettings = {
         "nozzle_diameter": nozzle_diameter,
         "syringe_diameter": syringe_diameter,
         "layer_height": layer_height,
@@ -57,7 +59,9 @@ async def upload_model(
     _check_positive(**settings)
 
     try:
-        gcode = await session.load_model(file.filename, await file.read(), syringe_mode, settings)
+        gcode = await session.load_model(
+            file.filename, await file.read(), cast(SyringeMode, syringe_mode), settings
+        )
     except (SlicingError, GcodeValidationError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except LimitError as exc:
@@ -76,7 +80,7 @@ async def upload_gcode(
 
     raw = (await file.read()).decode("utf-8", errors="replace")
     try:
-        gcode = session.load_gcode(file.filename, raw, syringe_mode)
+        gcode = session.load_gcode(file.filename, raw, cast(SyringeMode, syringe_mode))
     except (GcodeValidationError, LimitError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _upload_result(file.filename, gcode)

@@ -7,7 +7,12 @@ interface GcodeUploadProps {
   onError: (msg: string) => void
 }
 
-export function GcodeUpload({ file, loading, onFile, onError }: GcodeUploadProps): React.JSX.Element {
+export function GcodeUpload({
+  file,
+  loading,
+  onFile,
+  onError
+}: GcodeUploadProps): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -35,13 +40,26 @@ export function GcodeUpload({ file, loading, onFile, onError }: GcodeUploadProps
       >
         <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-surface-card">
           {loading ? (
-            <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.6" className="w-5 h-5 animate-spin stroke-primary">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              strokeWidth="1.6"
+              className="w-5 h-5 animate-spin stroke-primary"
+            >
               <path strokeLinecap="round" d="M12 3a9 9 0 1 0 9 9" />
             </svg>
           ) : (
-            <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.6" className="w-5 h-5 stroke-primary">
-              <path strokeLinecap="round" strokeLinejoin="round"
-                d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              strokeWidth="1.6"
+              className="w-5 h-5 stroke-primary"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z"
+              />
             </svg>
           )}
         </div>
@@ -50,7 +68,11 @@ export function GcodeUpload({ file, loading, onFile, onError }: GcodeUploadProps
             {loading ? 'Processing…' : file ? file.name : 'Upload G-Code'}
           </p>
           <p className="text-xs mt-0.5 text-text-muted">
-            {loading ? 'Applying extrusion substitution' : file ? 'Click to replace file' : 'Select a pre-sliced .gcode file'}
+            {loading
+              ? 'Applying extrusion substitution'
+              : file
+                ? 'Click to replace file'
+                : 'Select a pre-sliced .gcode file'}
           </p>
         </div>
         <svg

@@ -1,5 +1,6 @@
 """Safety guards: no reconnect mid-print, bed limits, syringe travel, and the
 unmeasured nozzle offset."""
+
 from __future__ import annotations
 
 import asyncio
@@ -40,8 +41,7 @@ class FakePrinter:
     """Answers "ok" to everything and M114 with `position`. Writing
     `drop_on` raises SerialException, like a USB cable being pulled."""
 
-    def __init__(self, position: str | None = None, drop_on: str | None = None,
-                 delay: float = 0.0):
+    def __init__(self, position: str | None = None, drop_on: str | None = None, delay: float = 0.0):
         self.is_open = True
         self.position = position or m114(**ORIGIN)
         self.drop_on = drop_on
@@ -54,7 +54,7 @@ class FakePrinter:
         if line == self.drop_on:
             raise serial.SerialException("device reports readiness to read but returned no data")
         self.written.append(line)
-        self._pending = [self.position, "ok"] if line == "M114" else ["ok"]
+        self._pending += [self.position, "ok"] if line == "M114" else ["ok"]
 
     def flush(self) -> None:
         pass
@@ -162,9 +162,11 @@ async def test_serial_error_when_idle_reconnects_without_resending():
     manager = SerialManager(on_event=on_event)
     attach(manager, dropped)
 
-    with patch("backend.serial_manager.serial.Serial", return_value=fresh):
-        with pytest.raises(SerialError, match="not re-sent"):
-            await manager.send("G1 X1")
+    with (
+        patch("backend.serial_manager.serial.Serial", return_value=fresh),
+        pytest.raises(SerialError, match="not re-sent"),
+    ):
+        await manager.send("G1 X1")
 
     assert manager.is_connected
     assert connected == ["/dev/fake"]
@@ -238,10 +240,13 @@ async def test_idle_reconnect_resets_calibration(client, printer, events):
     assert published[-1] == {"type": "calibration", "value": "uncalibrated"}
 
 
-@pytest.mark.parametrize("route, body", [
-    ("/connect", {"port": "/dev/fake"}),
-    ("/disconnect", None),
-])
+@pytest.mark.parametrize(
+    "route, body",
+    [
+        ("/connect", {"port": "/dev/fake"}),
+        ("/disconnect", None),
+    ],
+)
 async def test_port_changes_refused_during_print(client, printer, route, body):
     app.state.queue_worker._state = PrintState.PRINTING
 
@@ -306,10 +311,13 @@ async def test_upload_rejects_print_leaving_bed(client):
 
 async def test_upload_stl_rejects_print_leaving_bed(client, tmp_path):
     result = ProcessedGcode(lines=["G90", "G1 X0 Y-40 F300"])
-    with patch("backend.session.slice_model", AsyncMock(return_value=result)), \
-         patch("backend.session.DATA_DIR", tmp_path):
+    with (
+        patch("backend.session.slice_model", AsyncMock(return_value=result)),
+        patch("backend.session.DATA_DIR", tmp_path),
+    ):
         resp = await client.post(
-            "/upload", files={"file": ("cube.stl", b"solid", "application/octet-stream")},
+            "/upload",
+            files={"file": ("cube.stl", b"solid", "application/octet-stream")},
         )
 
     assert resp.status_code == 422
@@ -441,10 +449,12 @@ async def test_low_travel_warning_emitted_once():
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
 
     warnings = [e for e in events if e["type"] == "warning"]
-    assert warnings == [{
-        "type": "warning",
-        "message": "The left syringe (B) is nearly empty: 0.8 of 10 mm plunger travel left.",
-    }]
+    assert warnings == [
+        {
+            "type": "warning",
+            "message": "The left syringe (B) is nearly empty: 0.8 of 10 mm plunger travel left.",
+        }
+    ]
 
 
 # --- 5. unmeasured nozzle offset ----------------------------------------------

@@ -29,7 +29,7 @@ export function PortSelector({ connected, port, onError }: PortSelectorProps): R
     refresh()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleConnect = async () => {
+  const handleConnect = async (): Promise<void> => {
     if (!selected) return
     setLoading(true)
     try {
@@ -41,7 +41,7 @@ export function PortSelector({ connected, port, onError }: PortSelectorProps): R
     }
   }
 
-  const handleDisconnect = async () => {
+  const handleDisconnect = async (): Promise<void> => {
     try {
       await api.disconnect()
     } catch {
@@ -54,9 +54,7 @@ export function PortSelector({ connected, port, onError }: PortSelectorProps): R
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-1.5">
           <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-          <span className="text-xs font-medium text-text">
-            {port || 'Connected'}
-          </span>
+          <span className="text-xs font-medium text-text">{port || 'Connected'}</span>
         </div>
         <button
           onClick={handleDisconnect}

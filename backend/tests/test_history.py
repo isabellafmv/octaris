@@ -30,9 +30,9 @@ class FakeSerial:
         _, line = unframe(data.decode().strip())
         self.written.append(line)
         if line == "M114" and self.written[-2:-1] != ["M400"]:
-            self._pending = [b"X:0.00 Y:0.00 Z:0.00 A:0.00 B:0.00 C:0.00 Count X:0\n", b"ok\n"]
+            self._pending += [b"X:0.00 Y:0.00 Z:0.00 A:0.00 B:0.00 C:0.00 Count X:0\n", b"ok\n"]
         else:
-            self._pending = [b"ok\n"]
+            self._pending += [b"ok\n"]
 
     def flush(self) -> None:
         pass
@@ -59,8 +59,10 @@ async def printer(client):
 
 async def upload_stl(client, tmp_path, n_lines: int, **params):
     result = ProcessedGcode(lines=[f"G1 X{i % 20} B0.01 F300" for i in range(n_lines)])
-    with patch("backend.session.slice_model", AsyncMock(return_value=result)), \
-         patch("backend.session.DATA_DIR", tmp_path):
+    with (
+        patch("backend.session.slice_model", AsyncMock(return_value=result)),
+        patch("backend.session.DATA_DIR", tmp_path),
+    ):
         resp = await client.post(
             "/upload",
             params={"syringe_mode": "both", **params},
@@ -84,9 +86,15 @@ async def get_sessions(client) -> list[dict]:
 
 async def test_start_change_flow_stop_records_history(client, printer, tmp_path):
     await upload_stl(
-        client, tmp_path, 400,
-        nozzle_diameter=0.41, syringe_diameter=4.6, layer_height=0.3,
-        pressurize_mm=0.5, flow_multiplier=1.1, travel_retract_multiplier=0.8,
+        client,
+        tmp_path,
+        400,
+        nozzle_diameter=0.41,
+        syringe_diameter=4.6,
+        layer_height=0.3,
+        pressurize_mm=0.5,
+        flow_multiplier=1.1,
+        travel_retract_multiplier=0.8,
     )
     worker = app.state.queue_worker
 

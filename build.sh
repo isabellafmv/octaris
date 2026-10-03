@@ -13,7 +13,11 @@ set -euo pipefail
 #   cd client && npm install
 #
 # Usage:
-#   ./build.sh
+#   ./build.sh [electron-builder options]
+#
+# Options are passed on to electron-builder, e.g. `./build.sh --publish never`
+# (CI does that on tags, where electron-builder would otherwise try to publish
+# a GitHub release).
 #
 # After building, the .dmg and .zip are in client/dist/.
 # For unsigned builds, run this to allow opening:
@@ -76,7 +80,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Build renderer + main TypeScript, then package with electron-builder
-npm run build:mac
+npm run build:mac -- "$@"
 
 echo ""
 echo "═══════════════════════════════════════════"

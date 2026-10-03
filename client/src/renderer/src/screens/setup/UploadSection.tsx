@@ -36,7 +36,12 @@ export function UploadSection({
       </div>
 
       {upload.mode === 'stl' ? (
-        <STLUpload file={upload.stlFile} onFile={upload.selectStl} onError={onError} dualMode={dualMode} />
+        <STLUpload
+          file={upload.stlFile}
+          onFile={upload.selectStl}
+          onError={onError}
+          dualMode={dualMode}
+        />
       ) : (
         <GcodeUpload
           file={upload.gcodeFile}

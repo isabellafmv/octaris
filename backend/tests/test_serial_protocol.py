@@ -1,8 +1,10 @@
 """The serial protocol against the virtual printer: line numbers, checksums
 and resends, temperature reports, and busy messages during long moves."""
+
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from unittest.mock import patch
 
@@ -11,8 +13,16 @@ import pytest
 from backend import serial_manager as serial_module
 from backend.queue_worker import PrintStatus, QueueWorker
 from backend.serial_manager import SerialManager, SerialTimeout, number_line, parse_temperatures
+from backend.virtual_printer import VirtualPrinter
 from tests.serial_fakes import attach
-from tests.virtual_printer import VirtualPrinter
+
+
+def fast_printer(**options) -> VirtualPrinter:
+    """Instant moves unless asked otherwise, and frequent busy messages and
+    temperature reports, so the tests run quickly."""
+    defaults = {"speed": math.inf, "planner_depth": 4, "busy_interval_s": 0.05, "report_scale": 0.01}
+    return VirtualPrinter(**{**defaults, **options})
+
 
 PRINT = [f"G1 X{i} Y{i % 3} F6000" for i in range(1, 11)]
 
@@ -77,7 +87,7 @@ def test_parse_temperatures():
 
 async def test_print_lines_are_numbered_after_m110(rig):
     make, _ = rig
-    printer = VirtualPrinter()
+    printer = fast_printer()
     manager = make()
     attach(manager, printer)
 
@@ -85,8 +95,13 @@ async def test_print_lines_are_numbered_after_m110(rig):
 
     assert worker.status == PrintStatus.COMPLETED
     assert printer.received == [
-        "M114", "M84 S0", "M110 N0",
-        number_line(1, PRINT[0]), number_line(2, PRINT[1]), number_line(3, PRINT[2]),
+        "M114",
+        "M84 S0",
+        "M110 N0",
+        number_line(1, PRINT[0]),
+        number_line(2, PRINT[1]),
+        number_line(3, PRINT[2]),
+        "M400",  # the planner drained before COMPLETED
     ]
     # Manual commands stay unnumbered.
     await manager.send("M114")
@@ -95,7 +110,7 @@ async def test_print_lines_are_numbered_after_m110(rig):
 
 async def test_corrupted_line_is_resent(rig):
     make, _ = rig
-    printer = VirtualPrinter()
+    printer = fast_printer()
     manager = make()
     attach(manager, printer)
     printer.corrupt_next("G1 X4 ")
@@ -105,7 +120,7 @@ async def test_corrupted_line_is_resent(rig):
     assert worker.status == PrintStatus.COMPLETED
     assert worker.lines_sent == len(PRINT)
     # Every print line ran exactly once, in order, the corrupted one included.
-    assert printer.executed[3:] == PRINT
+    assert printer.executed[3:] == [*PRINT, "M400"]
     # N4 arrived twice: garbled, then the resend from history.
     n4 = [raw for raw in printer.received if raw.startswith("N4 ")]
     assert len(n4) == 2 and n4[1] == number_line(4, PRINT[3]) != n4[0]
@@ -117,7 +132,7 @@ async def test_corrupted_line_is_resent(rig):
 async def test_lost_line_times_out_then_resyncs_line_numbers(rig, monkeypatch):
     monkeypatch.setattr(serial_module, "REPLY_DEADLINE_S", 0.2)
     make, _ = rig
-    printer = VirtualPrinter()
+    printer = fast_printer()
     manager = make()
     attach(manager, printer)
     printer.drop_next("G1 X4 ")  # never reaches the printer: no reply at all
@@ -142,7 +157,7 @@ async def test_lost_line_times_out_then_resyncs_line_numbers(rig, monkeypatch):
 async def test_unsolicited_temperature_reports_while_printing(rig):
     make, events = rig
     # Reports every 20 ms, while each move takes ~20 ms and the planner holds 2.
-    printer = VirtualPrinter(speed_scale=0.2, planner_depth=2)
+    printer = fast_printer(speed=5, planner_depth=2)
     manager = make()
     with patch("backend.serial_manager.serial.Serial", return_value=printer):
         await manager.connect("/dev/virtual", 115200)
@@ -158,7 +173,8 @@ async def test_unsolicited_temperature_reports_while_printing(rig):
     reports = [e for e in events[before:] if e["type"] == "temperature"]
     assert len(reports) >= 5  # arrived while the print was running
     assert reports[-1]["temperatures"] == {
-        "T": {"actual": 21.3, "target": 0.0}, "B": {"actual": 20.1, "target": 0.0},
+        "T": {"actual": 21.3, "target": 0.0},
+        "B": {"actual": 20.1, "target": 0.0},
     }
     # Reports never end up in a reply or the serial log.
     reply = await manager.send("M114")
@@ -171,7 +187,7 @@ async def test_polls_m105_without_auto_report(rig, monkeypatch):
     monkeypatch.setattr(serial_module, "AUTOREPORT_WAIT_S", 0.1)
     monkeypatch.setattr(serial_module, "TEMPERATURE_POLL_S", 0.05)
     make, events = rig
-    printer = VirtualPrinter(autoreport=False)
+    printer = fast_printer(autoreport=False)
     manager = make()
     with patch("backend.serial_manager.serial.Serial", return_value=printer):
         await manager.connect("/dev/virtual", 115200)
@@ -188,7 +204,7 @@ async def test_polls_m105_without_auto_report(rig, monkeypatch):
 
 async def test_manual_m105_returns_the_temperatures(rig):
     make, events = rig
-    printer = VirtualPrinter(autoreport=False)
+    printer = fast_printer(autoreport=False)
     manager = make()
     attach(manager, printer)
 
@@ -206,7 +222,7 @@ async def test_busy_keeps_a_long_move_alive(rig, monkeypatch):
     make, _ = rig
     # 100 mm at 10 mm/s is 10 s, scaled to 1 s. With a one-move planner the
     # next move waits for it, sending "busy" every 50 ms.
-    printer = VirtualPrinter(speed_scale=0.1, planner_depth=1)
+    printer = fast_printer(speed=10, planner_depth=1)
     manager = make()
     attach(manager, printer)
 
@@ -221,7 +237,7 @@ async def test_busy_keeps_a_long_move_alive(rig, monkeypatch):
 async def test_long_move_without_busy_times_out(rig, monkeypatch):
     monkeypatch.setattr(serial_module, "REPLY_DEADLINE_S", 0.3)
     make, _ = rig
-    printer = VirtualPrinter(speed_scale=0.1, planner_depth=1, busy_interval_s=None)
+    printer = fast_printer(speed=10, planner_depth=1, busy_interval_s=None)
     manager = make()
     attach(manager, printer)
 
@@ -233,7 +249,7 @@ async def test_long_move_without_busy_times_out(rig, monkeypatch):
 async def test_print_of_long_moves_does_not_pause(rig, monkeypatch):
     monkeypatch.setattr(serial_module, "REPLY_DEADLINE_S", 0.3)
     make, _ = rig
-    printer = VirtualPrinter(speed_scale=0.05, planner_depth=1)
+    printer = fast_printer(speed=20, planner_depth=1)
     manager = make()
     attach(manager, printer)
     moves = ["G1 X100 F600", "G1 X0 F600", "G1 X100 F600"]  # 0.5 s each
@@ -249,7 +265,7 @@ async def test_print_of_long_moves_does_not_pause(rig, monkeypatch):
 
 async def test_host_actions_are_logged_not_taken_as_replies(rig):
     make, _ = rig
-    printer = VirtualPrinter(speed_scale=0.1, planner_depth=1)
+    printer = fast_printer(speed=10, planner_depth=1)
     manager = make()
     attach(manager, printer)
 
@@ -260,3 +276,32 @@ async def test_host_actions_are_logged_not_taken_as_replies(rig):
 
     assert await move == "ok"
     assert "//action:notification Refill syringe" in received_log(manager)
+
+
+# --- M410 -------------------------------------------------------------------------
+
+
+async def test_m410_ack_is_not_taken_as_the_next_reply(rig):
+    # Marlin stops on M410 the moment it arrives, but also queues the line
+    # and acks it in turn: after the "ok" of the move in flight. With a slow
+    # link, the host's next command is already out when that "ok" comes.
+    make, _ = rig
+    printer = fast_printer(speed=10, planner_depth=1, ok_delay_s=0.05)
+    manager = make()
+    attach(manager, printer)
+
+    await manager.send("G1 X100 F600")  # 1 s at speed 10
+    move = asyncio.create_task(manager.send("G1 X0 F600"))  # blocked: planner full
+    await asyncio.sleep(0.2)
+    await manager.emergency_write("M410")
+    assert await move == "ok"
+
+    m400, m114 = await manager.send_lines(["M400", "M114"])
+
+    assert m400 == "ok"
+    assert m114.startswith("X:") and m114.endswith("ok")
+    stopped = float(m114.split()[0][2:])
+    assert 0 < stopped < 100  # mid-move, not at either end
+    assert printer.executed[-3:] == ["M410", "M400", "M114"]
+    # And the replies stay paired from then on.
+    assert (await manager.send("M105")).startswith("ok T:")

@@ -10,6 +10,7 @@ router = APIRouter(prefix="/calibration")
 
 class CalibrateRequest(BaseModel):
     """Optional overrides for the zeroing command."""
+
     zero_z: bool = True
     zero_b: bool = True
     zero_c: bool = False

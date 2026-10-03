@@ -5,9 +5,7 @@ interface GcodePreviewProps {
 }
 
 export function GcodePreview({ result }: GcodePreviewProps): React.JSX.Element {
-  const timeMin = result.time_estimate_s != null
-    ? Math.round(result.time_estimate_s / 60)
-    : null
+  const timeMin = result.time_estimate_s != null ? Math.round(result.time_estimate_s / 60) : null
 
   return (
     <div className="rounded-2xl overflow-hidden border border-border">
@@ -18,9 +16,7 @@ export function GcodePreview({ result }: GcodePreviewProps): React.JSX.Element {
         </span>
         <div className="flex items-center gap-3">
           {timeMin != null && (
-            <span className="text-xs font-medium text-primary">
-              ~{timeMin} min
-            </span>
+            <span className="text-xs font-medium text-primary">~{timeMin} min</span>
           )}
           <span className="text-xs text-text-muted">
             {result.lines_total.toLocaleString()} lines
@@ -32,9 +28,7 @@ export function GcodePreview({ result }: GcodePreviewProps): React.JSX.Element {
       <div className="overflow-y-auto font-mono text-xs p-3 space-y-0.5 bg-surface max-h-[140px]">
         {result.preview_lines.map((line, i) => (
           <div key={i} className="flex gap-3">
-            <span className="shrink-0 select-none w-6 text-right text-border-strong">
-              {i + 1}
-            </span>
+            <span className="shrink-0 select-none w-6 text-right text-border-strong">{i + 1}</span>
             <span className={line.startsWith(';') ? 'text-text-subtle' : 'text-text'}>
               {line || ' '}
             </span>

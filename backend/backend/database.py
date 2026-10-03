@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from backend.logs import data_dir
 
 
 def _default_db_path() -> Path:
     """Put the database in a writable location (not inside the frozen bundle)."""
     if getattr(sys, "frozen", False):
-        # Bundled app: use ~/Library/Application Support/Octaris/
-        app_data = Path.home() / "Library" / "Application Support" / "Octaris"
+        # Bundled app: the app data folder (~/Library/Application Support/Octaris/)
+        app_data = data_dir()
         app_data.mkdir(parents=True, exist_ok=True)
         return app_data / "octaris_log.db"
     # Dev: store in backend/
@@ -53,6 +56,8 @@ _SESSION_COLUMNS = {
     "source": "TEXT CHECK (source IN ('stl', 'gcode'))",
     "end_reason": "TEXT CHECK (end_reason IN ('completed', 'stopped', 'estop', 'error'))",
     "resume_line": "INTEGER",
+    # Path of the file holding the print's serial traffic
+    "serial_log": "TEXT",
 }
 
 PRINT_SETTING_KEYS = (
@@ -93,7 +98,7 @@ def create_session(
     syringe_config: str,
     total_lines: int,
     source: str | None = None,
-    settings: dict[str, float | None] | None = None,
+    settings: Mapping[str, object] | None = None,
 ) -> int:
     settings = settings or {}
     columns = ["started_at", "filename", "syringe_config", "total_lines", "source"]
@@ -120,10 +125,14 @@ def end_session(
     if end_reason not in END_REASONS:
         raise ValueError(f"Invalid end_reason: {end_reason}")
     conn.execute(
-        "UPDATE sessions SET ended_at = ?, completed = ?, end_reason = ?, resume_line = ? "
-        "WHERE id = ?",
+        "UPDATE sessions SET ended_at = ?, completed = ?, end_reason = ?, resume_line = ? WHERE id = ?",
         (_now(), int(end_reason == "completed"), end_reason, resume_line, session_id),
     )
+    conn.commit()
+
+
+def set_serial_log(conn: sqlite3.Connection, session_id: int, path: str) -> None:
+    conn.execute("UPDATE sessions SET serial_log = ? WHERE id = ?", (path, session_id))
     conn.commit()
 
 
@@ -144,7 +153,8 @@ def log_extrusion_event(
     lines_sent: int,
 ) -> None:
     conn.execute(
-        "INSERT INTO extrusion_events (session_id, timestamp, extrusion_rate, lines_sent) VALUES (?, ?, ?, ?)",
+        "INSERT INTO extrusion_events (session_id, timestamp, extrusion_rate, lines_sent) "
+        "VALUES (?, ?, ?, ?)",
         (session_id, _now(), extrusion_rate, lines_sent),
     )
     conn.commit()
@@ -156,10 +166,7 @@ def list_sessions(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, A
     conn.row_factory = sqlite3.Row
     try:
         sessions = [
-            dict(row)
-            for row in conn.execute(
-                "SELECT * FROM sessions ORDER BY id DESC LIMIT ?", (limit,)
-            )
+            dict(row) for row in conn.execute("SELECT * FROM sessions ORDER BY id DESC LIMIT ?", (limit,))
         ]
         by_id = {s["id"]: s for s in sessions}
         for s in sessions:

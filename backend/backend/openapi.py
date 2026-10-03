@@ -4,6 +4,7 @@
 
 The client's `gen:types` script turns it into TypeScript types.
 """
+
 import json
 
 from backend.main import app

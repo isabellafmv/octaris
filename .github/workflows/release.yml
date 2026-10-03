@@ -1,0 +1,40 @@
+name: Release build
+
+on:
+  push:
+    tags: ["*"]
+
+jobs:
+  build:
+    name: Build the macOS app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true # CuraEngine and other native binaries
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+      - name: Install client dependencies
+        run: npm ci
+        working-directory: client
+      # Builds only. To publish the GitHub release electron-updater reads,
+      # pass --publish always and set GH_TOKEN (with contents: write).
+      - name: Build
+        run: ./build.sh --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: octaris-${{ github.ref_name }}
+          path: |
+            client/dist/*.dmg
+            client/dist/*.zip
+          if-no-files-found: error

@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
+from collections.abc import Callable, Sequence
 from enum import Enum
-from typing import Callable, Sequence
 
 from backend.checkpoint import (
     Checkpoint,
     build_resume_commands,
+    build_return_commands,
     fmt,
     locate_line,
     parse_m114,
@@ -16,6 +17,7 @@ from backend.checkpoint import (
 from backend.gcode_processor import AXES, PRESSURIZE_FEED, MachineState, scale_flow, step
 from backend.limits import LOW_TRAVEL_FRACTION, PLUNGER_AXES, plunger_step
 from backend.schemas import (
+    EndReason,
     ErrorEvent,
     Event,
     PrintEndEvent,
@@ -153,6 +155,9 @@ class QueueWorker:
         # Set exactly while the state is STOPPED_RESUMABLE
         self._checkpoint: Checkpoint | None = None
         self._stop_reason: str | None = None  # why the last stop can't be resumed
+        # A manual command was sent while paused: the print's position and
+        # modes are restored before its next line goes out.
+        self._restore_needed = False
         self._task: asyncio.Task | None = None
         self._on_event = on_event
         self._flow_rate: float = 100.0  # percentage, same semantics as M221
@@ -230,7 +235,7 @@ class QueueWorker:
         if self.status != old_status:
             self._emit(StatusEvent(value=self.status.value))
 
-    def _end_print(self, end_reason: str, resume_line: int | None = None) -> None:
+    def _end_print(self, end_reason: EndReason, resume_line: int | None = None) -> None:
         """Report the end of a print ("completed", "stopped" or "error") and
         the line a resumable stop halted on. Called once, right
         after the print leaves ACTIVE."""
@@ -254,17 +259,20 @@ class QueueWorker:
         """
         if self._state in ACTIVE:
             raise InvalidTransition("Can't load a new print while one is running")
-        has_states = state_before is not None and state_after is not None
-        if has_states and not (len(state_before) == len(state_after) == len(lines)):
+        if (
+            state_before is not None
+            and state_after is not None
+            and not (len(state_before) == len(state_after) == len(lines))
+        ):
             raise ValueError("state_before/state_after must match lines")
 
         self.flush_priority()
         self._lines = [
-            stripped for line in lines
-            if (stripped := line.strip()) and not stripped.startswith(";")
+            stripped for line in lines if (stripped := line.strip()) and not stripped.startswith(";")
         ]
         self._next = 0
         self._tracker.reset()
+        self._restore_needed = False
         self._time_estimate_s = time_estimate_s
         self._extrusion_axes = tuple(extrusion_axes)
         self._retract_mm = pressurize_mm
@@ -307,6 +315,13 @@ class QueueWorker:
 
     def pause(self) -> None:
         self._transition(PAUSED)
+
+    def manual_command(self) -> None:
+        """A manual command is about to be sent. During a pause, it may move
+        the printer or change its feedrate or distance mode, so those are
+        restored before the print continues."""
+        if self._state == PAUSED:
+            self._restore_needed = True
 
     def resume(self) -> None:
         """Continue a paused print."""
@@ -484,10 +499,14 @@ class QueueWorker:
             return
         self._low_travel_warned.add(axis)
         side = "left" if axis == "B" else "right"
-        self._emit(WarningEvent(message=(
-            f"The {side} syringe ({axis}) is nearly empty: "
-            f"{max(remaining, 0):.1f} of {travel:g} mm plunger travel left."
-        )))
+        self._emit(
+            WarningEvent(
+                message=(
+                    f"The {side} syringe ({axis}) is nearly empty: "
+                    f"{max(remaining, 0):.1f} of {travel:g} mm plunger travel left."
+                )
+            )
+        )
 
     async def _run(self, preamble: list[str], seed: bool = False) -> None:
         logger.info("Queue worker started at line %d/%d", self._next, len(self._lines))
@@ -519,7 +538,16 @@ class QueueWorker:
                 if self._state not in ACTIVE:
                     break
 
+                if self._restore_needed:
+                    await self._restore_after_pause()
+                    continue  # paused or stopped meanwhile, or failed: look again
+
                 if self._next >= len(self._lines):
+                    # The last lines may still be in the printer's planner;
+                    # the print is done once they have run. A stop until then
+                    # is resumable like any other.
+                    if not await self._send("M400") or self._state != PRINTING:
+                        continue
                     self._transition(COMPLETED)
                     self._end_print("completed")
                     break
@@ -546,6 +574,30 @@ class QueueWorker:
                 self._next,
                 len(self._lines),
             )
+
+    async def _restore_after_pause(self) -> None:
+        """Bring the printer back to where the print left off, after manual
+        commands during a pause (see build_return_commands). If that fails,
+        the print is paused again, to retry on the next resume."""
+        try:
+            replies = await self._serial.send_lines(["M400", "M114"])
+            position = parse_m114(replies[1])
+            if position is None:
+                raise ValueError(f"couldn't parse the printer position from {replies[1]!r}")
+            commands = build_return_commands(position, self._tracker.state)
+            await self._serial.send_lines(commands)
+        except (SerialError, ValueError) as exc:
+            logger.error("Returning to the print after manual commands failed: %s", exc)
+            if self._state == PRINTING:
+                self._transition(PAUSED)
+            self._emit(
+                ErrorEvent(
+                    message=(f"Couldn't return to the print after the manual commands: {exc}. Print paused.")
+                )
+            )
+            return
+        self._restore_needed = False
+        logger.info("Returned to the print after manual commands: %s", commands)
 
     def _emit_progress(self) -> None:
         total = len(self._lines)

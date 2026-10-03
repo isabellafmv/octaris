@@ -4,9 +4,10 @@ The printer has no endstops, so nothing on the machine stops a move that
 leaves the bed or runs a plunger into the end of its syringe. These checks
 are the only guard; they work in the coordinate system set by the G92 zero.
 """
+
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from backend.checkpoint import fmt
 from backend.config import AxisRange, BedLimits
@@ -26,10 +27,7 @@ def _ranges(bed: BedLimits) -> dict[str, AxisRange]:
 
 
 def _describe(axis: str, value: float, allowed: AxisRange) -> str:
-    return (
-        f"{axis} to {fmt(value)} mm, outside the bed "
-        f"({fmt(allowed.min)} to {fmt(allowed.max)} mm)"
-    )
+    return f"{axis} to {fmt(value)} mm, outside the bed ({fmt(allowed.min)} to {fmt(allowed.max)} mm)"
 
 
 def check_jog(bed: BedLimits, axis: str, current: float, distance: float) -> None:
@@ -48,9 +46,7 @@ def start_state(position: dict[str, float] | None) -> MachineState:
     return MachineState(pos={ax: position.get(ax) for ax in AXES})
 
 
-def check_path(
-    bed: BedLimits, lines: Sequence[str], start: MachineState | None = None
-) -> None:
+def check_path(bed: BedLimits, lines: Sequence[str], start: MachineState | None = None) -> None:
     """Raise LimitError if any move in `lines` ends outside the bed.
 
     Every move is a straight line and the bed is a box, so a path stays on
@@ -77,9 +73,7 @@ def _is_g92(line: str) -> bool:
     return bool(words) and words[0] == ("G", 92)
 
 
-def plunger_step(
-    before: MachineState, after: MachineState, line: str
-) -> dict[str, float]:
+def plunger_step(before: MachineState, after: MachineState, line: str) -> dict[str, float]:
     """How far each plunger physically moved on `line` (negative = pushed).
 
     G92 changes the coordinates without moving anything, and a move from an
@@ -95,9 +89,7 @@ def plunger_step(
     return moved
 
 
-def plunger_travel_needed(
-    lines: Iterable[str], start: MachineState | None = None
-) -> dict[str, float]:
+def plunger_travel_needed(lines: Iterable[str], start: MachineState | None = None) -> dict[str, float]:
     """The furthest each plunger gets pushed from where it starts, in mm.
 
     Plungers extrude in the negative direction. Retracts pull back and the

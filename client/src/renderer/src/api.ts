@@ -80,12 +80,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ line })
     }),
-  getSerialLog: (limit = 200) =>
-    json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
-  calibrationStatus: () =>
-    json<{ calibrated: boolean }>('/calibration/status'),
+  getSerialLog: (limit = 200) => json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
+  calibrationStatus: () => json<{ calibrated: boolean }>('/calibration/status'),
   calibrationZero: () =>
     json<{ status: string; command: string }>('/calibration/zero', { method: 'POST' }),
-  calibrationReset: () =>
-    json<{ status: string }>('/calibration/reset', { method: 'POST' }),
+  calibrationReset: () => json<{ status: string }>('/calibration/reset', { method: 'POST' })
 }

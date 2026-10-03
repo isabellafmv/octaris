@@ -23,10 +23,7 @@ export function ExtrusionSlider({ currentRate }: ExtrusionSliderProps): React.JS
     <div className="relative">
       {/* Track */}
       <div className="h-1 rounded-full bg-border">
-        <div
-          className="h-full rounded-full bg-primary"
-          style={{ width: `${pct}%` }}
-        />
+        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
       </div>
       {/* Native input (invisible, layered on top for interaction) */}
       <input

@@ -579,6 +579,8 @@ export interface components {
             end_reason: ("completed" | "stopped" | "estop" | "error") | null;
             /** Resume Line */
             resume_line: number | null;
+            /** Serial Log */
+            serial_log?: string | null;
             /** Extrusion Events */
             extrusion_events: components["schemas"]["ExtrusionChange"][];
         };

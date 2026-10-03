@@ -13,14 +13,22 @@ function formatTime(s: number): string {
   return `${min} min ${sec} sec`
 }
 
-export function TimeRemaining({ seconds, linesSent, linesTotal }: TimeRemainingProps): React.JSX.Element {
-  const [remaining, setRemaining] = useState<number>(seconds ?? 0)
-
-  useEffect(() => {
-    if (seconds === null || linesTotal === 0) return
-    const fraction = 1 - linesSent / linesTotal
-    setRemaining(Math.max(0, Math.round(seconds * fraction)))
-  }, [seconds, linesSent, linesTotal])
+export function TimeRemaining({
+  seconds,
+  linesSent,
+  linesTotal
+}: TimeRemainingProps): React.JSX.Element {
+  const estimate =
+    seconds === null || linesTotal === 0
+      ? null
+      : Math.max(0, Math.round(seconds * (1 - linesSent / linesTotal)))
+  const [remaining, setRemaining] = useState<number>(estimate ?? 0)
+  // Restart the countdown from each new estimate
+  const [lastEstimate, setLastEstimate] = useState(estimate)
+  if (estimate !== lastEstimate) {
+    setLastEstimate(estimate)
+    if (estimate !== null) setRemaining(estimate)
+  }
 
   useEffect(() => {
     const timer = setInterval(() => {

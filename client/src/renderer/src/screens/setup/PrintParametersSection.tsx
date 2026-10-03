@@ -18,7 +18,10 @@ const ROWS: (Field | null)[][] = [
     { key: 'pressurizeMm', label: 'Pressurize (mm)', step: '0.1', placeholder: '0.2' },
     { key: 'flowMultiplier', label: 'Flow multiplier', step: '0.1', placeholder: '1.0' }
   ],
-  [{ key: 'travelRetractMultiplier', label: 'Travel retract ×', step: '0.1', placeholder: '3.0' }, null]
+  [
+    { key: 'travelRetractMultiplier', label: 'Travel retract ×', step: '0.1', placeholder: '3.0' },
+    null
+  ]
 ]
 
 function ParameterInput({ field }: { field: Field }): React.JSX.Element {
@@ -50,7 +53,11 @@ export function PrintParametersSection(): React.JSX.Element {
       {ROWS.map((row, i) => (
         <div key={i} className="flex gap-2">
           {row.map((field, j) =>
-            field ? <ParameterInput key={field.key} field={field} /> : <div key={j} className="flex-1" />
+            field ? (
+              <ParameterInput key={field.key} field={field} />
+            ) : (
+              <div key={j} className="flex-1" />
+            )
           )}
         </div>
       ))}

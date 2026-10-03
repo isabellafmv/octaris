@@ -15,7 +15,9 @@ export function ConnectionSection({
   return (
     <div className="flex items-start justify-between px-8 pt-7 pb-4 shrink-0">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-primary">Setup &amp; Configuration</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-primary">
+          Setup &amp; Configuration
+        </h1>
         <p className="text-xs tracking-widest uppercase mt-1 text-text-muted">
           Bioprinting System // Octaris
         </p>
