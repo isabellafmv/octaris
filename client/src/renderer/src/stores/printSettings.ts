@@ -9,6 +9,8 @@ type PrintParameters = Record<PrintParameter, string>
 
 interface PrintSettingsState extends PrintParameters {
   syringeMode: SyringeMode
+  jogStep: number
+  setJogStep: (step: number) => void
   setSyringeMode: (mode: SyringeMode) => void
   setParameter: (key: PrintParameter, value: string) => void
 }
@@ -22,6 +24,8 @@ export const usePrintSettings = create<PrintSettingsState>()((set) => ({
   pressurizeMm: '',
   flowMultiplier: '',
   travelRetractMultiplier: '3',
+  jogStep: 5,
+  setJogStep: (jogStep) => set({ jogStep }),
   setSyringeMode: (syringeMode) => set({ syringeMode }),
   setParameter: (key, value) => set({ [key]: value } as Pick<PrintParameters, typeof key>)
 }))
