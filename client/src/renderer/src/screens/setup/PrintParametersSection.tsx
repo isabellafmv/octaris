@@ -1,3 +1,4 @@
+import { NordsonTipSelect } from '../../components/NordsonTipSelect'
 import { usePrintSettings, type PrintParameter } from '../../stores/printSettings'
 
 interface Field {
@@ -50,6 +51,8 @@ export function PrintParametersSection(): React.JSX.Element {
       <span className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">
         Print Parameters
       </span>
+      {/* Picking a tip fills in the nozzle diameter below */}
+      <NordsonTipSelect />
       {ROWS.map((row, i) => (
         <div key={i} className="flex gap-2">
           {row.map((field, j) =>
