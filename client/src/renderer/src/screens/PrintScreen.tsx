@@ -4,60 +4,6 @@ import { PrintOverlay } from '../components/PrintOverlay'
 import { api } from '../api'
 import type { PrintStatus, StopInfo } from '../types'
 
-function SetupIcon(): React.JSX.Element {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      className="w-5 h-5"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75"
-      />
-    </svg>
-  )
-}
-
-function MonitorIcon(): React.JSX.Element {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      className="w-5 h-5"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
-      />
-    </svg>
-  )
-}
-
-function LibraryIcon(): React.JSX.Element {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      className="w-5 h-5"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
-      />
-    </svg>
-  )
-}
-
 interface PrintScreenProps {
   status: PrintStatus
   linesSent: number
@@ -67,7 +13,6 @@ interface PrintScreenProps {
   filename: string | null
   onBack: () => void
   onRestart: () => void
-  onTakeOver: () => void
   printerConnected: boolean
   printError: { id: number; message: string } | null
   stopInfo: StopInfo
@@ -159,7 +104,6 @@ export function PrintScreen({
   filename,
   onBack,
   onRestart,
-  onTakeOver,
   printError,
   stopInfo
 }: PrintScreenProps): React.JSX.Element {
@@ -201,41 +145,6 @@ export function PrintScreen({
 
   return (
     <div className="flex h-full text-text">
-      {/* ── Sidebar ── */}
-      <div className="flex flex-col items-center gap-1 py-5 px-3 shrink-0 border-r border-surface-sunken w-[72px]">
-        {/* Logo text */}
-        <div className="mb-3">
-          <span className="text-xs font-bold tracking-widest uppercase text-primary [writing-mode:vertical-rl] rotate-180">
-            Octaris
-          </span>
-        </div>
-
-        {/* Nav icons */}
-        {[
-          { icon: <SetupIcon />, label: 'SETUP', action: onBack },
-          { icon: <MonitorIcon />, label: 'MONITOR', active: true, action: () => {} },
-          { icon: <LibraryIcon />, label: 'LOGS', action: onTakeOver }
-        ].map((item) => (
-          <div key={item.label} className="flex flex-col items-center gap-0.5 w-full">
-            <button
-              onClick={item.action}
-              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90 ${
-                item.active ? 'bg-primary text-white' : 'text-text-muted'
-              }`}
-            >
-              {item.icon}
-            </button>
-            <span
-              className={`text-[8px] tracking-widest uppercase font-medium ${
-                item.active ? 'text-primary' : 'text-text-subtle'
-              }`}
-            >
-              {item.label}
-            </span>
-          </div>
-        ))}
-      </div>
-
       {/* ── Main content ── */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {error && (
