@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 
-export type Screen = 'setup' | 'print' | 'takeover'
+export type Screen = 'setup' | 'print' | 'temperature' | 'takeover'
 
 interface Navigation {
   screen: Screen

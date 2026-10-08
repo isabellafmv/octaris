@@ -167,6 +167,24 @@ class TemperatureStatusEvent(Event, TemperatureStatus):
     type: Literal["temperature_status"] = "temperature_status"
 
 
+class TemperatureWaitSensor(BaseModel):
+    sensor: str
+    name: str
+    actual: float
+    target: float
+    stable_s: float  # how long it has been within target_band_c of its target
+
+
+class TemperatureWaitEvent(Event):
+    """Sent about once a second while a print waits for its temperatures,
+    and once with waiting=False when it stops waiting (reached or stopped)."""
+
+    type: Literal["temperature_wait"] = "temperature_wait"
+    waiting: bool
+    settle_s: float  # how long each target has to hold
+    sensors: list[TemperatureWaitSensor]
+
+
 class PrinterEvent(Event):
     type: Literal["printer"] = "printer"
     connected: bool
@@ -203,6 +221,7 @@ WsEvent = Annotated[
     | SerialLogEvent
     | TemperatureEvent
     | TemperatureStatusEvent
+    | TemperatureWaitEvent
     | PrinterEvent
     | CalibrationEvent
     | PrintEndEvent
@@ -256,6 +275,12 @@ class UploadResult(BaseModel):
     time_estimate_s: int | None
     feed_log_entries: int
     preview_lines: list[str]
+
+
+class PrintStartRequest(BaseModel):
+    # Hold the print until every sensor with a target has stayed within
+    # temperature.target_band_c of it for temperature.settle_s
+    wait_for_temperature: bool = False
 
 
 class PrintStartResponse(BaseModel):

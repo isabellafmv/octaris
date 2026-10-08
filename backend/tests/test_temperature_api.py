@@ -251,3 +251,108 @@ async def test_csv_export_of_a_time_range(client):
 )
 async def test_csv_export_needs_one_range(client, params):
     assert (await client.get("/temperature/export.csv", params=params)).status_code == 400
+
+
+# --- waiting for temperatures at print start -------------------------------------------------
+
+
+@pytest.fixture
+async def ready_to_print(client, dev_mode, tmp_path, monkeypatch):
+    """The virtual printer, connected and zeroed, with a print loaded, and
+    waiting checked every 20 ms."""
+    from backend import queue_worker
+    from tests.test_history import upload_stl
+
+    monkeypatch.setattr(queue_worker, "TEMPERATURE_WAIT_POLL_S", 0.02)
+    printer = await connect_virtual(client, speed=5)  # heaters at 10 °C/s
+    app.state.session.calibrated = True
+    app.state.config.nozzle_offset_measured = True
+    await upload_stl(client, tmp_path, 50)
+    return printer
+
+
+def numbered_lines(printer) -> list[str]:
+    return [line for line in printer.received if line.startswith("N") and "M110" not in line]
+
+
+async def test_print_waits_for_the_temperatures(client, ready_to_print):
+    printer = ready_to_print
+    worker = app.state.queue_worker
+    app.state.temperature.config.settle_s = 0.5
+    sub_id, events = app.state.event_bus.subscribe()
+    assert (await client.post("/temperature/target", json={"sensor": "T0", "target": 37})).is_success
+
+    resp = await client.post("/print/start", json={"wait_for_temperature": True})
+    assert resp.status_code == 200
+    await wait_for(lambda: worker.waiting_for_temperature)
+    assert worker.status == PrintStatus.PRINTING
+    assert numbered_lines(printer) == []
+
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED, timeout=10)
+    app.state.event_bus.unsubscribe(sub_id)
+    published = [events.get_nowait() for _ in range(events.qsize())]
+    waits = [e for e in published if e["type"] == "temperature_wait"]
+    assert waits[0]["waiting"] is True and waits[0]["settle_s"] == 0.5
+    # Once the report with the new target is in, T0 is what it waits for
+    assert [s["sensor"] for s in waits[-2]["sensors"]] == ["T0"]
+    assert waits[-1]["waiting"] is False
+    assert all(e["waiting"] for e in waits[:-1])
+    # No print line went out before the wait ended
+    types = [e["type"] for e in published]
+    assert types.index("progress") > published.index(waits[-1])
+    # By then the syringe had held its target for the settle time
+    t0 = app.state.temperature.latest["T0"]
+    assert abs(t0.actual - 37) <= 1
+
+
+async def test_waiting_print_without_targets_starts_at_once(client, ready_to_print):
+    worker = app.state.queue_worker
+    assert (await client.post("/print/start", json={"wait_for_temperature": True})).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+
+async def test_print_without_waiting_ignores_the_temperatures(client, ready_to_print):
+    worker = app.state.queue_worker
+    app.state.temperature.config.settle_s = 3600
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+
+async def test_waiting_can_be_cancelled(client, ready_to_print):
+    printer = ready_to_print
+    worker = app.state.queue_worker
+    app.state.temperature.config.settle_s = 3600
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+    await client.post("/print/start", json={"wait_for_temperature": True})
+    await wait_for(lambda: worker.waiting_for_temperature)
+
+    resp = await client.post("/print/stop")
+    assert resp.json() == {
+        "status": "stopped",
+        "resumable": False,
+        "reason": "Stopped while waiting for the temperatures",
+    }
+    await wait_for(lambda: not worker.sending)
+    assert not worker.waiting_for_temperature
+    assert numbered_lines(printer) == []
+    [session] = (await client.get("/history")).json()["sessions"]
+    assert session["end_reason"] == "stopped"
+
+    # It can simply be started again
+    app.state.temperature.config.settle_s = 0
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 0})
+    assert (await client.post("/print/start", json={"wait_for_temperature": True})).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+
+async def test_no_deviation_warning_while_waiting(client, ready_to_print):
+    worker = app.state.queue_worker
+    store = app.state.temperature
+    store.config.settle_s = 3600
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+    await client.post("/print/start", json={"wait_for_temperature": True})
+    await wait_for(lambda: worker.waiting_for_temperature)
+    assert worker.print_active
+    assert store._is_printing() is False
+    await client.post("/print/stop")

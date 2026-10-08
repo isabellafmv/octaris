@@ -381,6 +381,23 @@
       "post": {
         "summary": "Start Print",
         "operationId": "start_print_print_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PrintStartRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -388,6 +405,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PrintStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1439,6 +1466,17 @@
         "title": "PrintSession",
         "description": "One print in the history."
       },
+      "PrintStartRequest": {
+        "properties": {
+          "wait_for_temperature": {
+            "type": "boolean",
+            "title": "Wait For Temperature",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "PrintStartRequest"
+      },
       "PrintStartResponse": {
         "properties": {
           "status": {
@@ -2418,6 +2456,73 @@
         "title": "TemperatureStatusEvent",
         "type": "object"
       },
+      "TemperatureWaitEvent": {
+        "description": "Sent about once a second while a print waits for its temperatures,\nand once with waiting=False when it stops waiting (reached or stopped).",
+        "properties": {
+          "type": {
+            "const": "temperature_wait",
+            "default": "temperature_wait",
+            "title": "Type",
+            "type": "string"
+          },
+          "waiting": {
+            "title": "Waiting",
+            "type": "boolean"
+          },
+          "settle_s": {
+            "title": "Settle S",
+            "type": "number"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/TemperatureWaitSensor"
+            },
+            "title": "Sensors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "waiting",
+          "settle_s",
+          "sensors"
+        ],
+        "title": "TemperatureWaitEvent",
+        "type": "object"
+      },
+      "TemperatureWaitSensor": {
+        "properties": {
+          "sensor": {
+            "title": "Sensor",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "actual": {
+            "title": "Actual",
+            "type": "number"
+          },
+          "target": {
+            "title": "Target",
+            "type": "number"
+          },
+          "stable_s": {
+            "title": "Stable S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sensor",
+          "name",
+          "actual",
+          "target",
+          "stable_s"
+        ],
+        "title": "TemperatureWaitSensor",
+        "type": "object"
+      },
       "WarningEvent": {
         "description": "E.g. a syringe running low during a print.",
         "properties": {
@@ -2455,6 +2560,7 @@
             "stop": "#/components/schemas/StopEvent",
             "temperature": "#/components/schemas/TemperatureEvent",
             "temperature_status": "#/components/schemas/TemperatureStatusEvent",
+            "temperature_wait": "#/components/schemas/TemperatureWaitEvent",
             "warning": "#/components/schemas/WarningEvent"
           },
           "propertyName": "type"
@@ -2489,6 +2595,9 @@
           },
           {
             "$ref": "#/components/schemas/TemperatureStatusEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TemperatureWaitEvent"
           },
           {
             "$ref": "#/components/schemas/PrinterEvent"

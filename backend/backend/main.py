@@ -44,20 +44,22 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
         can_reconnect=lambda: session.can_reconnect(),
         on_traffic=history.log_traffic,
     )
-    queue_worker = QueueWorker(
-        serial_manager=serial_manager,
-        on_event=event_bus.publish,
-        retract_on_estop=config.retract_on_estop,
-        syringe_travel_mm=config.syringe_travel_mm,
-    )
     temperature = TemperatureStore(
         db,
         config.temperature,
         session_id=lambda: history.session_id,
         is_connected=lambda: serial_manager.is_connected,
+        is_printing=lambda: queue_worker.print_active and not queue_worker.waiting_for_temperature,
         publish=event_bus.publish,
     )
     temperature.purge_expired()
+    queue_worker = QueueWorker(
+        serial_manager=serial_manager,
+        on_event=event_bus.publish,
+        retract_on_estop=config.retract_on_estop,
+        syringe_travel_mm=config.syringe_travel_mm,
+        temperature=temperature,
+    )
     session = PrinterSession(config, serial_manager, queue_worker, history, event_bus.publish, temperature)
     event_bus.listen(session.on_event)
     event_bus.listen(history.on_event)
@@ -85,7 +87,7 @@ async def lifespan(app: FastAPI):
     yield
     if app.state.serial_manager.is_connected:
         await app.state.serial_manager.disconnect()
-    app.state.temperature.flush()
+    await app.state.temperature.close()
     app.state.db.close()
 
 
