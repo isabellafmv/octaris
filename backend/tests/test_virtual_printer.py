@@ -142,6 +142,49 @@ def test_heating_waits_for_the_target(make):
     assert abs(printer.temperatures["T"][0] - 40) < 1
 
 
+def test_each_heater_moves_towards_its_target(make):
+    printer = make(speed=50, sensors={"T0": 21.0, "T1": 21.0, "B": 20.0, "C": 22.0})
+    for command in ("M104 S37", "M104 T1 S10", "M140 S30", "M141 S25"):
+        assert send(printer, command) == ["ok"]
+    assert {key: target for key, (_, target) in printer.temperatures.items()} == {
+        "T0": 37,  # the active tool
+        "T1": 10,
+        "B": 30,
+        "C": 25,
+    }
+    time.sleep(0.3)  # 100 °C/s
+    assert {key: round(actual) for key, (actual, _) in printer.temperatures.items()} == {
+        "T0": 37,
+        "T1": 10,
+        "B": 30,
+        "C": 25,
+    }
+
+    send(printer, "M104 T1 S0")  # off: back to ambient
+    time.sleep(0.3)
+    assert printer.temperatures["T1"] == (21.0, 0.0)
+
+
+def test_several_tools_report_the_active_one_as_t(make):
+    printer = make(sensors={"T0": 21.0, "T1": 22.0, "B": 20.0})
+    assert send(printer, "M105") == ["ok T:21.00 /0.00 T0:21.00 /0.00 T1:22.00 /0.00 B:20.00 /0.00 @:0 B@:0"]
+
+
+def test_heaters_it_lacks_are_ignored(make):
+    printer = make()  # T and B only
+    assert send(printer, "M141 S30") == ["ok"]
+    assert send(printer, "M104 T3 S30") == ["ok"]
+    assert printer.temperatures == {"T": (21.3, 0.0), "B": (20.1, 0.0)}
+
+
+def test_without_sensors_nothing_is_reported(make):
+    printer = make(sensors={}, report_scale=0.01)
+    assert send(printer, "M105") == ["ok"]
+    send(printer, "M155 S1")
+    time.sleep(0.1)
+    assert printer.readline() == b""
+
+
 def test_m115_reports_the_emergency_parser(make):
     replies = send(make(), "M115")
     assert replies[0].startswith("FIRMWARE_NAME:Marlin")

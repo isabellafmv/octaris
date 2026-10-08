@@ -649,6 +649,210 @@
         }
       }
     },
+    "/temperature": {
+      "get": {
+        "summary": "Temperature",
+        "description": "The latest reading, target and status of every sensor. `state` says\nwhether the printer is connected and has reported any sensor at all.",
+        "operationId": "temperature_temperature_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/history": {
+      "get": {
+        "summary": "Temperature History",
+        "description": "Readings for the chart: the last `minutes`, or all of one print session's.",
+        "operationId": "temperature_history_temperature_history_get",
+        "parameters": [
+          {
+            "name": "minutes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 120,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Minutes"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/export.csv": {
+      "get": {
+        "summary": "Export Temperature Csv",
+        "description": "Logged readings of one print session, or between `from` and `to`\n(ISO 8601; UTC unless an offset is given), as CSV: timestamp, sensor,\nname, actual, target.",
+        "operationId": "export_temperature_csv_temperature_export_csv_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/target": {
+      "post": {
+        "summary": "Set Temperature Target",
+        "description": "Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C).\nAllowed while printing.",
+        "operationId": "set_temperature_target_temperature_target_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemperatureTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureTargetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Health",
@@ -1268,6 +1472,72 @@
         ],
         "title": "ResumeResponse"
       },
+      "SensorReading": {
+        "properties": {
+          "sensor": {
+            "title": "Sensor",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "settable": {
+            "title": "Settable",
+            "type": "boolean"
+          },
+          "actual": {
+            "title": "Actual",
+            "type": "number"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "status": {
+            "enum": [
+              "heating",
+              "cooling",
+              "at_target",
+              "off"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sensor",
+          "name",
+          "min",
+          "max",
+          "settable",
+          "actual",
+          "target",
+          "status",
+          "timestamp"
+        ],
+        "title": "SensorReading",
+        "type": "object"
+      },
       "SerialLogEntry": {
         "properties": {
           "timestamp": {
@@ -1442,6 +1712,162 @@
           "reason"
         ],
         "title": "StopResponse"
+      },
+      "TemperatureHistoryResponse": {
+        "properties": {
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/TemperatureSeries"
+            },
+            "type": "array",
+            "title": "Series"
+          }
+        },
+        "type": "object",
+        "required": [
+          "series"
+        ],
+        "title": "TemperatureHistoryResponse"
+      },
+      "TemperatureSeries": {
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "min": {
+            "type": "number",
+            "title": "Min"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          },
+          "settable": {
+            "type": "boolean",
+            "title": "Settable"
+          },
+          "timestamps": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Timestamps"
+          },
+          "actual": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Actual"
+          },
+          "target": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Target"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sensor",
+          "name",
+          "min",
+          "max",
+          "settable",
+          "timestamps",
+          "actual",
+          "target"
+        ],
+        "title": "TemperatureSeries",
+        "description": "One sensor's readings, oldest first, as parallel lists."
+      },
+      "TemperatureStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "disconnected",
+              "waiting",
+              "no_sensors",
+              "ok"
+            ],
+            "title": "State"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/SensorReading"
+            },
+            "type": "array",
+            "title": "Sensors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "sensors"
+        ],
+        "title": "TemperatureStatus",
+        "description": "The latest reading of every sensor the printer reports."
+      },
+      "TemperatureTargetRequest": {
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "target": {
+            "type": "number",
+            "title": "Target"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sensor",
+          "target"
+        ],
+        "title": "TemperatureTargetRequest"
+      },
+      "TemperatureTargetResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "target": {
+            "type": "number",
+            "title": "Target"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "sensor",
+          "target",
+          "command"
+        ],
+        "title": "TemperatureTargetResponse"
       },
       "UploadResult": {
         "properties": {
@@ -1957,6 +2383,41 @@
         "title": "TemperatureEvent",
         "type": "object"
       },
+      "TemperatureStatusEvent": {
+        "description": "GET /temperature's body, after every report and when the state changes.",
+        "properties": {
+          "state": {
+            "enum": [
+              "disconnected",
+              "waiting",
+              "no_sensors",
+              "ok"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/SensorReading"
+            },
+            "title": "Sensors",
+            "type": "array"
+          },
+          "type": {
+            "const": "temperature_status",
+            "default": "temperature_status",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "state",
+          "sensors"
+        ],
+        "title": "TemperatureStatusEvent",
+        "type": "object"
+      },
       "WarningEvent": {
         "description": "E.g. a syringe running low during a print.",
         "properties": {
@@ -1993,6 +2454,7 @@
             "status": "#/components/schemas/StatusEvent",
             "stop": "#/components/schemas/StopEvent",
             "temperature": "#/components/schemas/TemperatureEvent",
+            "temperature_status": "#/components/schemas/TemperatureStatusEvent",
             "warning": "#/components/schemas/WarningEvent"
           },
           "propertyName": "type"
@@ -2024,6 +2486,9 @@
           },
           {
             "$ref": "#/components/schemas/TemperatureEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TemperatureStatusEvent"
           },
           {
             "$ref": "#/components/schemas/PrinterEvent"

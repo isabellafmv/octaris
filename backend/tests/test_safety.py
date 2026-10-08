@@ -235,8 +235,9 @@ async def test_idle_reconnect_resets_calibration(client, printer, events):
     assert app.state.session.calibrated is False
     published = events()
     assert {"type": "printer", "connected": True, "port": "/dev/fake"} in published
-    # (Ignoring serial log entries, e.g. the M155 sent after reconnecting.)
-    published = [e for e in published if e["type"] != "serial_log"]
+    # (Ignoring serial log entries, e.g. the M155 sent after reconnecting,
+    # and the temperature status, which also follows the reconnect.)
+    published = [e for e in published if e["type"] not in ("serial_log", "temperature_status")]
     assert published[-1] == {"type": "calibration", "value": "uncalibrated"}
 
 

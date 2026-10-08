@@ -54,7 +54,7 @@ export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps): 
         <div className="flex-1 text-left">
           <p className="font-semibold text-sm text-text">{file ? file.name : 'Upload Model'}</p>
           <p className="text-xs mt-0.5 text-text-muted">
-            {file ? 'Click to replace file' : 'Select a .stl or .3mf file'}
+            {file ? 'Click to replace file' : 'Select a .stl file'}
           </p>
         </div>
         <svg

@@ -339,6 +339,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/temperature": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Temperature
+         * @description The latest reading, target and status of every sensor. `state` says
+         *     whether the printer is connected and has reported any sensor at all.
+         */
+        get: operations["temperature_temperature_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/temperature/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Temperature History
+         * @description Readings for the chart: the last `minutes`, or all of one print session's.
+         */
+        get: operations["temperature_history_temperature_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/temperature/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Temperature Csv
+         * @description Logged readings of one print session, or between `from` and `to`
+         *     (ISO 8601; UTC unless an offset is given), as CSV: timestamp, sensor,
+         *     name, actual, target.
+         */
+        get: operations["export_temperature_csv_temperature_export_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/temperature/target": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Temperature Target
+         * @description Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C).
+         *     Allowed while printing.
+         */
+        post: operations["set_temperature_target_temperature_target_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -602,6 +686,30 @@ export interface components {
              */
             status: "printing";
         };
+        /** SensorReading */
+        SensorReading: {
+            /** Sensor */
+            sensor: string;
+            /** Name */
+            name: string;
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
+            /** Settable */
+            settable: boolean;
+            /** Actual */
+            actual: number;
+            /** Target */
+            target: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "heating" | "cooling" | "at_target" | "off";
+            /** Timestamp */
+            timestamp: number;
+        };
         /** SerialLogEntry */
         SerialLogEntry: {
             /** Timestamp */
@@ -664,6 +772,67 @@ export interface components {
             resumable: boolean;
             /** Reason */
             reason: string | null;
+        };
+        /** TemperatureHistoryResponse */
+        TemperatureHistoryResponse: {
+            /** Series */
+            series: components["schemas"]["TemperatureSeries"][];
+        };
+        /**
+         * TemperatureSeries
+         * @description One sensor's readings, oldest first, as parallel lists.
+         */
+        TemperatureSeries: {
+            /** Sensor */
+            sensor: string;
+            /** Name */
+            name: string;
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
+            /** Settable */
+            settable: boolean;
+            /** Timestamps */
+            timestamps: number[];
+            /** Actual */
+            actual: number[];
+            /** Target */
+            target: (number | null)[];
+        };
+        /**
+         * TemperatureStatus
+         * @description The latest reading of every sensor the printer reports.
+         */
+        TemperatureStatus: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "disconnected" | "waiting" | "no_sensors" | "ok";
+            /** Sensors */
+            sensors: components["schemas"]["SensorReading"][];
+        };
+        /** TemperatureTargetRequest */
+        TemperatureTargetRequest: {
+            /** Sensor */
+            sensor: string;
+            /** Target */
+            target: number;
+        };
+        /** TemperatureTargetResponse */
+        TemperatureTargetResponse: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "ok";
+            /** Sensor */
+            sensor: string;
+            /** Target */
+            target: number;
+            /** Command */
+            command: string;
         };
         /** UploadResult */
         UploadResult: {
@@ -883,6 +1052,24 @@ export interface components {
             };
         };
         /**
+         * TemperatureStatusEvent
+         * @description GET /temperature's body, after every report and when the state changes.
+         */
+        TemperatureStatusEvent: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "disconnected" | "waiting" | "no_sensors" | "ok";
+            /** Sensors */
+            sensors: components["schemas"]["SensorReading"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "temperature_status";
+        };
+        /**
          * WarningEvent
          * @description E.g. a syringe running low during a print.
          */
@@ -895,7 +1082,7 @@ export interface components {
             /** Message */
             message: string;
         };
-        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
+        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
         /**
          * ErrorResponse
          * @description The body of every 4xx/5xx response.
@@ -1383,6 +1570,124 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    temperature_temperature_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemperatureStatus"];
+                };
+            };
+        };
+    };
+    temperature_history_temperature_history_get: {
+        parameters: {
+            query?: {
+                minutes?: number | null;
+                session_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemperatureHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_temperature_csv_temperature_export_csv_get: {
+        parameters: {
+            query?: {
+                session_id?: number | null;
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_temperature_target_temperature_target_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemperatureTargetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemperatureTargetResponse"];
                 };
             };
             /** @description Validation Error */

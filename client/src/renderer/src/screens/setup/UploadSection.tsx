@@ -30,7 +30,7 @@ export function UploadSection({
                 : 'text-text-muted'
             }`}
           >
-            {mode === 'stl' ? 'STL / 3MF' : 'G-Code File'}
+            {mode === 'stl' ? 'STL' : 'G-Code File'}
           </button>
         ))}
       </div>

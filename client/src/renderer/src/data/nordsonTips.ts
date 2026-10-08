@@ -21,5 +21,5 @@ export const NORDSON_TIPS: readonly NordsonTip[] = [
 ]
 
 export function tipLabel(tip: NordsonTip): string {
-  return `${tip.gauge} G · ${tip.innerDiameterMm.toFixed(2)} mm · ${tip.color}`
+  return `${tip.gauge} G - ${tip.innerDiameterMm.toFixed(2)} mm`
 }

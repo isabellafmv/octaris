@@ -16,6 +16,10 @@ SyringeMode = Literal["left", "right", "both"]
 PrintStatus = Literal["idle", "slicing", "ready", "printing", "paused", "stopped", "completed"]
 # "estop" only appears in history recorded before /print/estop merged into /print/stop
 EndReason = Literal["completed", "stopped", "estop", "error"]
+# "waiting": connected, no temperature report yet. "no_sensors": connected,
+# and none came in the time one should have.
+TemperatureState = Literal["disconnected", "waiting", "no_sensors", "ok"]
+HeaterStatus = Literal["heating", "cooling", "at_target", "off"]
 
 
 def _type_required(schema: dict[str, Any]) -> None:
@@ -56,6 +60,29 @@ class SerialLogEntry(BaseModel):
 class Temperature(BaseModel):
     actual: float
     target: float | None
+
+
+class SensorInfo(BaseModel):
+    sensor: str  # the key the printer reports: "T0", "B", ...
+    name: str
+    # Targets it accepts, besides 0 (off)
+    min: float
+    max: float
+    settable: bool  # has a heater whose target can be set
+
+
+class SensorReading(SensorInfo):
+    actual: float
+    target: float | None
+    status: HeaterStatus
+    timestamp: float  # Unix seconds
+
+
+class TemperatureStatus(BaseModel):
+    """The latest reading of every sensor the printer reports."""
+
+    state: TemperatureState
+    sensors: list[SensorReading]
 
 
 class Snapshot(BaseModel):
@@ -134,6 +161,12 @@ class TemperatureEvent(Event):
     temperatures: dict[str, Temperature]  # by sensor: "T", "T0", "B", ...
 
 
+class TemperatureStatusEvent(Event, TemperatureStatus):
+    """GET /temperature's body, after every report and when the state changes."""
+
+    type: Literal["temperature_status"] = "temperature_status"
+
+
 class PrinterEvent(Event):
     type: Literal["printer"] = "printer"
     connected: bool
@@ -169,6 +202,7 @@ WsEvent = Annotated[
     | StopEvent
     | SerialLogEvent
     | TemperatureEvent
+    | TemperatureStatusEvent
     | PrinterEvent
     | CalibrationEvent
     | PrintEndEvent
@@ -296,6 +330,25 @@ class PrintSession(BaseModel):
 
 class HistoryResponse(BaseModel):
     sessions: list[PrintSession]
+
+
+class TemperatureSeries(SensorInfo):
+    """One sensor's readings, oldest first, as parallel lists."""
+
+    timestamps: list[float]  # Unix seconds
+    actual: list[float]
+    target: list[float | None]
+
+
+class TemperatureHistoryResponse(BaseModel):
+    series: list[TemperatureSeries]
+
+
+class TemperatureTargetResponse(BaseModel):
+    status: Literal["ok"]
+    sensor: str
+    target: float
+    command: str
 
 
 class ErrorResponse(BaseModel):

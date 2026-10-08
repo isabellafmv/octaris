@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { NordsonTipSelect } from '../../components/NordsonTipSelect'
 import { usePrintSettings, type PrintParameter } from '../../stores/printSettings'
 
@@ -45,29 +46,67 @@ function ParameterInput({ field }: { field: Field }): React.JSX.Element {
   )
 }
 
-export function PrintParametersSection(): React.JSX.Element {
+function Chevron({ open }: { open: boolean }): React.JSX.Element {
   return (
-    <div className="rounded-2xl p-4 flex flex-col gap-2 bg-surface-card">
-      <span className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">
-        Print Parameters
-      </span>
-      {/* Picking a tip fills in the nozzle diameter below */}
-      <NordsonTipSelect />
-      {ROWS.map((row, i) => (
-        <div key={i} className="flex gap-2">
-          {row.map((field, j) =>
-            field ? (
-              <ParameterInput key={field.key} field={field} />
-            ) : (
-              <div key={j} className="flex-1" />
-            )
-          )}
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`w-3.5 h-3.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+    >
+      <path d="M5 8l5 5 5-5" />
+    </svg>
+  )
+}
+
+export function PrintParametersSection(): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="rounded-2xl p-4 flex flex-col bg-surface-card">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="group flex items-center justify-between text-left"
+      >
+        <span className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">
+          Print Parameters
+        </span>
+        <span className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-white transition-colors group-hover:bg-primary-strong">
+          <Chevron open={open} />
+        </span>
+      </button>
+      {/* grid-rows 0fr ↔ 1fr animates the height without measuring the content */}
+      <div
+        className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
+      >
+        <div className="overflow-hidden" inert={!open}>
+          <div className="flex flex-col gap-2 pt-2">
+            {/* Picking a tip fills in the nozzle diameter below */}
+            <NordsonTipSelect />
+            {ROWS.map((row, i) => (
+              <div key={i} className="flex gap-2">
+                {row.map((field, j) =>
+                  field ? (
+                    <ParameterInput key={field.key} field={field} />
+                  ) : (
+                    <div key={j} className="flex-1" />
+                  )
+                )}
+              </div>
+            ))}
+            <span className="text-[9px] text-text-subtle">
+              Layer height defaults to 80% of nozzle diameter. Travel retract × scales the
+              pressurize distance for travel moves only — raise it to stop oozing between
+              segments.
+            </span>
+          </div>
         </div>
-      ))}
-      <span className="text-[9px] text-text-subtle">
-        Layer height defaults to 80% of nozzle diameter. Travel retract × scales the pressurize
-        distance for travel moves only — raise it to stop oozing between segments.
-      </span>
+      </div>
     </div>
   )
 }

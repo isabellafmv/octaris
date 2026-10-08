@@ -19,7 +19,7 @@ def receive_state_event(ws) -> dict:
     """The next event that isn't serial traffic (log lines, temperatures)."""
     while True:
         event = ws.receive_json()
-        if event["type"] not in ("serial_log", "temperature"):
+        if event["type"] not in ("serial_log", "temperature", "temperature_status"):
             return event
 
 

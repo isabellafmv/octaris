@@ -24,6 +24,7 @@ from backend.routers.history import router as history_router
 from backend.routers.jog import router as jog_router
 from backend.routers.print_control import router as print_router
 from backend.routers.serial import router as serial_router
+from backend.routers.temperature import router as temperature_router
 from backend.routers.upload import router as upload_router
 from backend.routers.ws import router as ws_router
 from backend.schemas import ErrorResponse, HealthResponse, WsEvent
@@ -49,9 +50,15 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
         retract_on_estop=config.retract_on_estop,
         syringe_travel_mm=config.syringe_travel_mm,
     )
-    session = PrinterSession(config, serial_manager, queue_worker, history, event_bus.publish)
-    temperature = TemperatureStore(db, config.temperature, session_id=lambda: history.session_id)
+    temperature = TemperatureStore(
+        db,
+        config.temperature,
+        session_id=lambda: history.session_id,
+        is_connected=lambda: serial_manager.is_connected,
+        publish=event_bus.publish,
+    )
     temperature.purge_expired()
+    session = PrinterSession(config, serial_manager, queue_worker, history, event_bus.publish, temperature)
     event_bus.listen(session.on_event)
     event_bus.listen(history.on_event)
     event_bus.listen(temperature.on_event)
@@ -92,6 +99,7 @@ app.include_router(extrusion_router)
 app.include_router(jog_router)
 app.include_router(gcode_router)
 app.include_router(history_router)
+app.include_router(temperature_router)
 app.include_router(ws_router)
 
 # HTTP status for each error the session and the printer raise. A route

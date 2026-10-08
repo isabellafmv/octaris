@@ -12,7 +12,13 @@ from backend.config import SensorConfig, TemperatureConfig
 from backend.database import init_db, insert_temperature_readings, temperature_readings
 from backend.main import app
 from backend.queue_worker import PrintStatus
-from backend.temperature import FLUSH_INTERVAL_S, HISTORY_S, TemperatureStore
+from backend.temperature import (
+    FLUSH_INTERVAL_S,
+    HISTORY_S,
+    TargetError,
+    TemperatureStore,
+    target_command,
+)
 from tests.serial_fakes import attach
 from tests.test_history import FakeSerial, upload_stl, wait_for
 
@@ -225,4 +231,127 @@ async def test_readings_during_a_print_carry_its_session(client, tmp_path):
         (20.0, None),
         (21.0, session["id"]),
         (22.0, None),
+    ]
+
+
+# --- status ------------------------------------------------------------------------
+
+
+def test_heater_status(db, clock):
+    store = TemperatureStore(db, TemperatureConfig(), is_connected=lambda: True, clock=clock)
+    store.record(report(T0=(36.5, 37.0), T1=(30.0, 37.0), B=(10.0, 4.0), C=(25.0, 0.0), P=(22.0, None)))
+    status = store.status()
+    assert status.state == "ok"
+    assert {s.sensor: s.status for s in status.sensors} == {
+        "T0": "at_target",
+        "T1": "heating",
+        "B": "cooling",
+        "C": "off",
+        "P": "off",
+    }
+    assert {s.sensor for s in status.sensors if s.settable} == {"T0", "T1", "B", "C"}
+
+
+def test_sensors_in_config_order_then_by_key(db, clock):
+    config = TemperatureConfig(
+        sensors={
+            "T1": SensorConfig(name="Right"),
+            "B": SensorConfig(name="Bed"),
+            "T0": SensorConfig(name="Left"),
+        }
+    )
+    store = TemperatureStore(db, config, is_connected=lambda: True, clock=clock)
+    store.record(report(B=(20.0, 0.0), W=(20.0, None), C=(20.0, 0.0), T0=(20.0, 0.0), T1=(20.0, 0.0)))
+    assert [s.sensor for s in store.status().sensors] == ["T1", "B", "T0", "C", "W"]
+    assert [s.name for s in store.status().sensors] == ["Right", "Bed", "Left", "C", "W"]
+
+
+def test_no_sensor_state(db, clock):
+    connected = False
+    store = TemperatureStore(
+        db, TemperatureConfig(report_timeout_s=15), is_connected=lambda: connected, clock=clock
+    )
+    assert store.status().state == "disconnected"
+
+    connected = True
+    store.on_event({"type": "printer", "connected": True, "port": "virtual"})
+    assert store.status().state == "waiting"
+    clock.advance(15)
+    assert store.status().model_dump() == {"state": "no_sensors", "sensors": []}
+
+    store.record(report(T=(21.0, 0.0)))
+    assert store.status().state == "ok"
+
+
+def test_reconnecting_forgets_the_old_readings(db, clock):
+    store = TemperatureStore(db, TemperatureConfig(), is_connected=lambda: True, clock=clock)
+    store.record(report(T=(21.0, 0.0)))
+    store.on_event({"type": "printer", "connected": False, "port": None})
+    store.on_event({"type": "printer", "connected": True, "port": "virtual"})
+    assert store.status().state == "waiting"
+    assert len(store.history(60)["T"]) == 1  # the chart keeps them
+
+
+def test_status_is_published_after_each_report(db, clock):
+    events: list[dict] = []
+    store = TemperatureStore(
+        db, TemperatureConfig(), is_connected=lambda: True, publish=events.append, clock=clock
+    )
+    store.record(report(T=(21.0, 30.0)))
+    assert events[-1]["type"] == "temperature_status"
+    assert events[-1]["state"] == "ok"
+    assert events[-1]["sensors"][0]["status"] == "heating"
+
+
+# --- target commands ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("sensor", "target", "command"),
+    [
+        ("T", 37, "M104 S37"),
+        ("T0", 37.5, "M104 T0 S37.5"),
+        ("T1", 0, "M104 T1 S0"),
+        ("B", 25, "M140 S25"),
+        ("C", 30, "M141 S30"),
+    ],
+)
+def test_target_commands(sensor, target, command):
+    assert target_command(sensor, target) == command
+
+
+@pytest.mark.parametrize("sensor", ["P", "R", "W", "X"])
+def test_sensors_without_heater_have_no_target(sensor):
+    with pytest.raises(TargetError):
+        target_command(sensor, 30)
+
+
+def test_target_range(db, clock):
+    store = make_store(db, clock, sensors={"T0": SensorConfig(name="Left syringe", min=4, max=60)})
+    assert store.check_target("T0", 4) == "M104 T0 S4"
+    assert store.check_target("T0", 60) == "M104 T0 S60"
+    assert store.check_target("T0", 0) == "M104 T0 S0"  # off
+    for bad in (3.9, 60.1, -5):
+        with pytest.raises(TargetError, match="from 4 to 60"):
+            store.check_target("T0", bad)
+    # Unknown sensors get 0-120 °C
+    assert store.check_target("B", 120) == "M140 S120"
+    with pytest.raises(TargetError):
+        store.check_target("B", 121)
+
+
+# --- CSV -------------------------------------------------------------------------------
+
+
+def test_csv(db, clock):
+    store = make_store(db, clock, sensors={"T0": SensorConfig(name="Left syringe")})
+    store.record(report(T0=(21.25, 37.0), P=(20.0, None)))
+    clock.advance(2.5)
+    store.record(report(T0=(22.0, 37.0)))
+
+    assert store.csv(store.logged(start=0, end=clock.now)).splitlines() == [
+        "timestamp,sensor,name,actual,target",
+        "2023-11-14T22:13:20.000+00:00,T0,Left syringe,21.25,37",
+        "2023-11-14T22:13:20.000+00:00,P,P,20,",
+        "2023-11-14T22:13:22.500+00:00,T0,Left syringe,22,37",
     ]

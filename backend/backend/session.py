@@ -39,6 +39,7 @@ from backend.schemas import (
 )
 from backend.serial_manager import SerialError, SerialManager
 from backend.slicer import PrintSettings, slice_model
+from backend.temperature import TargetError, TemperatureStore
 
 # Where uploaded models are written for the slicer
 DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
@@ -85,11 +86,13 @@ class PrinterSession:
         worker: QueueWorker,
         history: PrintHistory,
         publish: Callable[[dict[str, Any]], None],
+        temperature: TemperatureStore,
     ):
         self.config = config
         self.serial = serial
         self.worker = worker
         self.history = history
+        self.temperature = temperature
         self._bus_publish = publish
         self.loaded: LoadedPrint | None = None
         # The G92 zero was set since the printer was last (re)connected
@@ -251,6 +254,22 @@ class PrinterSession:
             self.worker.invalidate_checkpoint(reason)
         self.worker.manual_command()
         return await self.serial.send(line)
+
+    async def set_temperature_target(self, sensor: str, target: float) -> str:
+        """Set a heater's target (0: off); returns the command sent.
+
+        Allowed while printing, unlike other manual commands: it moves
+        nothing, and M104/M140/M141 return at once (M109/M190, which wait
+        for the temperature, are never sent). It goes out between two print
+        lines.
+        """
+        try:
+            command = self.temperature.check_target(sensor, target)
+        except TargetError as exc:
+            raise NotReady(str(exc)) from exc
+        self._require_connection()
+        await self.serial.send(command)
+        return command
 
     def serial_log(self, limit: int) -> list[dict[str, Any]]:
         entries = self.serial.log_buffer

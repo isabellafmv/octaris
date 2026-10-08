@@ -8,7 +8,8 @@ and checksums (asking for a resend like Marlin does), plans moves into a
 buffer of `planner_depth` moves that take distance / feedrate to run, sends
 "echo:busy: processing" while a command is blocked, reports temperatures
 (M105, and automatically after M155), and answers M114 and M115 in Marlin's
-format.
+format. Its heaters (hotends T or T0, T1..., bed B, chamber C) take targets
+from M104/M109, M140/M190 and M141 and move towards them over time.
 
 M410 is handled like Marlin's EMERGENCY_PARSER does: motion stops the moment
 it arrives, the planned moves are dropped, and the position is wherever the
@@ -47,6 +48,10 @@ FIRMWARE = (
 )
 # Heaters move towards their target at this rate (°C per second)
 HEATING_RATE = 2.0
+# Ambient temperature per heater, which it returns to when off
+DEFAULT_SENSORS = {"T": 21.3, "B": 20.1}
+# Dev mode: two syringes, the bed and the chamber
+DEV_SENSORS = {"T0": 21.3, "T1": 21.1, "B": 20.1, "C": 22.0}
 
 _NUMBERED = re.compile(r"^N(\d+)\s+(.*)\*(\d+)$")
 
@@ -66,7 +71,7 @@ def open_virtual() -> VirtualPrinter:
     real time (default 1).
     """
     speed = float(os.environ.get("OCTARIS_VIRTUAL_PRINTER_SPEED", "1"))
-    return VirtualPrinter(**{"speed": speed, "ok_delay_s": 0.002, **DEV_OPTIONS})
+    return VirtualPrinter(**{"speed": speed, "ok_delay_s": 0.002, "sensors": DEV_SENSORS, **DEV_OPTIONS})
 
 
 # Overrides for the printer open_virtual() makes (the tests use this)
@@ -137,6 +142,7 @@ class VirtualPrinter:
         busy_interval_s: float | None = 2.0,
         autoreport: bool = True,
         report_scale: float = 1.0,
+        sensors: dict[str, float] | None = None,
     ):
         self.is_open = True
         # How many moves the planner buffers; a G0/G1 arriving when it's full
@@ -162,9 +168,10 @@ class VirtualPrinter:
         self.relative = False
         self.feed = 1000.0  # mm/min
         self.steps_per_mm = {axis: 80.0 for axis in AXES}
-        # (actual, target) per heater; a target of 0 is off.
-        self.temperatures = {"T": (21.3, 0.0), "B": (20.1, 0.0)}
-        self._ambient = {key: actual for key, (actual, _) in self.temperatures.items()}
+        # (actual, target) per heater, starting at ambient; a target of 0 is
+        # off. No sensors: nothing is reported at all.
+        self._ambient = dict(DEFAULT_SENSORS if sensors is None else sensors)
+        self.temperatures = {key: (actual, 0.0) for key, actual in self._ambient.items()}
 
         # Logical minus machine position per axis, set by G92
         self._offset = {axis: 0.0 for axis in AXES}
@@ -268,8 +275,24 @@ class VirtualPrinter:
             return len(self._moves)
 
     def temperature_report(self) -> str:
-        parts = [f"{key}:{actual:.2f} /{target:.2f}" for key, (actual, target) in self.temperatures.items()]
-        return " ".join(parts) + " @:0 B@:0"
+        """Marlin's format; with several tools, "T:" first repeats the active one (T0)."""
+        temperatures = dict(self.temperatures)
+        if "T" not in temperatures and "T0" in temperatures:
+            temperatures = {"T": temperatures["T0"], **temperatures}
+        parts = [f"{key}:{actual:.2f} /{target:.2f}" for key, (actual, target) in temperatures.items()]
+        return " ".join(parts) + " @:0 B@:0" if parts else ""
+
+    def _heater(self, code: str, params: dict[str, float]) -> str | None:
+        """The heater an M104/M109/M140/M190/M141 is for, if the printer has it."""
+        if code in ("M140", "M190"):
+            key = "B"
+        elif code == "M141":
+            key = "C"
+        elif "T" in params:
+            key = f"T{int(params['T'])}"
+        else:
+            key = "T" if "T" in self.temperatures else "T0"  # the active tool
+        return key if key in self.temperatures else None
 
     # --- receiving ------------------------------------------------------------------
 
@@ -313,7 +336,8 @@ class VirtualPrinter:
                 self.temperatures[key] = (actual, target)
         if self._report_every and now >= self._next_report:
             self._next_report = now + self._report_every
-            self._out.put(self.temperature_report())
+            if self.temperatures:
+                self._out.put(self.temperature_report())
 
     def _wait(self, done: Callable[[], bool]) -> None:
         """Block the command, like Marlin: busy messages and reports go on."""
@@ -390,15 +414,16 @@ class VirtualPrinter:
             for axis in AXES:
                 if axis in params:
                     self.steps_per_mm[axis] = params[axis]
-        elif code in ("M104", "M109", "M140", "M190"):
-            key = "B" if code in ("M140", "M190") else "T"
-            actual, _ = self.temperatures[key]
-            target = params.get("S", 0.0)
-            self.temperatures[key] = (actual, target)
-            if code in ("M109", "M190") and target:
-                self._wait(lambda: abs(self.temperatures[key][0] - target) < 1)
+        elif code in ("M104", "M109", "M140", "M190", "M141"):
+            key = self._heater(code, params)
+            if key is not None:
+                actual, _ = self.temperatures[key]
+                target = params.get("S", 0.0)
+                self.temperatures[key] = (actual, target)
+                if code in ("M109", "M190") and target:
+                    self._wait(lambda: abs(self.temperatures[key][0] - target) < 1)
         elif code == "M105":
-            return ["ok " + self.temperature_report()]
+            return [f"ok {self.temperature_report()}".rstrip()]
         elif code == "M110":
             self._last_n = int(params.get("N", 0))
         elif code == "M112":
