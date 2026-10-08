@@ -29,6 +29,7 @@ from backend.routers.ws import router as ws_router
 from backend.schemas import ErrorResponse, HealthResponse, WsEvent
 from backend.serial_manager import SerialError, SerialManager, SerialTimeout
 from backend.session import Conflict, NotReady, PrinterSession
+from backend.temperature import TemperatureStore
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,11 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
         syringe_travel_mm=config.syringe_travel_mm,
     )
     session = PrinterSession(config, serial_manager, queue_worker, history, event_bus.publish)
+    temperature = TemperatureStore(db, config.temperature, session_id=lambda: history.session_id)
+    temperature.purge_expired()
     event_bus.listen(session.on_event)
     event_bus.listen(history.on_event)
+    event_bus.listen(temperature.on_event)
 
     app.state.config = config
     app.state.db = db
@@ -59,6 +63,7 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
     app.state.serial_manager = serial_manager
     app.state.queue_worker = queue_worker
     app.state.session = session
+    app.state.temperature = temperature
 
 
 @asynccontextmanager
@@ -73,6 +78,7 @@ async def lifespan(app: FastAPI):
     yield
     if app.state.serial_manager.is_connected:
         await app.state.serial_manager.disconnect()
+    app.state.temperature.flush()
     app.state.db.close()
 
 

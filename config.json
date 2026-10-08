@@ -8,5 +8,15 @@
     "z": { "min": 0, "max": 60 }
   },
   "syringe_travel_mm": 40,
-  "nozzle_offset_measured": false
+  "nozzle_offset_measured": false,
+  "temperature": {
+    "sensors": {
+      "T": { "name": "Syringe", "min": 4, "max": 60 },
+      "T0": { "name": "Left syringe", "min": 4, "max": 60 },
+      "T1": { "name": "Right syringe", "min": 4, "max": 60 },
+      "B": { "name": "Print bed", "min": 4, "max": 60 },
+      "C": { "name": "Chamber", "min": 4, "max": 45 }
+    },
+    "retention_days": 30
+  }
 }

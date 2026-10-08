@@ -41,6 +41,19 @@ CREATE TABLE IF NOT EXISTS extrusion_events (
     extrusion_rate INTEGER NOT NULL,
     lines_sent INTEGER NOT NULL
 );
+
+-- One row per sensor per temperature report. timestamp is Unix seconds
+-- (UTC): compact, and range queries and charts need numbers anyway.
+CREATE TABLE IF NOT EXISTS temperature_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    sensor TEXT NOT NULL,
+    actual REAL NOT NULL,
+    target REAL,
+    session_id INTEGER REFERENCES sessions(id)
+);
+CREATE INDEX IF NOT EXISTS temperature_readings_timestamp ON temperature_readings (timestamp);
+CREATE INDEX IF NOT EXISTS temperature_readings_session ON temperature_readings (session_id);
 """
 
 
@@ -183,3 +196,50 @@ def list_sessions(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, A
     finally:
         conn.row_factory = conn_factory
     return sessions
+
+
+# (timestamp, sensor, actual, target, session_id)
+TemperatureRow = tuple[float, str, float, float | None, int | None]
+
+
+def insert_temperature_readings(conn: sqlite3.Connection, rows: list[TemperatureRow]) -> None:
+    conn.executemany(
+        "INSERT INTO temperature_readings (timestamp, sensor, actual, target, session_id) "
+        "VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def delete_temperature_readings_before(conn: sqlite3.Connection, timestamp: float) -> int:
+    """Delete readings older than `timestamp`; returns how many."""
+    cursor = conn.execute("DELETE FROM temperature_readings WHERE timestamp < ?", (timestamp,))
+    conn.commit()
+    return cursor.rowcount
+
+
+def temperature_readings(
+    conn: sqlite3.Connection,
+    *,
+    session_id: int | None = None,
+    start: float | None = None,
+    end: float | None = None,
+) -> list[TemperatureRow]:
+    """Readings of one print session, or between two times, oldest first."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(session_id)
+    if start is not None:
+        clauses.append("timestamp >= ?")
+        params.append(start)
+    if end is not None:
+        clauses.append("timestamp <= ?")
+        params.append(end)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return conn.execute(
+        "SELECT timestamp, sensor, actual, target, session_id FROM temperature_readings "
+        f"{where} ORDER BY timestamp, id",
+        params,
+    ).fetchall()

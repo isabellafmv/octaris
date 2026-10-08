@@ -46,6 +46,39 @@ class BedLimits(BaseModel):
     z: AxisRange = AxisRange(min=0.0, max=60.0)
 
 
+class SensorConfig(BaseModel):
+    """A readable name for a temperature sensor, and the targets it accepts."""
+
+    name: str
+    min: float = 0.0
+    max: float = 120.0
+
+    @model_validator(mode="after")
+    def _check_order(self) -> SensorConfig:
+        if self.min >= self.max:
+            raise ValueError(f"min ({self.min}) must be below max ({self.max})")
+        return self
+
+
+class TemperatureConfig(BaseModel):
+    # By the key the printer reports ("T0", "B", ...). A sensor not listed
+    # here shows under its raw key with SensorConfig's default range.
+    sensors: dict[str, SensorConfig] = {}
+    # Readings older than this are deleted from the database at startup
+    retention_days: float = 30.0
+    # A sensor counts as at its target within ± this (status, and waiting
+    # for temperatures before a print)
+    target_band_c: float = 1.0
+    # How long every target has to hold before a waiting print starts
+    settle_s: float = 30.0
+    # Warn while printing when a sensor is further than this from its
+    # target for longer than deviation_s
+    deviation_c: float = 3.0
+    deviation_s: float = 60.0
+    # Warn when connected and no temperature report came for this long
+    report_timeout_s: float = 15.0
+
+
 class Config(BaseModel):
     target: Literal["macos", "rpi"] = "macos"
     touch_mode: bool = False
@@ -59,6 +92,7 @@ class Config(BaseModel):
     # NOZZLE_OFFSET_X in gcode_processor.py is a placeholder until measured.
     # Right-nozzle and dual prints are refused until this is set to true.
     nozzle_offset_measured: bool = False
+    temperature: TemperatureConfig = TemperatureConfig()
 
 
 def load_config(path: Path | None = None) -> Config:
