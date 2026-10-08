@@ -22,6 +22,10 @@ from backend.gcode_processor import (
 
 # How far (per axis) the reported position may be from a line's path
 POSITION_TOLERANCE_MM = 0.05
+# How far an axis may be from where a relative print needs it before it's
+# moved back: under M114's 0.01 mm resolution, since in a relative print
+# any offset carries on to every later move.
+MOVED_TOLERANCE_MM = 0.005
 
 _M114_AXIS = re.compile(r"\b([XYZABC]):\s*(-?\d+(?:\.\d+)?)")
 
@@ -136,6 +140,29 @@ def return_moves(target: Mapping[str, float], lift_axes: Sequence[str]) -> list[
     commands.append(f"G1 X{fmt(target['X'])} Y{fmt(target['Y'])} F{TRAVEL_FEED}")
     if lift_axes:
         lower = " ".join(f"{axis}{fmt(target[axis])}" for axis in lift_axes)
+        commands.append(f"G1 {lower} F{TRAVEL_FEED}")
+    return commands
+
+
+def moved(actual: Mapping[str, float], target: Mapping[str, float]) -> bool:
+    """Whether any axis of `target` is away from it in `actual` (M114)."""
+    return any(abs(actual[ax] - value) > MOVED_TOLERANCE_MM for ax, value in target.items() if ax in actual)
+
+
+def travel_moves(actual: Mapping[str, float], target: Mapping[str, float]) -> list[str]:
+    """Relative (G91) moves from `actual` to `target` on the stage: lift Z/A
+    clear of the print, travel X/Y, lower onto the target. Only the axes of
+    `target` move, and the printer is left in G91."""
+    lift_axes = [ax for ax in ("Z", "A") if ax in target and ax in actual]
+    commands = ["G91"]
+    if lift_axes:
+        lift = " ".join(f"{ax}{fmt(CLEARANCE_Z_MM)}" for ax in lift_axes)
+        commands.append(f"G1 {lift} F{TRAVEL_FEED}")
+    xy = [f"{ax}{d}" for ax in ("X", "Y") if ax in target and (d := fmt(target[ax] - actual[ax])) != "0"]
+    if xy:
+        commands.append(f"G1 {' '.join(xy)} F{TRAVEL_FEED}")
+    if lift_axes:
+        lower = " ".join(f"{ax}{fmt(target[ax] - actual[ax] - CLEARANCE_Z_MM)}" for ax in lift_axes)
         commands.append(f"G1 {lower} F{TRAVEL_FEED}")
     return commands
 

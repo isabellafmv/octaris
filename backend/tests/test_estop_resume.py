@@ -23,8 +23,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 RAW_SAMPLE = (FIXTURES / "raw_sample.gcode").read_text()
 
 # Where the sample print ends up, stopped and resumed or not: the footer
-# raises Z by 5 and returns to X0 Y0; B ends 0.2 above its last print move.
-SAMPLE_END = {"X": 0.0, "Y": 0.0, "Z": 5.5, "A": 0.0, "B": -3.8, "C": 0.0}
+# raises Z by 5 and returns to X0 Y0; B ends 0.2 above its last print move
+# (8 moves of B-0.5, between the pressurize and the depressurize).
+SAMPLE_END = {"X": 0.0, "Y": 0.0, "Z": 5.5, "A": 0.0, "B": -4.0, "C": 0.0}
+# The first extrusion move: X10 Y10 B-0.2 → X20 Y10 B-0.7
+FIRST_MOVE = "G1 F200 X10 B-0.5"
 
 
 def make_printer() -> VirtualPrinter:
@@ -115,36 +118,29 @@ def test_state_simulation_on_fixture():
         idx = [i for i, line in enumerate(lines) if line.startswith(text)][occurrence]
         return result.state_before[idx], result.state_after[idx]
 
-    # Nothing is known before the program sets it.
-    first = result.state_before[0]
-    assert all(v is None for v in first.pos.values())
-    assert first.relative is False
+    # Planned from the zero point the print starts at, relative throughout.
+    assert result.state_before[0].pos == {"X": 0, "Y": 0, "Z": 0, "A": None, "B": 0, "C": 0}
+    assert all(state.relative for state in result.state_after)
 
-    before, state = after("G1 B-0.2 F400")  # pressurize
+    _, state = after("G1 B-0.2 F400")  # pressurize
     assert state.pos["B"] == -0.2 and state.feed == 400
-    _, state = after("G92 B0")
-    assert state.pos["B"] == 0 and state.pos["X"] is None
 
-    before, state = after("G1 F200 X20 Y10 B-0.5")
-    assert before.pos == {"X": 10, "Y": 10, "Z": 0.3, "A": None, "B": 0, "C": None}
-    assert state.pos == {"X": 20, "Y": 10, "Z": 0.3, "A": None, "B": -0.5, "C": None}
+    before, state = after(FIRST_MOVE)
+    assert before.pos == {"X": 10, "Y": 10, "Z": 0.3, "A": None, "B": -0.2, "C": 0}
+    assert state.pos == pytest.approx({"X": 20, "Y": 10, "Z": 0.3, "A": None, "B": -0.7, "C": 0})
     assert state.feed == 200
 
-    # Layer change: relative depressurize inside G91 ... G90.
-    _, state = after("G91")
-    assert state.relative is True
+    # Layer change: depressurize, up 0.2, repressurize.
     before, state = after("G1 B0.2 F400")
-    assert before.pos["B"] == -2 and state.pos["B"] == pytest.approx(-1.8)
-    assert state.relative is True
-    _, state = after("G0 F400 X10 Y10 Z0.5")
-    assert state.relative is False and state.pos["Z"] == 0.5
+    assert before.pos["B"] == pytest.approx(-2.2) and state.pos["B"] == pytest.approx(-2.0)
+    _, state = after("G0 F400 Z0.2")
+    assert state.pos["Z"] == pytest.approx(0.5)
 
-    # Footer: relative Z raise, then absolute return to origin.
+    # Footer: Z raise, then the way back to the origin.
     _, state = after("G1 Z5 F300")
     assert state.pos["Z"] == pytest.approx(5.5)
     final = result.state_after[-1]
-    assert final.pos["X"] == 0 and final.pos["Y"] == 0
-    assert final.pos["B"] == pytest.approx(-3.8)
+    assert final.pos == pytest.approx({**SAMPLE_END, "A": None})
 
 
 def test_parse_m114():
@@ -211,28 +207,24 @@ def test_locate_line_rejects_point_off_every_path():
 
 
 async def test_estop_locates_line_and_retracts(client, printer, events):
-    result = await estop_at(client, printer, "X20 Y10 B-0.5")
+    result = await estop_at(client, printer, FIRST_MOVE)
 
     worker = app.state.queue_worker
-    k = worker_index("G1 F200 X20 Y10 B-0.5")
-    # As actually sent: unlike the planned path, A and C are known here too —
-    # the print-start M114 seed gives every axis a known value from line one.
-    expected_after = MachineState(
-        pos={"X": 20.0, "Y": 10.0, "Z": 0.3, "A": 0.0, "B": -0.5, "C": 0.0},
-        feed=200.0,
-    )
+    k = worker_index(FIRST_MOVE)
+    # As actually sent: unlike the planned path, A is known here too — the
+    # print-start M114 seed gives every axis a known value from line one.
     assert result == {"status": "stopped", "resumable": True, "reason": None}
-    assert worker.checkpoint == Checkpoint(
-        line=k,
-        position={"X": 15, "Y": 10, "Z": 0.3, "A": 0, "B": -0.25, "C": 0},
-        after=expected_after,
-        retract={"B": 0.2},
-    )
+    checkpoint = worker.checkpoint
+    assert checkpoint.line == k
+    assert checkpoint.position == {"X": 15, "Y": 10, "Z": 0.3, "A": 0, "B": -0.45, "C": 0}
+    assert checkpoint.after.pos == pytest.approx({"X": 20, "Y": 10, "Z": 0.3, "A": 0, "B": -0.7, "C": 0})
+    assert checkpoint.after.feed == 200 and checkpoint.after.relative
+    assert checkpoint.retract == {"B": 0.2}
     # M410 went out while line k+2 was in flight, blocked on the full
     # planner; the printer dropped it, and the position is read after it.
-    assert printer.executed[-7] == "G1 F200 X10 Y20 B-1.5"
+    assert printer.executed[-7] == "G1 F200 X-10 B-0.5"
     assert after(printer, "M410") == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
-    assert printer.position["B"] == pytest.approx(-0.05)  # retracted
+    assert printer.position["B"] == pytest.approx(-0.25)  # retracted
     assert {"type": "stop", "resumable": True, "reason": None, "line": k} in events
 
     [session] = (await client.get("/history")).json()["sessions"]
@@ -242,14 +234,14 @@ async def test_estop_locates_line_and_retracts(client, printer, events):
 
 async def test_estop_without_retract(client, printer):
     app.state.queue_worker._retract_on_estop = False
-    await estop_at(client, printer, "X20 Y10 B-0.5")
+    await estop_at(client, printer, FIRST_MOVE)
 
     assert after(printer, "M410") == ["M400", "M114"]
     assert app.state.queue_worker.checkpoint.retract == {}
 
 
 async def test_estop_off_path_is_not_resumable(client, printer, events):
-    printer.hold_at("X20 Y10 B-0.5", 0.5)
+    printer.hold_at(FIRST_MOVE, 0.5)
     await upload_sample(client)
     assert (await client.post("/print/start")).status_code == 200
     await wait_for(printer.held.is_set)
@@ -259,7 +251,7 @@ async def test_estop_off_path_is_not_resumable(client, printer, events):
     result = resp.json()
 
     assert result["resumable"] is False
-    assert "(X50 Y50 Z0.3 A0 B-0.25 C0) is not on any recently sent line" in result["reason"]
+    assert "(X50 Y50 Z0.3 A0 B-0.45 C0) is not on any recently sent line" in result["reason"]
     assert app.state.queue_worker.checkpoint is None
     # Nothing is retracted for a stop that can't be resumed.
     assert after(printer, "M410") == ["M400", "M114"]
@@ -290,50 +282,52 @@ async def test_resume_without_stop_is_409(client, printer):
 async def test_estop_at_flow_override_is_resumable_at_scaled_position(client, printer):
     await upload_sample(client)
     assert (await client.post("/extrusion", json={"rate": 80})).status_code == 200
-    # Line k is planned as B-0.5 and sent as B-0.4 at 80% flow.
-    result = await estop_at(client, printer, "X20 Y10 B-0.4")
+    # Line k is planned as B-0.5 and sent as B-0.4 at 80% flow, after the
+    # pressurize, planned as B-0.2 and sent as B-0.16.
+    result = await estop_at(client, printer, "X10 B-0.4")
     assert result == {"status": "stopped", "resumable": True, "reason": None}
 
     worker = app.state.queue_worker
-    k = worker_index("G1 F200 X20 Y10 B-0.5")
+    k = worker_index(FIRST_MOVE)
     assert worker.checkpoint.line == k
-    assert worker.checkpoint.position["B"] == pytest.approx(-0.2)  # midway along the scaled move
-    assert worker.checkpoint.after.pos["B"] == pytest.approx(-0.4)  # scaled, not -0.5
+    assert worker.checkpoint.position["B"] == pytest.approx(-0.36)  # midway along the scaled move
+    assert worker.checkpoint.after.pos["B"] == pytest.approx(-0.56)  # scaled, not -0.7
 
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
 
     # The resume commands put B at the scaled value, not the planned one.
     resumed = after(printer, "M410")[5:]
-    assert resumed[5] == "G1 B-0.2 F400"  # undo retract, at the scaled checkpoint position
-    assert resumed[6] == "G1 X20 Y10 Z0.3 A0 B-0.4 C0 F200"  # finish the line, scaled target
+    assert resumed[5] == "G1 B-0.36 F400"  # undo retract, at the scaled checkpoint position
+    assert resumed[6] == "G1 X20 Y10 Z0.3 A0 B-0.56 C0 F200"  # finish the line, scaled target
+    assert resumed[8] == "G1 F200 Y10 B-0.4"  # the next line, still scaled
 
 
 async def test_flow_change_mid_recent_window_still_locates(client, printer):
     # Lines up to k+1 go out at 100% flow, line k+2 at 80%, and the stop
     # lands half way along line k+2. Each recorded segment must reflect the
     # flow active when *it* was sent: scaling them all by the rate at stop
-    # time would put line k+2's start at B-0.8 instead of B-1, and the stop
-    # (at B-1.1) off its path.
+    # time would put line k+2's start at B-0.96 instead of B-1.2, and the
+    # stop (at B-1.4) off its path.
     printer.planner_depth = 1  # line k+1 in flight while held on line k
-    printer.hold_at("X20 Y10 B-0.5")
+    printer.hold_at(FIRST_MOVE)
     await upload_sample(client)
     worker = app.state.queue_worker
 
     assert (await client.post("/print/start")).status_code == 200
     await wait_for(printer.held.is_set)
     assert (await client.post("/extrusion", json={"rate": 80})).status_code == 200
-    printer.hold_at("X10 Y20 B-1.2", 0.5)
+    printer.hold_at("X-10 B-0.4", 0.5)
     printer.release()
     await wait_for(printer.held.is_set)
 
     resp = await client.post("/print/stop")
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
 
-    k = worker_index("G1 F200 X10 Y20 B-1.5")
+    k = worker_index("G1 F200 X-10 B-0.5")
     assert worker.checkpoint.line == k
-    assert worker.checkpoint.position["B"] == pytest.approx(-1.1)
-    assert worker.checkpoint.after.pos["B"] == pytest.approx(-1.2)
+    assert worker.checkpoint.position["B"] == pytest.approx(-1.4)
+    assert worker.checkpoint.after.pos["B"] == pytest.approx(-1.6)
 
 
 G91_ONLY = [
@@ -375,9 +369,9 @@ async def test_g91_only_file_resumable_after_seed(client, printer):
 
 
 async def test_resume_command_sequence(client, printer):
-    await estop_at(client, printer, "X20 Y10 B-0.5")
+    await estop_at(client, printer, FIRST_MOVE)
     worker = app.state.queue_worker
-    k = worker_index("G1 F200 X20 Y10 B-0.5")
+    k = worker_index(FIRST_MOVE)
 
     resp = await client.post("/print/resume")
     assert resp.status_code == 200
@@ -385,18 +379,19 @@ async def test_resume_command_sequence(client, printer):
 
     # Skip M400, M114 and the three retract lines that followed the e-stop.
     resumed = after(printer, "M410")[5:]
-    assert resumed[:8] == [
+    assert resumed[:9] == [
         "G91",
         "G1 Z5 A5 F300",  # lift clear of the print
         "G90",
         "G1 X15 Y10 F300",  # back over the stop point
         "G1 Z0.3 A0 F300",  # down to it
-        "G1 B-0.25 F400",  # undo the plunger retract
-        "G1 X20 Y10 Z0.3 A0 B-0.5 C0 F200",  # finish the stopped line, all axes known
-        "G1 F200 X20 Y20 B-1",  # and carry on after it
+        "G1 B-0.45 F400",  # undo the plunger retract
+        "G1 X20 Y10 Z0.3 A0 B-0.7 C0 F200",  # finish the stopped line, all axes known
+        "G91",  # the print is relative
+        "G1 F200 Y10 B-0.5",  # and carry on after it
     ]
     # Every line after k is sent exactly once more, in order, then the drain.
-    assert resumed[7:] == [*on_wire(worker._lines[k + 1 :]), "M400"]
+    assert resumed[8:] == [*on_wire(worker._lines[k + 1 :]), "M400"]
     assert worker.lines_sent == worker.lines_total
     # The printer ends where the uninterrupted print would have.
     assert printer.position == pytest.approx(SAMPLE_END)
@@ -406,8 +401,8 @@ async def test_resume_command_sequence(client, printer):
     assert session["resume_line"] is None
 
 
-async def test_resume_inside_relative_block(client, printer):
-    # Stopped during the layer-change depressurize, which runs under G91.
+async def test_resume_after_a_plunger_only_move(client, printer):
+    # Stopped during the layer-change depressurize.
     await estop_at(client, printer, "B0.2 F400")
     worker = app.state.queue_worker
     k = worker_index("G1 B0.2 F400")
@@ -423,10 +418,10 @@ async def test_resume_inside_relative_block(client, printer):
         "G90",
         "G1 X10 Y10 F300",
         "G1 Z0.3 A0 F300",
-        "G1 B-1.9 F400",
-        "G1 X10 Y10 Z0.3 A0 B-1.8 C0 F400",  # the relative line, as an absolute target
-        "G91",  # back into the relative block
-        "G90",  # line k+1
+        "G1 B-2.1 F400",
+        "G1 X10 Y10 Z0.3 A0 B-2 C0 F400",  # the relative line, as an absolute target
+        "G91",  # back to relative
+        "G0 F400 Z0.2",  # line k+1
     ]
     assert resumed[8:] == [*on_wire(worker._lines[k + 1 :]), "M400"]
     assert printer.position == pytest.approx(SAMPLE_END)
@@ -484,7 +479,7 @@ INVALIDATING = {
 
 @pytest.mark.parametrize("action", list(INVALIDATING))
 async def test_checkpoint_invalidated(client, printer, events, action):
-    await estop_at(client, printer, "X20 Y10 B-0.5")
+    await estop_at(client, printer, FIRST_MOVE)
     worker = app.state.queue_worker
     assert worker.resumable
 
@@ -498,7 +493,7 @@ async def test_checkpoint_invalidated(client, printer, events, action):
 
 @pytest.mark.parametrize("axis", ["X", "Y", "Z", "A"])
 async def test_stage_jog_keeps_checkpoint(client, printer, axis):
-    await estop_at(client, printer, "X20 Y10 B-0.5")
+    await estop_at(client, printer, FIRST_MOVE)
 
     resp = await client.post("/jog", json={"axis": axis, "distance": 2})
     assert resp.status_code == 200
@@ -517,7 +512,7 @@ async def test_stop_during_the_last_planned_moves_is_resumable(client, printer):
     # A real planner holds 16 moves: every line can be sent while the printer
     # still has the last ones to run. The print isn't done until they have.
     printer.planner_depth = 16
-    printer.hold_at("X0 Y0 F300", 0.5)  # half way back to the origin, the last line
+    printer.hold_at("X-10 Y-10 F300", 0.5)  # half way back to the origin, the last line
     await upload_sample(client)
     worker = app.state.queue_worker
     assert (await client.post("/print/start")).status_code == 200
@@ -531,7 +526,7 @@ async def test_stop_during_the_last_planned_moves_is_resumable(client, printer):
     resp = await client.post("/print/stop")
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
     assert worker.checkpoint.line == worker.lines_total - 1
-    assert worker.checkpoint.position == pytest.approx({"X": 5, "Y": 5, "Z": 5.5, "A": 0, "B": -3.8, "C": 0})
+    assert worker.checkpoint.position == pytest.approx({"X": 5, "Y": 5, "Z": 5.5, "A": 0, "B": -4, "C": 0})
 
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
@@ -540,7 +535,7 @@ async def test_stop_during_the_last_planned_moves_is_resumable(client, printer):
 
 async def test_completed_once_the_printer_has_finished_moving(client, printer):
     printer.planner_depth = 16
-    printer.hold_at("X0 Y0 F300", 0.5)
+    printer.hold_at("X-10 Y-10 F300", 0.5)
     await upload_sample(client)
     worker = app.state.queue_worker
     assert (await client.post("/print/start")).status_code == 200

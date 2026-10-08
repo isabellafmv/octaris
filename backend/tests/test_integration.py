@@ -132,8 +132,8 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     resp = await client.post("/print/pause")
     assert resp.status_code == 200
     assert worker.status == PrintStatus.PAUSED
-    # Next, stop half way along the first line of layer 2 (planned B-2.5).
-    printer.hold_at("X20 Y10 B-2", 0.5)
+    # Next, stop half way along the first line of layer 2 (planned B-0.5).
+    printer.hold_at("X12 B-0.4", 0.5)
     printer.release()
     await wait_for(lambda: printer.moves_planned == 0)
 
@@ -159,18 +159,18 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
 
     # 8. stop at the hold
     await wait_for(printer.held.is_set)
-    k = worker_index("G1 F200 X20 Y10 B-2.5")
+    k = worker_index("G1 F200 X12 B-0.5")
 
     resp = await client.post("/print/stop")
     assert resp.status_code == 200
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
     assert worker.status == PrintStatus.STOPPED
     assert worker.checkpoint.line == k
-    # As actually sent at 80%: B goes from -1.6 to -2, not -2 to -2.5.
+    # As actually sent at 80%: B goes from -2 to -2.4, not -2.2 to -2.7.
     assert worker.checkpoint.position == pytest.approx(
-        {"X": 15, "Y": 10, "Z": 0.5, "A": 0, "B": -1.8, "C": 0}
+        {"X": 16, "Y": 10, "Z": 0.5, "A": 0, "B": -2.2, "C": 0}
     )
-    assert worker.checkpoint.after.pos["B"] == pytest.approx(-2.0)
+    assert worker.checkpoint.after.pos["B"] == pytest.approx(-2.4)
 
     [session] = (await client.get("/history")).json()["sessions"]
     session1_id = session["id"]
@@ -190,8 +190,8 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     assert worker.lines_sent == worker.lines_total
     await wait_for(lambda: printer.moves_planned == 0)
     # Where the uninterrupted print would have ended at this flow: the
-    # footer's depressurize is scaled too (+0.16 from B-3.2).
-    assert printer.position == pytest.approx({"X": 0, "Y": 0, "Z": 5.5, "A": 0, "B": -3.04, "C": 0})
+    # footer's depressurize is scaled too (+0.16 from B-3.6).
+    assert printer.position == pytest.approx({"X": 0, "Y": 0, "Z": 5.5, "A": 0, "B": -3.44, "C": 0})
 
     [session] = (await client.get("/history")).json()["sessions"]
     assert session["id"] == session1_id  # the same session was reopened
@@ -206,19 +206,21 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     # --- second print, stopped the same way --------------------------------
 
     await upload_sample(client)
-    printer.hold_at("X20 Y20 B-1*", 0.5)
+    printer.hold_at("F200 Y10 B-0.5*", 0.5)
     resp = await client.post("/print/start")
     assert resp.status_code == 200
 
     await wait_for(printer.held.is_set)
-    k2 = worker_index("G1 F200 X20 Y20 B-1")
+    k2 = worker_index("G1 F200 Y10 B-0.5")
 
     resp = await client.post("/print/stop")
     assert resp.status_code == 200
     assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
     assert worker.status == PrintStatus.STOPPED
+    # The stage went back to the zero point first; the plunger carries on
+    # from where the first print left it (B-3.44), pressurized by 0.2.
     assert worker.checkpoint.position == pytest.approx(
-        {"X": 20, "Y": 15, "Z": 0.3, "A": 0, "B": -0.75, "C": 0}
+        {"X": 20, "Y": 15, "Z": 0.3, "A": 0, "B": -4.39, "C": 0}
     )
 
     sessions = (await client.get("/history")).json()["sessions"]
@@ -263,15 +265,16 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     # at the *scaled* B values (flow was still 80% at the stop and stays so
     # for the rest of this print), not the planned, unscaled ones.
     resumed = sent[i_m410_first + 6 :]
-    assert resumed[:8] == [
+    assert resumed[:9] == [
         "G91",
         "G1 Z5 A5 F300",  # lift clear of the print
         "G90",
-        "G1 X15 Y10 F300",  # back over the stop point
+        "G1 X16 Y10 F300",  # back over the stop point
         "G1 Z0.5 A0 F300",  # down to it
-        "G1 B-1.8 F400",  # undo the plunger retract, at the stop position
-        "G1 X20 Y10 Z0.5 A0 B-2 C0 F200",  # finish the stopped line, at its scaled target
-        "G1 F400 X20 Y20 B-2.4",  # and carry on after it, still flow-scaled
+        "G1 B-2.2 F400",  # undo the plunger retract, at the stop position
+        "G1 X22 Y10 Z0.5 A0 B-2.4 C0 F200",  # finish the stopped line, at its scaled target
+        "G91",  # the print is relative
+        "G1 F400 Y12 B-0.4",  # and carry on after it, still flow-scaled
     ]
 
     # The printer itself saw every M410 acked in order, with nothing mixed up:
@@ -279,7 +282,7 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     m114_replies = [
         e["content"]
         for e in entries
-        if e["direction"] == "received" and e["content"].startswith("X:15.00 Y:10.00 Z:0.50")
+        if e["direction"] == "received" and e["content"].startswith("X:16.00 Y:10.00 Z:0.50")
     ]
     assert m114_replies
 
@@ -293,9 +296,9 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     # Print #1: from its first line, through the stop's position read, the
     # resume (appended to the same file) and the footer.
     assert log1[0].endswith("> M84 S0")
-    assert any(line.endswith("> N1 G90") for line in log1)
+    assert any(line.endswith("> N1 G91") for line in log1)
     assert any(line.endswith("> M410") for line in log1)
-    assert any("< X:15.00 Y:10.00 Z:0.50" in line for line in log1)
+    assert any("< X:16.00 Y:10.00 Z:0.50" in line for line in log1)
     assert any(line.endswith("> G1 Z5 A5 F300") for line in log1)  # resume's lift
     assert log1[-1].endswith("< ok")
     # A manual command sent while it was paused is part of its traffic.
@@ -344,7 +347,7 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
 # --- faults on the wire ---------------------------------------------------------
 
 
-SAMPLE_END = {"X": 0.0, "Y": 0.0, "Z": 5.5, "A": 0.0, "B": -3.8, "C": 0.0}
+SAMPLE_END = {"X": 0.0, "Y": 0.0, "Z": 5.5, "A": 0.0, "B": -4.0, "C": 0.0}
 
 
 @pytest.fixture
@@ -361,7 +364,7 @@ async def test_timeout_pauses_print_and_retries_on_resume(client, printer, monke
     worker = app.state.queue_worker
     await upload_sample(client)
 
-    target = "G1 F200 X20 Y10 B-0.5"
+    target = "G1 F200 X10 B-0.5"
     printer.drop_next(target)  # lost on the wire: no reply at all
 
     resp = await client.post("/print/start")
@@ -391,7 +394,7 @@ async def test_timeout_pauses_print_and_retries_on_resume(client, printer, monke
 async def test_corrupted_line_is_resent_mid_print(client, printer):
     worker = app.state.queue_worker
     await upload_sample(client)
-    printer.corrupt_next("X10 Y20 B-1.5")
+    printer.corrupt_next("F200 X-10 B-0.5")
 
     assert (await client.post("/print/start")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
@@ -400,6 +403,6 @@ async def test_corrupted_line_is_resent_mid_print(client, printer):
     assert any(line.startswith("Error:checksum mismatch") for line in received)
     assert any(line.startswith("Resend: ") for line in received)
     # Ran once, in order, and the print ends where it should.
-    assert printer.executed.count("G1 F200 X10 Y20 B-1.5") == 1
+    assert printer.executed.count("G1 F200 X-10 B-0.5") == 1
     await wait_for(lambda: printer.moves_planned == 0)
     assert printer.position == pytest.approx(SAMPLE_END)

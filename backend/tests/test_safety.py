@@ -174,7 +174,7 @@ async def test_serial_error_when_idle_reconnects_without_resending():
 
 
 async def test_connection_lost_mid_print_stops_for_good(client, printer, events):
-    printer.drop_on = "G1 F200 X20 Y20 B-1"
+    printer.drop_on = "G1 F200 Y10 B-0.5"
     assert (await upload_sample(client)).status_code == 200
     events()  # discard upload events
     worker = app.state.queue_worker

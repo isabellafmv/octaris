@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from backend.checkpoint import parse_m114
+from backend.checkpoint import moved, parse_m114, travel_moves
 from backend.config import Config
 from backend.gcode_processor import (
     NOZZLE_OFFSET_X,
@@ -302,7 +302,7 @@ class PrinterSession:
         model_path.write_bytes(content)
         try:
             gcode = await slice_model(model_path, mode, **settings)
-            check_path(self.config.bed, gcode.lines)
+            check_path(self.config.bed, gcode.lines, start_state(gcode.start_position))
         except Exception:
             self._publish(StatusEvent(value="idle"))
             raise
@@ -315,7 +315,9 @@ class PrinterSession:
         Raises GcodeValidationError or LimitError if it can't be printed.
         """
         gcode = process_gcode(raw, mode)
-        check_path(self.config.bed, gcode.lines)
+        # A converted print is checked from the zero point it starts at; a
+        # lab file starts wherever the head is, so only at print start.
+        check_path(self.config.bed, gcode.lines, start_state(gcode.start_position))
         self._load(LoadedPrint(gcode, filename, mode, "gcode"))
         return gcode
 
@@ -351,8 +353,17 @@ class PrinterSession:
         if position is None:
             raise SerialError(f"Couldn't read the printer's position (M114 replied {reply!r})")
 
-        # Checked before load_gcode, which would drop a resumable checkpoint.
+        # A converted print's moves are relative to its zero point: if the
+        # head isn't there, it travels back first.
         gcode = loaded.gcode
+        travel: list[str] = []
+        if gcode.start_position is not None:
+            if moved(position, gcode.start_position):
+                travel = travel_moves(position, gcode.start_position)
+                check_path(self.config.bed, travel, start_state(position))
+            position = {**position, **gcode.start_position}
+
+        # Checked before load_gcode, which would drop a resumable checkpoint.
         check_path(self.config.bed, gcode.lines, start_state(position))
         # As it will be sent: the flow override scales every B/C value.
         lines = [scale_flow(line, worker.flow_rate / 100.0) for line in gcode.lines]
@@ -368,6 +379,8 @@ class PrinterSession:
             extrusion_axes=gcode.extrusion_axes,
             pressurize_mm=gcode.pressurize_mm,
         )
+        if travel:
+            await self.serial.send_lines(travel)
         self.history.start(
             filename=loaded.filename,
             syringe_config=loaded.mode,
