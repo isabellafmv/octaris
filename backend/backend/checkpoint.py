@@ -193,35 +193,51 @@ def build_resume_commands(checkpoint: Checkpoint, actual: Mapping[str, float]) -
     return commands
 
 
-def build_return_commands(actual: Mapping[str, float], target: MachineState) -> list[str]:
-    """Commands that undo manual commands sent while a print was paused.
+def build_return_commands(
+    actual: Mapping[str, float],
+    paused_at: Mapping[str, float] | None,
+    target: MachineState,
+    restore_modes: bool = True,
+) -> list[str]:
+    """Commands that take a paused print back to where it was paused.
 
-    `actual` is the printer's position (M114) and `target` the as-sent state
-    where the print left off. The stage goes back to it if it was moved; a
-    plunger moved by hand stays where it is (priming, say) and is re-aligned
-    with G92, so the print's coordinates carry on from there. The print's
-    feedrate and distance mode are restored either way, since a manual
-    command may have changed them without moving anything.
+    `actual` is the printer's position now (M114), `paused_at` its position
+    when the print was paused (M114, or None if it couldn't be read) and
+    `target` the as-sent state where the print left off. If the stage was
+    moved (a jog, say), it travels back to `paused_at` — lift, X/Y, lower,
+    as relative moves — or to `target` without one. A plunger moved by hand
+    stays where it is (priming, say) and is re-aligned with G92, so the
+    print's coordinates carry on from there. With `restore_modes` (manual
+    commands were sent, which may change them without moving anything), or
+    after any return move, the print's feedrate and distance mode are
+    restored. Returns [] if there is nothing to do.
 
-    Raises ValueError if the target position isn't known on the stage axes.
+    Raises ValueError if neither says where the stage should be.
     """
-    stage = [axis for axis in ("X", "Y", "Z", "A") if axis in actual]
-    unknown = [axis for axis in stage if target.pos[axis] is None]
-    if unknown or "X" not in stage or "Y" not in stage:
-        missing = ", ".join(unknown) or "X/Y"
-        raise ValueError(f"where the print left off isn't known ({missing})")
     goal = {axis: value for axis in AXES if (value := target.pos[axis]) is not None}
+    if paused_at is None:
+        stage = [axis for axis in ("X", "Y", "Z", "A") if axis in actual]
+        unknown = [axis for axis in stage if axis not in goal]
+        if unknown or "X" not in stage or "Y" not in stage:
+            missing = ", ".join(unknown) or "X/Y"
+            raise ValueError(f"where the print left off isn't known ({missing})")
+        paused_at = goal
 
     commands: list[str] = []
-    stage_goal = {axis: goal[axis] for axis in stage}
+    stage_goal = {axis: paused_at[axis] for axis in ("X", "Y", "Z", "A") if axis in paused_at}
     if moved(actual, stage_goal):
         commands += travel_moves(actual, stage_goal)
-    plungers = [
-        axis for axis in ("B", "C") if axis in actual and axis in goal and moved(actual, {axis: goal[axis]})
-    ]
+    # Compared with where they were at the pause; re-aligned with the exact
+    # as-sent coordinates, which M114 rounds.
+    plungers = {
+        axis: goal.get(axis, paused_at[axis])
+        for axis in ("B", "C")
+        if axis in actual and axis in paused_at and moved(actual, {axis: paused_at[axis]})
+    }
     if plungers:
-        commands.append("G92 " + " ".join(f"{axis}{fmt(goal[axis])}" for axis in plungers))
-    if target.feed is not None:
-        commands.append(f"G1 F{fmt(target.feed)}")
-    commands.append("G91" if target.relative else "G90")
+        commands.append("G92 " + " ".join(f"{axis}{fmt(value)}" for axis, value in plungers.items()))
+    if restore_modes or commands:
+        if target.feed is not None:
+            commands.append(f"G1 F{fmt(target.feed)}")
+        commands.append("G91" if target.relative else "G90")
     return commands

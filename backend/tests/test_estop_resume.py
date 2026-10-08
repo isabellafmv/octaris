@@ -666,7 +666,10 @@ async def test_resume_without_manual_commands_sends_nothing_extra(client, printe
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
 
-    assert printer.executed.count("M114") == 1  # only the one at the start
+    # The position is read at the start, at the pause and on resume, which
+    # finds the head where it was paused: nothing else goes out.
+    extra = [line for line in printer.executed if line not in RELATIVE_MOVES]
+    assert extra == ["M114", "M84 S0", "M110 N0", "M114", "M400", "M114", "M400"]
     assert printer.executed[-1] == "M400"  # the drain before COMPLETED
     assert printer.position == pytest.approx(RELATIVE_END)
 
@@ -675,7 +678,10 @@ async def test_unknown_return_position_pauses_again(client, printer, events):
     await pause_relative_print(client, printer)
     worker = app.state.queue_worker
     tracked = worker._tracker.state
-    # As if the print's starting position couldn't be read.
+    # As if neither the print's starting position nor the position at the
+    # pause could be read.
+    await worker._pause_reading
+    worker._paused_at = None
     worker._tracker.state = MachineState(pos={**tracked.pos, "X": None}, relative=True)
     assert (await client.post("/jog", json={"axis": "X", "distance": 3})).status_code == 200
     sent_before = len(printer.executed)

@@ -338,3 +338,86 @@ async def test_flow_override_changed_mid_print(client, printer):
     # more side, layer change (+0.2 −0.2), four sides, +0.2 depressurize.
     expected_b = -0.2 - 3 * 0.5 - 0.8 * (0.5 + 4 * 0.5 - 0.2)
     assert printer.position == pytest.approx({**SAMPLE_END, "B": expected_b})
+
+
+# --- pause ------------------------------------------------------------------------------
+
+
+async def pause_after_first_layer(client, printer: VirtualPrinter) -> dict[str, float]:
+    """Start the sample and pause it with the first layer done; returns where
+    it paused (X10 Y10 Z0.3, as the layer's last move ends), once idle."""
+    worker = app.state.queue_worker
+    printer.hold_at("G1 F200 Y-10 B-0.5")  # the layer's last side
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(printer.held.is_set)
+    assert (await client.post("/print/pause")).status_code == 200
+    printer.release()
+    await wait_for(lambda: worker._paused_at is not None and printer.moves_planned == 0)
+    return worker._paused_at
+
+
+async def test_jog_while_paused_stays_g91_and_resume_returns_to_the_pause_point(client, printer):
+    await upload(client)
+    worker = app.state.queue_worker
+    paused_at = await pause_after_first_layer(client, printer)
+    # Recorded with M114 at the pause: after the planned moves (the next line
+    # was in flight), before anything else
+    assert paused_at == printer.position
+    next_line = worker._lines[worker.lines_sent].split(";")[0].strip()
+    feed = worker._tracker.state.feed
+
+    await jog(client, "Z", 4)
+    await jog(client, "X", 6)
+    await jog(client, "Y", -2.5)
+    assert printer.relative  # no G90 after a jog while paused
+    assert "G90" not in printer.executed
+
+    assert (await client.post("/print/resume")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+    back = printer.executed[printer.executed.index("G1 Y-2.5 F300") + 1 :][:9]
+    assert back == [
+        "M400",
+        "M114",  # 6 mm along X, 2.5 back along Y and 4 up from the pause point
+        "G91",
+        "G1 Z5 A5 F300",  # lift clear
+        "G1 X-6 Y2.5 F300",  # back over the pause point
+        "G1 Z-9 A-5 F300",  # down onto it
+        f"G1 F{feed:g}",  # the print's feed rate
+        "G91",  # and mode
+        next_line,  # then on with the print
+    ]
+    # Exactly where the uninterrupted print would have ended
+    assert printer.position == pytest.approx(SAMPLE_END)
+
+
+async def test_head_moved_from_the_display_while_paused_is_brought_back(client, printer):
+    await upload(client)
+    worker = app.state.queue_worker
+    await pause_after_first_layer(client, printer)
+    printer.move_externally(X=-3, Z=1)  # no manual command the app knows of
+
+    assert (await client.post("/print/resume")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+    assert "G1 X3 F300" in printer.executed
+    assert printer.position == pytest.approx(SAMPLE_END)
+
+
+async def test_pause_and_resume_without_moving_sends_no_moves(client, printer):
+    await upload(client)
+    worker = app.state.queue_worker
+    await pause_after_first_layer(client, printer)
+    assert (await client.post("/print/resume")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+    planned = [line.split(";")[0].strip() for line in worker._lines]
+    assert [line for line in printer.executed if line not in planned] == [
+        "M114",  # the start
+        "M84 S0",
+        "M110 N0",
+        "M114",  # the pause
+        "M400",  # the resume: nothing moved
+        "M114",
+        "M400",  # the end
+    ]
+    assert printer.position == pytest.approx(SAMPLE_END)
