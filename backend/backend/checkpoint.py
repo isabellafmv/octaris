@@ -1,8 +1,11 @@
 """Locating where an e-stopped print halted, and resuming it from there.
 
 After M410 the printer reports its position with M114. The stop point lies on
-the path of one of the recently sent lines; that line is re-sent as an
-absolute move and the print continues after it.
+the path of one of the recently sent lines; on resume, the rest of that line
+is sent as a relative move from the stop point and the print continues after
+it. Every move sent here is relative (G91), like the prints themselves: an
+absolute move needs the print's coordinates, which a relative print doesn't
+keep, and a G90 left behind would turn its next lines absolute.
 """
 
 from __future__ import annotations
@@ -108,8 +111,10 @@ def locate_line(
     scaling and any other runtime transform included — not the planned path,
     so a stop under a non-100% flow override still locates correctly.
 
-    Earliest, because re-sending an absolute move that already finished is a
-    no-op, while skipping one that hadn't would leave part of the print out.
+    Earliest, because going over a stretch that already finished again only
+    re-traces it, while skipping one that hadn't would leave part of the
+    print out. Either way the print carries on from the matched line's
+    as-sent end, so its later relative moves land where they should.
     G92 lines are skipped: they change coordinates without moving.
     """
     seen: set[int] = set()
@@ -129,24 +134,18 @@ def fmt(value: float) -> str:
     return "0" if text in ("-0", "") else text
 
 
-def return_moves(target: Mapping[str, float], lift_axes: Sequence[str]) -> list[str]:
-    """Lift `lift_axes` clear of the print, travel over `target` in X/Y and
-    lower back onto it. Leaves the printer in absolute mode (G90)."""
-    commands = ["G91"]
-    if lift_axes:
-        lift = " ".join(f"{axis}{fmt(CLEARANCE_Z_MM)}" for axis in lift_axes)
-        commands.append(f"G1 {lift} F{TRAVEL_FEED}")
-    commands.append("G90")
-    commands.append(f"G1 X{fmt(target['X'])} Y{fmt(target['Y'])} F{TRAVEL_FEED}")
-    if lift_axes:
-        lower = " ".join(f"{axis}{fmt(target[axis])}" for axis in lift_axes)
-        commands.append(f"G1 {lower} F{TRAVEL_FEED}")
-    return commands
-
-
 def moved(actual: Mapping[str, float], target: Mapping[str, float]) -> bool:
     """Whether any axis of `target` is away from it in `actual` (M114)."""
     return any(abs(actual[ax] - value) > MOVED_TOLERANCE_MM for ax, value in target.items() if ax in actual)
+
+
+def _distances(actual: Mapping[str, float], target: Mapping[str, float]) -> str:
+    """The non-zero distances from `actual` to `target`, as G-code words."""
+    words = []
+    for axis, value in target.items():
+        if axis in actual and (distance := fmt(value - actual[axis])) != "0":
+            words.append(f"{axis}{distance}")
+    return " ".join(words)
 
 
 def travel_moves(actual: Mapping[str, float], target: Mapping[str, float]) -> list[str]:
@@ -158,39 +157,39 @@ def travel_moves(actual: Mapping[str, float], target: Mapping[str, float]) -> li
     if lift_axes:
         lift = " ".join(f"{ax}{fmt(CLEARANCE_Z_MM)}" for ax in lift_axes)
         commands.append(f"G1 {lift} F{TRAVEL_FEED}")
-    xy = [f"{ax}{d}" for ax in ("X", "Y") if ax in target and (d := fmt(target[ax] - actual[ax])) != "0"]
+    xy = _distances(actual, {ax: target[ax] for ax in ("X", "Y") if ax in target})
     if xy:
-        commands.append(f"G1 {' '.join(xy)} F{TRAVEL_FEED}")
+        commands.append(f"G1 {xy} F{TRAVEL_FEED}")
     if lift_axes:
         lower = " ".join(f"{ax}{fmt(target[ax] - actual[ax] - CLEARANCE_Z_MM)}" for ax in lift_axes)
         commands.append(f"G1 {lower} F{TRAVEL_FEED}")
     return commands
 
 
-def build_resume_commands(checkpoint: Checkpoint) -> list[str]:
-    """Commands that bring the nozzle back to the stop point and finish the
-    stopped line, ending at the checkpoint's as-sent after-state — not the
-    planned one, so the plunger lands where it was actually sent to (e.g.
-    under a flow override). The caller continues with the line after it."""
-    pos = checkpoint.position
+def build_resume_commands(checkpoint: Checkpoint, actual: Mapping[str, float]) -> list[str]:
+    """Commands that bring the nozzle from `actual` (M114, now) back to the
+    stop point and finish the stopped line, as relative distances, ending
+    at the checkpoint's as-sent after-state — not the planned one, so the
+    plunger lands where it was actually sent to (e.g. under a flow
+    override). The caller continues with the line after it, in G91."""
+    stop = checkpoint.position
     line_after = checkpoint.after
-    commands = return_moves(pos, [axis for axis in ("Z", "A") if axis in pos])
-    if checkpoint.retract:
-        restore = " ".join(f"{axis}{fmt(pos[axis])}" for axis in checkpoint.retract)
-        commands.append(f"G1 {restore} F{PRESSURIZE_FEED}")
+    stage: dict[str, float] = {axis: stop[axis] for axis in ("X", "Y", "Z", "A") if axis in stop}
+    commands = travel_moves(actual, stage) if moved(actual, stage) else ["G91"]
+    plungers = _distances(actual, {axis: stop[axis] for axis in checkpoint.retract if axis in stop})
+    if plungers:
+        commands.append(f"G1 {plungers} F{PRESSURIZE_FEED}")  # undo the retract
 
-    # Finish the stopped line as an absolute move to where it was headed, on
-    # every known axis so any drift within the match tolerance is corrected.
-    # The F also restores the modal feedrate the following lines rely on.
+    # Finish the stopped line: the rest of the way to where it was headed,
+    # from the stop point. The F also restores the modal feedrate the
+    # following lines rely on.
     known = {axis: value for axis in AXES if (value := line_after.pos[axis]) is not None}
-    feed = f" F{fmt(line_after.feed)}" if line_after.feed is not None else ""
-    if known:
-        target = " ".join(f"{axis}{fmt(value)}" for axis, value in known.items())
-        commands.append(f"G1 {target}{feed}")
-    elif feed:
-        commands.append(f"G1{feed}")
-    if line_after.relative:
-        commands.append("G91")  # the following lines are in a relative block
+    rest = _distances(stop, known)
+    feed = f"F{fmt(line_after.feed)}" if line_after.feed is not None else ""
+    if rest or feed:
+        commands.append(" ".join(word for word in ("G1", rest, feed) if word))
+    if not line_after.relative:
+        commands.append("G90")  # never for our prints: they're relative throughout
     return commands
 
 
@@ -213,13 +212,13 @@ def build_return_commands(actual: Mapping[str, float], target: MachineState) -> 
         raise ValueError(f"where the print left off isn't known ({missing})")
     goal = {axis: value for axis in AXES if (value := target.pos[axis]) is not None}
 
-    def moved(axis: str) -> bool:
-        return abs(actual[axis] - goal[axis]) > POSITION_TOLERANCE_MM
-
     commands: list[str] = []
-    if any(moved(axis) for axis in stage):
-        commands += return_moves(goal, [axis for axis in ("Z", "A") if axis in stage])
-    plungers = [axis for axis in ("B", "C") if axis in actual and axis in goal and moved(axis)]
+    stage_goal = {axis: goal[axis] for axis in stage}
+    if moved(actual, stage_goal):
+        commands += travel_moves(actual, stage_goal)
+    plungers = [
+        axis for axis in ("B", "C") if axis in actual and axis in goal and moved(actual, {axis: goal[axis]})
+    ]
     if plungers:
         commands.append("G92 " + " ".join(f"{axis}{fmt(goal[axis])}" for axis in plungers))
     if target.feed is not None:

@@ -209,3 +209,132 @@ async def test_print_at_the_zero_point_starts_straight_away(client, printer):
     await print_to_the_end(client)
     assert printer.executed[:3] == ["M114", "M84 S0", "M110 N0"]
     assert printer.position == pytest.approx(SAMPLE_END)
+
+
+# --- manual control leaves the positioning mode alone ----------------------------
+
+
+async def send(client, line: str) -> str:
+    resp = await client.post("/gcode/send", json={"line": line})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["response"]
+
+
+async def jog(client, axis: str, distance: float) -> None:
+    resp = await client.post("/jog", json={"axis": axis, "distance": distance})
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.parametrize(
+    "mode, jog_lines",
+    [
+        # (M114 reads the position for the bed limits)
+        ("G90", ["M114", "G91", "G1 X2.0 F300", "G90"]),
+        ("G91", ["M114", "G91", "G1 X2.0 F300"]),
+    ],
+)
+async def test_jog_without_a_print_restores_the_mode(client, printer, mode, jog_lines):
+    await send(client, mode)
+    await jog(client, "X", 2)
+    assert printer.executed[-len(jog_lines) :] == jog_lines
+    assert printer.relative == (mode == "G91")
+    assert app.state.serial_manager.relative == (mode == "G91")
+
+
+async def test_jog_with_a_print_loaded_never_sends_g90(client, printer):
+    assert not printer.relative  # Marlin starts absolute
+    await upload(client)
+    await jog(client, "Y", -1)
+    assert printer.executed[-2:] == ["G91", "G1 Y-1.0 F300"]
+    assert printer.relative  # the mode every print runs in
+
+
+@pytest.mark.parametrize("mode", ["G90", "G91"])
+async def test_calibration_leaves_the_mode_alone(client, printer, mode):
+    await send(client, mode)
+    assert (await client.post("/calibration/zero")).status_code == 200
+    assert printer.executed[-1] == "G92 X0 Y0 Z0 B0"
+    assert printer.relative == (mode == "G91")
+
+
+# --- e-stop and resume ---------------------------------------------------------------
+
+
+async def stop_half_way(client, printer: VirtualPrinter, hold: str) -> None:
+    printer.hold_at(hold, 0.5)
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(printer.held.is_set)
+    resp = await client.post("/print/stop")
+    assert resp.json() == {"status": "stopped", "resumable": True, "reason": None}
+
+
+def from_last(printer: VirtualPrinter, marker: str) -> list[str]:
+    executed = printer.executed
+    return executed[len(executed) - 1 - executed[::-1].index(marker) :]
+
+
+async def test_estop_and_resume_in_g91(client, printer):
+    await upload(client)
+    worker = app.state.queue_worker
+    # Half way along the first layer's second side: X20 Y15, B-0.95
+    await stop_half_way(client, printer, "G1 F200 Y10 B-0.5")
+    assert worker.checkpoint.position == {"X": 20, "Y": 15, "Z": 0.3, "A": 0, "B": -0.95, "C": 0}
+    assert printer.relative  # the retract kept the print's mode
+
+    # Moved out of the way while stopped, as one would to look at the nozzle
+    await jog(client, "Z", 3)
+    await jog(client, "X", -4)
+
+    assert (await client.post("/print/resume")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+    assert from_last(printer, "M114")[:7] == [
+        "M114",  # where the head is now: X16 Y15 Z3.3, B-0.75 (retracted)
+        "G91",
+        "G1 Z5 A5 F300",  # lift clear
+        "G1 X4 F300",  # back over the stop point
+        "G1 Z-8 A-5 F300",  # down onto it
+        "G1 B-0.2 F400",  # undo the retract
+        "G1 Y5 B-0.25 F200",  # the rest of the stopped line
+    ]
+    assert "G90" not in printer.executed
+    assert printer.position == pytest.approx(SAMPLE_END, abs=1e-6)
+
+
+# --- the flow override ------------------------------------------------------------------
+
+
+def b_distances(lines: list[str]) -> list[float]:
+    return [dict(parse_words(line))["B"] for line in lines if dict(parse_words(line)).get("B")]
+
+
+async def test_flow_override_at_80_percent(client, printer):
+    await upload(client)
+    assert (await client.post("/extrusion", json={"rate": 80})).status_code == 200
+    await print_to_the_end(client)
+
+    planned = [line.split(";")[0].strip() for line in app.state.session.loaded.gcode.lines]
+    sent = [line for line in printer.executed if line.startswith(("G0", "G1"))]
+    planned_moves = [line for line in planned if line.startswith(("G0", "G1"))]
+    # Every move goes out with its B distance scaled, nothing else changed
+    assert b_distances(sent) == pytest.approx([0.8 * b for b in b_distances(planned_moves)])
+    assert [line.split(" B")[0] for line in sent] == [line.split(" B")[0] for line in planned_moves]
+    # So the plunger travels 80% as far, and the stage exactly as far.
+    assert printer.position == pytest.approx({**SAMPLE_END, "B": 0.8 * SAMPLE_END["B"]})
+
+
+async def test_flow_override_changed_mid_print(client, printer):
+    await upload(client)
+    worker = app.state.queue_worker
+    printer.planner_depth = 1
+    printer.hold_at("G1 F200 Y10 B-0.5")  # the first layer's second side; the third is in flight
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(printer.held.is_set)
+    assert (await client.post("/extrusion", json={"rate": 80})).status_code == 200
+    printer.release()
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+    # B-0.2 pressurize and three sides at 100%, then the rest at 80%: one
+    # more side, layer change (+0.2 −0.2), four sides, +0.2 depressurize.
+    expected_b = -0.2 - 3 * 0.5 - 0.8 * (0.5 + 4 * 0.5 - 0.2)
+    assert printer.position == pytest.approx({**SAMPLE_END, "B": expected_b})

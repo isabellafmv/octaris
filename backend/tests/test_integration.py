@@ -190,8 +190,10 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     assert worker.lines_sent == worker.lines_total
     await wait_for(lambda: printer.moves_planned == 0)
     # Where the uninterrupted print would have ended at this flow: the
-    # footer's depressurize is scaled too (+0.16 from B-3.6).
-    assert printer.position == pytest.approx({"X": 0, "Y": 0, "Z": 5.5, "A": 0, "B": -3.44, "C": 0})
+    # footer's depressurize is scaled too (+0.16 from B-3.6). Resumed from
+    # the stop point as M114 reports it, to 0.01 mm: the virtual printer
+    # stops a hair off the round number it reports.
+    assert printer.position == pytest.approx({"X": 0, "Y": 0, "Z": 5.5, "A": 0, "B": -3.44, "C": 0}, abs=1e-6)
 
     [session] = (await client.get("/history")).json()["sessions"]
     assert session["id"] == session1_id  # the same session was reopened
@@ -257,23 +259,20 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     assert i_m92 < i_m115 < i_g92_zero < i_preamble < i_pressurize
     assert i_preamble < i_manual_jog < i_manual_raw < i_m410_first < i_m410_second
 
-    # Each stop reads the position, then retracts.
+    # Each stop reads the position, then retracts, staying relative.
     for i_m410 in (i_m410_first, i_m410_second):
-        assert sent[i_m410 + 1 : i_m410 + 6] == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
+        assert sent[i_m410 + 1 : i_m410 + 5] == ["M400", "M114", "G91", "G1 B0.2 F400"]
+    assert "G90" not in sent[i_preamble:]
 
-    # The resumed checkpoint returns to the stop point before continuing —
+    # The resumed checkpoint finishes the stopped line before continuing —
     # at the *scaled* B values (flow was still 80% at the stop and stays so
     # for the rest of this print), not the planned, unscaled ones.
-    resumed = sent[i_m410_first + 6 :]
-    assert resumed[:9] == [
+    resumed = sent[i_m410_first + 5 :]
+    assert resumed[:5] == [
+        "M114",  # still at the stop point: nothing to travel back
         "G91",
-        "G1 Z5 A5 F300",  # lift clear of the print
-        "G90",
-        "G1 X16 Y10 F300",  # back over the stop point
-        "G1 Z0.5 A0 F300",  # down to it
-        "G1 B-2.2 F400",  # undo the plunger retract, at the stop position
-        "G1 X22 Y10 Z0.5 A0 B-2.4 C0 F200",  # finish the stopped line, at its scaled target
-        "G91",  # the print is relative
+        "G1 B-0.2 F400",  # undo the plunger retract
+        "G1 X6 B-0.2 F200",  # the rest of the stopped line, as scaled: X16 B-2.2 to X22 B-2.4
         "G1 F400 Y12 B-0.4",  # and carry on after it, still flow-scaled
     ]
 
@@ -299,7 +298,7 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     assert any(line.endswith("> N1 G91") for line in log1)
     assert any(line.endswith("> M410") for line in log1)
     assert any("< X:16.00 Y:10.00 Z:0.50" in line for line in log1)
-    assert any(line.endswith("> G1 Z5 A5 F300") for line in log1)  # resume's lift
+    assert any(line.endswith("> G1 Z5 A5 F300") for line in log1)  # the way back after the jog
     assert log1[-1].endswith("< ok")
     # A manual command sent while it was paused is part of its traffic.
     assert any(line.endswith("> G4 P10") for line in log1)

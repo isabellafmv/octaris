@@ -417,8 +417,10 @@ class QueueWorker:
         if self._retract_on_estop and axes and self._retract_mm > 0:
             # Plungers extrude in the negative direction, so retract is positive.
             move = " ".join(f"{axis}{fmt(self._retract_mm)}" for axis in axes)
+            # The print's own mode is left in place (G91 for any print).
+            restore = [] if self._tracker.state.relative else ["G90"]
             try:
-                await self._serial.send_lines(["G91", f"G1 {move} F{PRESSURIZE_FEED}", "G90"])
+                await self._serial.send_lines(["G91", f"G1 {move} F{PRESSURIZE_FEED}", *restore])
             except SerialError as exc:
                 self._not_resumable(f"Retracting the plungers failed: {exc}")
                 return
@@ -440,7 +442,12 @@ class QueueWorker:
         if self._state != STOPPED_RESUMABLE or checkpoint is None:
             raise NotResumable(self._stop_reason or "No stopped print to resume")
         await self.wait_until_sent()
-        await self._serial.send_lines(build_resume_commands(checkpoint))
+        # Where the head is now: the stage may have been jogged since the stop.
+        [reply] = await self._serial.send_lines(["M114"])
+        position = parse_m114(reply)
+        if position is None:
+            raise SerialError(f"Couldn't parse the printer position from {reply!r}")
+        await self._serial.send_lines(build_resume_commands(checkpoint, position))
         if self._checkpoint is not checkpoint:
             # Invalidated while the return moves were being sent
             raise NotResumable(self._stop_reason or "The checkpoint was invalidated")

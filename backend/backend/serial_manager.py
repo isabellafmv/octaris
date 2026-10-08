@@ -226,6 +226,12 @@ class SerialManager:
         """Tracked logical position per axis; None where unknown."""
         return dict(self._state.pos)
 
+    @property
+    def relative(self) -> bool:
+        """The printer is in relative positioning (G91), as last sent.
+        False on a fresh connection: Marlin starts in G90."""
+        return self._state.relative
+
     @staticmethod
     def list_ports() -> list[dict[str, str]]:
         return _virtual_ports() + _hardware_ports()

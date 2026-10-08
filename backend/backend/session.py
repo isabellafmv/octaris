@@ -222,7 +222,11 @@ class PrinterSession:
         if axis in ("B", "C"):
             self.worker.invalidate_checkpoint(f"The {axis} plunger was jogged")
         self.worker.manual_command()
-        await self.serial.send_lines(["G91", f"G1 {axis}{distance} F{feed_rate}", "G90"])
+        # Leave the printer in the mode it was in, except that it never goes
+        # back to G90 while a print is loaded: every print runs in G91, and
+        # a G90 slipped in before its next line would make that absolute.
+        restore = [] if self.serial.relative or self.loaded is not None else ["G90"]
+        await self.serial.send_lines(["G91", f"G1 {axis}{distance} F{feed_rate}", *restore])
         return axis
 
     async def _check_jog_limits(self, axis: str, distance: float) -> None:

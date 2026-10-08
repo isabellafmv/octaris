@@ -28,6 +28,9 @@ RAW_SAMPLE = (FIXTURES / "raw_sample.gcode").read_text()
 SAMPLE_END = {"X": 0.0, "Y": 0.0, "Z": 5.5, "A": 0.0, "B": -4.0, "C": 0.0}
 # The first extrusion move: X10 Y10 B-0.2 → X20 Y10 B-0.7
 FIRST_MOVE = "G1 F200 X10 B-0.5"
+# A resumed print continues from the stop point as M114 reports it, to
+# 0.01 mm: the virtual printer stops a hair off the round number it reports.
+RESUMED_END = pytest.approx(SAMPLE_END, abs=1e-6)
 
 
 def make_printer() -> VirtualPrinter:
@@ -222,8 +225,9 @@ async def test_estop_locates_line_and_retracts(client, printer, events):
     assert checkpoint.retract == {"B": 0.2}
     # M410 went out while line k+2 was in flight, blocked on the full
     # planner; the printer dropped it, and the position is read after it.
-    assert printer.executed[-7] == "G1 F200 X-10 B-0.5"
-    assert after(printer, "M410") == ["M400", "M114", "G91", "G1 B0.2 F400", "G90"]
+    assert printer.executed[-6] == "G1 F200 X-10 B-0.5"
+    # The retract leaves the printer in G91, as the print is.
+    assert after(printer, "M410") == ["M400", "M114", "G91", "G1 B0.2 F400"]
     assert printer.position["B"] == pytest.approx(-0.25)  # retracted
     assert {"type": "stop", "resumable": True, "reason": None, "line": k} in events
 
@@ -296,11 +300,15 @@ async def test_estop_at_flow_override_is_resumable_at_scaled_position(client, pr
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
 
-    # The resume commands put B at the scaled value, not the planned one.
-    resumed = after(printer, "M410")[5:]
-    assert resumed[5] == "G1 B-0.36 F400"  # undo retract, at the scaled checkpoint position
-    assert resumed[6] == "G1 X20 Y10 Z0.3 A0 B-0.56 C0 F200"  # finish the line, scaled target
-    assert resumed[8] == "G1 F200 Y10 B-0.4"  # the next line, still scaled
+    # The resume finishes the line as it was sent, not as it was planned.
+    resumed = after(printer, "M410")[4:]
+    assert resumed[:5] == [
+        "M114",
+        "G91",
+        "G1 B-0.2 F400",  # undo the retract
+        "G1 X5 B-0.2 F200",  # the rest of the scaled move: B-0.36 to B-0.56
+        "G1 F200 Y10 B-0.4",  # the next line, still scaled
+    ]
 
 
 async def test_flow_change_mid_recent_window_still_locates(client, printer):
@@ -377,24 +385,21 @@ async def test_resume_command_sequence(client, printer):
     assert resp.status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
 
-    # Skip M400, M114 and the three retract lines that followed the e-stop.
-    resumed = after(printer, "M410")[5:]
-    assert resumed[:9] == [
-        "G91",
-        "G1 Z5 A5 F300",  # lift clear of the print
-        "G90",
-        "G1 X15 Y10 F300",  # back over the stop point
-        "G1 Z0.3 A0 F300",  # down to it
-        "G1 B-0.45 F400",  # undo the plunger retract
-        "G1 X20 Y10 Z0.3 A0 B-0.7 C0 F200",  # finish the stopped line, all axes known
-        "G91",  # the print is relative
+    # Skip M400, M114 and the two retract lines that followed the e-stop.
+    resumed = after(printer, "M410")[4:]
+    assert resumed[:5] == [
+        "M114",  # where the head is now
+        "G91",  # nothing moved it: no travel back
+        "G1 B-0.2 F400",  # undo the plunger retract
+        "G1 X5 B-0.25 F200",  # the rest of the stopped line, from X15 B-0.45
         "G1 F200 Y10 B-0.5",  # and carry on after it
     ]
+    assert not any(line.startswith("G90") for line in after(printer, "M410"))
     # Every line after k is sent exactly once more, in order, then the drain.
-    assert resumed[8:] == [*on_wire(worker._lines[k + 1 :]), "M400"]
+    assert resumed[4:] == [*on_wire(worker._lines[k + 1 :]), "M400"]
     assert worker.lines_sent == worker.lines_total
     # The printer ends where the uninterrupted print would have.
-    assert printer.position == pytest.approx(SAMPLE_END)
+    assert printer.position == RESUMED_END
 
     [session] = (await client.get("/history")).json()["sessions"]
     assert session["end_reason"] == "completed"
@@ -411,38 +416,42 @@ async def test_resume_after_a_plunger_only_move(client, printer):
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
 
-    resumed = after(printer, "M410")[5:]
-    assert resumed[:9] == [
+    resumed = after(printer, "M410")[4:]
+    assert resumed[:5] == [
+        "M114",
         "G91",
-        "G1 Z5 A5 F300",
-        "G90",
-        "G1 X10 Y10 F300",
-        "G1 Z0.3 A0 F300",
-        "G1 B-2.1 F400",
-        "G1 X10 Y10 Z0.3 A0 B-2 C0 F400",  # the relative line, as an absolute target
-        "G91",  # back to relative
+        "G1 B-0.2 F400",  # undo the retract, back to B-2.1
+        "G1 B0.1 F400",  # the rest of the depressurize, to B-2
         "G0 F400 Z0.2",  # line k+1
     ]
-    assert resumed[8:] == [*on_wire(worker._lines[k + 1 :]), "M400"]
-    assert printer.position == pytest.approx(SAMPLE_END)
+    assert resumed[4:] == [*on_wire(worker._lines[k + 1 :]), "M400"]
+    assert printer.position == RESUMED_END
 
 
-def test_resume_commands_for_non_moving_line():
-    _, after = simulate_states(["G90", "G1 X1 Y1 Z1 F250", "M106"])
-    cp = Checkpoint(line=2, position={"X": 1, "Y": 1, "Z": 1}, after=after[2])
+def test_resume_commands_after_the_head_was_moved():
+    zero = MachineState(pos={"X": 0, "Y": 0, "Z": 0, "A": None, "B": -2, "C": None})
+    _, after = simulate_states(["G91", "G1 X1 Y1 Z1 F250", "M106"], zero)
+    cp = Checkpoint(line=2, position={"X": 1, "Y": 1, "Z": 1, "B": -2}, after=after[2], retract={"B": 0.2})
 
-    assert build_resume_commands(cp) == [
+    # Jogged 3 mm along X and 1 mm up since the stop: back the same way.
+    assert build_resume_commands(cp, {"X": 4, "Y": 1, "Z": 2, "B": -1.8}) == [
         "G91",
         "G1 Z5 F300",
-        "G90",
-        "G1 X1 Y1 F300",
-        "G1 Z1 F300",
-        "G1 X1 Y1 Z1 F250",
+        "G1 X-3 F300",
+        "G1 Z-6 F300",
+        "G1 B-0.2 F400",
+        "G1 F250",  # nothing of the line left to run; its feed rate is restored
     ]
 
-    _, after = simulate_states(["M106"])
-    cp = Checkpoint(line=0, position={"X": 1, "Y": 1, "Z": 1}, after=after[0])
-    assert build_resume_commands(cp)[-1] == "G1 Z1 F300"
+
+def test_resume_commands_keep_an_absolute_program_absolute():
+    _, after = simulate_states(["G90", "G1 X1 Y1 Z1 F250"])
+    cp = Checkpoint(line=1, position={"X": 0.5, "Y": 0.5, "Z": 0.5}, after=after[1])
+    assert build_resume_commands(cp, {"X": 0.5, "Y": 0.5, "Z": 0.5}) == [
+        "G91",
+        "G1 X0.5 Y0.5 Z0.5 F250",
+        "G90",
+    ]
 
 
 async def test_pause_and_resume_still_work(client, printer):
@@ -491,6 +500,15 @@ async def test_checkpoint_invalidated(client, printer, events, action):
     assert (await client.post("/print/resume")).status_code == 409
 
 
+# The way back to the stop point after a 2 mm jog of each stage axis
+RETURN_AFTER_JOG = {
+    "X": ["G91", "G1 Z5 A5 F300", "G1 X-2 F300", "G1 Z-5 A-5 F300"],
+    "Y": ["G91", "G1 Z5 A5 F300", "G1 Y-2 F300", "G1 Z-5 A-5 F300"],
+    "Z": ["G91", "G1 Z5 A5 F300", "G1 Z-7 A-5 F300"],
+    "A": ["G91", "G1 Z5 A5 F300", "G1 Z-5 A-7 F300"],
+}
+
+
 @pytest.mark.parametrize("axis", ["X", "Y", "Z", "A"])
 async def test_stage_jog_keeps_checkpoint(client, printer, axis):
     await estop_at(client, printer, FIRST_MOVE)
@@ -502,7 +520,9 @@ async def test_stage_jog_keeps_checkpoint(client, printer, axis):
     assert worker.resumable
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
-    assert printer.position == pytest.approx(SAMPLE_END)
+    # Back over the stop point first (after the resume's M114), then on.
+    assert after(printer, "M114")[: len(RETURN_AFTER_JOG[axis])] == RETURN_AFTER_JOG[axis]
+    assert printer.position == RESUMED_END
 
 
 # --- the end of a print ------------------------------------------------------------
@@ -586,16 +606,17 @@ async def test_jog_while_paused_in_a_relative_block_is_undone(client, printer):
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
 
+    # The jogs left the printer relative: no G90 with a print loaded.
+    assert "G90" not in printer.executed
     # Back over where it paused (X5 after five moves), then relative again.
     restore = printer.executed[printer.executed.index("M400") :]
-    assert restore[:9] == [
+    assert restore[:8] == [
         "M400",
         "M114",
         "G91",
         "G1 Z5 A5 F300",
-        "G90",
-        "G1 X5 Y0 F300",
-        "G1 Z0 A0 F300",
+        "G1 X-3 Y2 F300",
+        "G1 Z-5 A-5 F300",
         "G1 F600",
         "G91",
     ]
