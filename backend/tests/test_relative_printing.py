@@ -421,3 +421,122 @@ async def test_pause_and_resume_without_moving_sends_no_moves(client, printer):
         "M400",  # the end
     ]
     assert printer.position == pytest.approx(SAMPLE_END)
+
+
+# --- lab files, already relative --------------------------------------------------------
+
+# Two passes of a 6 x 4 mm rectangle, 0.25 mm apart, written for the plungers
+LAB_FILE = """; lab protocol — written relative by hand
+G91
+G1 Z0.3 F300 ; down to the first layer
+G1 X6 B-0.6 F150
+G1 Y4 B-0.4 F150
+G1 X-6 B-0.6 F150
+G1 Y-4 B-0.4 F150
+G1 Z0.25 F300 ; next layer
+G1 X6 B-0.65 F150
+G1 Y4 B-0.45 F150
+G1 X-6 B-0.65 F150
+G1 Y-4 B-0.45 F150
+G1 Z5 F300 ; clear
+"""
+LAB_MOVES = {"X": 0.0, "Y": 0.0, "Z": 5.55, "B": -4.2}
+LAB_START = {"X": 12.0, "Y": -8.0, "Z": 0.0, "A": 0.0, "B": -1.0, "C": 0.0}
+
+
+def lab_end() -> dict[str, float]:
+    return {axis: LAB_START[axis] + LAB_MOVES.get(axis, 0.0) for axis in LAB_START}
+
+
+@pytest.fixture
+async def lab_printer(printer):
+    """The printer with its head somewhere other than the zero point: a lab
+    file prints wherever the head is."""
+    printer.move_externally(**{axis: value for axis, value in LAB_START.items() if value})
+    return printer
+
+
+async def test_lab_file_is_sent_unchanged_with_line_numbers(client, lab_printer):
+    printer = lab_printer
+    await upload(client, LAB_FILE)
+    assert app.state.session.loaded.gcode.lines == LAB_FILE.splitlines()
+    await print_to_the_end(client)
+
+    lab_lines = [line.split(";")[0].strip() for line in LAB_FILE.splitlines()]
+    lab_lines = [line for line in lab_lines if line]
+    numbered = [raw for raw in printer.received if raw.startswith("N") and "M110" not in raw]
+    # "N<n> <line>*<checksum>", numbered from 1, the lines exactly as written
+    assert [raw.split(" ", 1)[1].rsplit("*", 1)[0] for raw in numbered] == lab_lines
+    assert [int(raw.split(" ", 1)[0][1:]) for raw in numbered] == list(range(1, len(lab_lines) + 1))
+    # No travel to a zero point first: it printed where the head was.
+    assert printer.executed[:3] == ["M114", "M84 S0", "M110 N0"]
+    assert printer.position == pytest.approx(lab_end())
+
+
+async def test_lab_file_estop_and_resume(client, lab_printer):
+    printer = lab_printer
+    await upload(client, LAB_FILE)
+    worker = app.state.queue_worker
+    await stop_half_way(client, printer, "X-6 B-0.65")
+    # Tracked from the M114 at the start: X18 → X12 on the second layer
+    assert worker.checkpoint.position == pytest.approx(
+        {"X": 15, "Y": -4, "Z": 0.55, "A": 0, "B": -4.425, "C": 0}, abs=0.006
+    )
+
+    await jog(client, "Z", 2)
+    assert (await client.post("/print/resume")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+    assert "G90" not in printer.executed
+    assert printer.position == pytest.approx(lab_end(), abs=0.006)  # M114 rounds the stop point
+
+
+async def test_lab_file_pause_jog_resume(client, lab_printer):
+    printer = lab_printer
+    await upload(client, LAB_FILE)
+    worker = app.state.queue_worker
+    printer.hold_at("G1 X6 B-0.65")
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(printer.held.is_set)
+    assert (await client.post("/print/pause")).status_code == 200
+    printer.release()
+    await wait_for(lambda: worker._paused_at is not None and printer.moves_planned == 0)
+
+    await jog(client, "Y", 7)
+    assert printer.relative
+    assert (await client.post("/print/resume")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+    assert "G1 Y-7 F300" in printer.executed
+    assert printer.position == pytest.approx(lab_end())
+
+
+# --- resends --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, corrupt",
+    [(RAW_SAMPLE, "G1 F200 X-10 B-0.5"), (LAB_FILE, "G1 Y4 B-0.45")],
+    ids=["converted", "lab"],
+)
+async def test_corrupted_line_is_resent_once(client, printer, raw, corrupt):
+    """A relative move run twice, or skipped, would shift everything after
+    it: the corrupted line must run exactly once, in its place."""
+    await upload(client, raw)
+    worker = app.state.queue_worker
+    start = dict(printer.position)
+    printer.corrupt_next(corrupt)
+    await print_to_the_end(client)
+
+    replies = [e["content"] for e in app.state.serial_manager.log_buffer if e["direction"] == "received"]
+    assert any(line.startswith("Error:checksum mismatch") for line in replies)
+    assert any(line.startswith("Resend: ") for line in replies)
+    planned = [line.split(";")[0].strip() for line in worker._lines]
+    assert [line for line in printer.executed if line in planned] == planned
+    # Same end as an undisturbed run of the same file from the same start
+    undisturbed = VirtualPrinter(speed=math.inf, sensors={}, busy_interval_s=None)
+    try:
+        undisturbed.run_direct("G92 " + " ".join(f"{a}{v}" for a, v in start.items()))
+        for line in planned:
+            undisturbed.run_direct(line)
+        assert printer.position == pytest.approx(undisturbed.position)
+    finally:
+        undisturbed.close()

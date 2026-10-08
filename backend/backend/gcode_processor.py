@@ -347,8 +347,8 @@ def clamp_feed_rates(cmds: list[Command], max_f: float = MAX_FEED) -> tuple[list
 # - uploaded .gcode files never pass through Cura, and still need it;
 # - Cura has one retraction_amount, while layer changes pull back
 #   pressurize_mm and in-layer travel pressurize_mm × travel_retract_multiplier;
-# - Cura skips retraction on combed or short travel, and writes absolute E
-#   moves, which the flow multiplier would then scale.
+# - Cura skips retraction on combed or short travel, and writes its retracts
+#   as E moves, which the flow multiplier would then scale.
 
 
 def _plunger_moves(axes: list[str], pull_back_mm: float, label: str = "") -> list[Command]:
