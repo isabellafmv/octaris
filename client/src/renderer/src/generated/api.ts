@@ -668,6 +668,14 @@ export interface components {
             /** Extrusion Events */
             extrusion_events: components["schemas"]["ExtrusionChange"][];
         };
+        /** PrintStartRequest */
+        PrintStartRequest: {
+            /**
+             * Wait For Temperature
+             * @default false
+             */
+            wait_for_temperature?: boolean;
+        };
         /** PrintStartResponse */
         PrintStartResponse: {
             /**
@@ -1070,6 +1078,37 @@ export interface components {
             type: "temperature_status";
         };
         /**
+         * TemperatureWaitEvent
+         * @description Sent about once a second while a print waits for its temperatures,
+         *     and once with waiting=False when it stops waiting (reached or stopped).
+         */
+        TemperatureWaitEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "temperature_wait";
+            /** Waiting */
+            waiting: boolean;
+            /** Settle S */
+            settle_s: number;
+            /** Sensors */
+            sensors: components["schemas"]["TemperatureWaitSensor"][];
+        };
+        /** TemperatureWaitSensor */
+        TemperatureWaitSensor: {
+            /** Sensor */
+            sensor: string;
+            /** Name */
+            name: string;
+            /** Actual */
+            actual: number;
+            /** Target */
+            target: number;
+            /** Stable S */
+            stable_s: number;
+        };
+        /**
          * WarningEvent
          * @description E.g. a syringe running low during a print.
          */
@@ -1082,7 +1121,7 @@ export interface components {
             /** Message */
             message: string;
         };
-        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
+        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["TemperatureWaitEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
         /**
          * ErrorResponse
          * @description The body of every 4xx/5xx response.
@@ -1349,7 +1388,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PrintStartRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1358,6 +1401,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrintStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -19,7 +19,7 @@ export function ConnectionSection({
           Setup &amp; Configuration
         </h1>
         <p className="text-xs tracking-widest uppercase mt-1 text-text-muted">
-          Bioprinting System // Octaris
+          Bioprinting System
         </p>
       </div>
       <div className="mt-1">

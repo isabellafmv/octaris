@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSerialLog } from '../stores/serialLog'
+import { useTemperature } from '../stores/temperature'
 import type { PrintStatus, StopInfo, WsEvent } from '../types'
 
 const WS_BASE_URL = 'ws://127.0.0.1:8000/ws'
@@ -64,6 +65,10 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
       // Serial lines go to their own store so they don't re-render the app
       if (data.type === 'serial_log') {
         if (data.entry) useSerialLog.getState().append(data.entry)
+        return
+      }
+      if (data.type === 'temperature_status') {
+        useTemperature.getState().applyStatus(data)
         return
       }
       setState((prev) => {

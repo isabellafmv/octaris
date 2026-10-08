@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from backend.routers import get_session
 from backend.schemas import (
     PauseResponse,
+    PrintStartRequest,
     PrintStartResponse,
     ResumeResponse,
     StopResponse,
@@ -13,8 +14,9 @@ router = APIRouter(prefix="/print")
 
 
 @router.post("/start", response_model=PrintStartResponse)
-async def start_print(session: PrinterSession = Depends(get_session)):
-    lines_total = await session.start_print()
+async def start_print(body: PrintStartRequest | None = None, session: PrinterSession = Depends(get_session)):
+    body = body or PrintStartRequest()
+    lines_total = await session.start_print(body.wait_for_temperature)
     return {"status": "printing", "lines_total": lines_total}
 
 

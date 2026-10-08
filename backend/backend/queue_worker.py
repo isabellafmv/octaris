@@ -26,6 +26,7 @@ from backend.schemas import (
     ProgressEvent,
     StatusEvent,
     StopEvent,
+    TemperatureWaitEvent,
     WarningEvent,
 )
 from backend.serial_manager import (
@@ -34,6 +35,7 @@ from backend.serial_manager import (
     SerialManager,
     SerialTimeout,
 )
+from backend.temperature import TemperatureStore
 
 # How many sent line indices to remember for locating an e-stop. More than
 # the printer's move buffer can hold, so the line it stopped on is always
@@ -43,6 +45,11 @@ RECENT_LINES = 32
 # Why a print can't be resumed after the serial connection dropped. The board
 # may have reset (reopening the port can do that), losing its zero.
 CONNECTION_LOST = "Connection lost — re-zero before printing"
+# Why a print stopped before its first line can't be resumed: there is
+# nothing to resume, it can simply be started again.
+WAIT_CANCELLED = "Stopped while waiting for the temperatures"
+# How often a print waiting for its temperatures checks them (and reports)
+TEMPERATURE_WAIT_POLL_S = 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +144,7 @@ class QueueWorker:
         on_event: Callable[[dict], None] | None = None,
         retract_on_estop: bool = True,
         syringe_travel_mm: float | None = None,
+        temperature: TemperatureStore | None = None,
     ):
         self._serial = serial_manager
         self._priority_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -167,6 +175,8 @@ class QueueWorker:
         self._syringe_travel_mm = syringe_travel_mm
         self._plunger_pushed: dict[str, float] = {}
         self._low_travel_warned: set[str] = set()
+        self._temperature = temperature
+        self._waiting_for_temperature = False
 
     @property
     def state(self) -> PrintState:
@@ -206,6 +216,12 @@ class QueueWorker:
     def print_active(self) -> bool:
         """A print is printing or paused (not yet stopped or finished)."""
         return self._state in ACTIVE
+
+    @property
+    def waiting_for_temperature(self) -> bool:
+        """The print has started, but holds its first line until the
+        temperatures are reached."""
+        return self._waiting_for_temperature
 
     @property
     def sending(self) -> bool:
@@ -298,9 +314,13 @@ class QueueWorker:
         if self._state not in ACTIVE and self._task and not self._task.done():
             await self._task
 
-    def start(self, start_position: dict[str, float] | None = None) -> None:
+    def start(
+        self, start_position: dict[str, float] | None = None, wait_for_temperature: bool = False
+    ) -> None:
         """Start the loaded print. `start_position` is the printer's position
-        as just read with M114; without it the worker reads it itself."""
+        as just read with M114; without it the worker reads it itself. With
+        `wait_for_temperature`, the first line waits until the temperatures
+        are reached (see TemperatureStore.targets_reached)."""
         if self.sending:
             raise InvalidTransition("The previous print is still stopping")
         self._transition(PRINTING)
@@ -310,7 +330,11 @@ class QueueWorker:
         # Keep idle motors enabled so a stopped print holds its position.
         self._task = asyncio.create_task(
             # M110 N0 starts line numbering: print lines go out from N1.
-            self._run(preamble=["M84 S0", "M110 N0"], seed=start_position is None)
+            self._run(
+                preamble=["M84 S0", "M110 N0"],
+                seed=start_position is None,
+                wait_for_temperature=wait_for_temperature,
+            )
         )
 
     def pause(self) -> None:
@@ -367,6 +391,7 @@ class QueueWorker:
         so the print can be resumed from there.
         """
         was_active = self._state in ACTIVE
+        waiting = self._waiting_for_temperature
         if self._state not in (STOPPED, STOPPED_RESUMABLE):
             self._transition(STOPPED)  # the worker won't send another line
         self.flush_priority()
@@ -383,6 +408,11 @@ class QueueWorker:
         if not was_active:
             if not self.resumable:
                 self._emit(StopEvent(resumable=False, reason=None))
+            return
+        if waiting:
+            self._stop_reason = WAIT_CANCELLED
+            self._emit(StopEvent(resumable=False, reason=WAIT_CANCELLED))
+            self._end_print("stopped")
             return
         await self._take_checkpoint()
         self._end_print("stopped", self._checkpoint.line if self._checkpoint else None)
@@ -508,7 +538,35 @@ class QueueWorker:
             )
         )
 
-    async def _run(self, preamble: list[str], seed: bool = False) -> None:
+    async def _wait_for_temperature(self) -> None:
+        """Hold the print until the temperatures are reached, reporting on
+        the way. Stopping the print ends the wait."""
+        store = self._temperature
+        if store is None:
+            return
+
+        def report(waiting: bool) -> None:
+            settle_s = store.config.settle_s
+            self._emit(TemperatureWaitEvent(waiting=waiting, settle_s=settle_s, sensors=store.wait_status()))
+
+        self._waiting_for_temperature = True
+        logger.info("Waiting for the temperatures before printing")
+        # A target set just before the start shows in the next report only
+        before = store.last_report
+
+        def reached() -> bool:
+            fresh = before is None or store.last_report != before
+            return fresh and store.targets_reached()
+
+        try:
+            while self._state in ACTIVE and not reached():
+                report(waiting=True)
+                await asyncio.sleep(TEMPERATURE_WAIT_POLL_S)
+        finally:
+            self._waiting_for_temperature = False
+            report(waiting=False)
+
+    async def _run(self, preamble: list[str], seed: bool = False, wait_for_temperature: bool = False) -> None:
         logger.info("Queue worker started at line %d/%d", self._next, len(self._lines))
 
         try:
@@ -518,6 +576,9 @@ class QueueWorker:
             for command in preamble:
                 self._track_send(command, index=None)
                 await self._send(command)
+
+            if wait_for_temperature:
+                await self._wait_for_temperature()
 
             while True:
                 # Always service priority queue first

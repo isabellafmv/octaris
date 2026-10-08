@@ -305,3 +305,18 @@ async def test_m410_ack_is_not_taken_as_the_next_reply(rig):
     assert printer.executed[-3:] == ["M410", "M400", "M114"]
     # And the replies stay paired from then on.
     assert (await manager.send("M105")).startswith("ok T:")
+
+
+async def test_m410_ack_with_nothing_in_flight(rig):
+    # Stop pressed while idle: the "ok" that follows is M410's, and the next
+    # command still gets its own reply.
+    make, _ = rig
+    printer = fast_printer()
+    manager = make()
+    attach(manager, printer)
+
+    await manager.emergency_write("M410")
+    await asyncio.sleep(0.1)  # its "ok" arrives with nothing in flight
+
+    assert (await asyncio.wait_for(manager.send("M114"), 2)).startswith("X:")
+    assert (await asyncio.wait_for(manager.send("M105"), 2)).startswith("ok T:")

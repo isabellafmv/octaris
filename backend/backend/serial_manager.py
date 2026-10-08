@@ -580,12 +580,15 @@ class SerialManager:
 
     def _is_emergency_ok(self, pending: _Pending | None) -> bool:
         """Whether an "ok" is the ack of an emergency line, not a reply to
-        `pending`: the command that was in flight when it went out has had
-        its own "ok" already."""
+        `pending`: nothing was in flight when it went out, or what was has
+        had its own "ok" already. (Marlin acks in order, so a command sent
+        after the emergency line gets its "ok" after it.)"""
         with self._state_lock:
-            if self._emergency_oks and self._emergency_oks[0] is not pending:
-                self._emergency_oks.popleft()
-                return True
+            if self._emergency_oks:
+                in_flight = self._emergency_oks[0]
+                if in_flight is None or in_flight is not pending:
+                    self._emergency_oks.popleft()
+                    return True
         return False
 
     def _on_ok(self, ser: Any, pending: _Pending, line: str) -> None:

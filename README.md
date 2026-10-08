@@ -29,6 +29,15 @@ This removes the macOS quarantine flag so the unsigned app can launch. You only 
 > function. The printer needs its own hardware emergency stop (a latching,
 > red-on-yellow switch that removes motor power) within reach of the operator.
 
+> **Safety: keep the firmware's thermal protection enabled.** Octaris warns
+> when a temperature drifts from its target during a print, when reports stop
+> coming, and when a sensor reads something implausible (below −20 °C or above
+> 300 °C, usually a disconnected sensor). These are warnings only, and they
+> depend on the app running. Marlin's `THERMAL_PROTECTION_HOTENDS`,
+> `THERMAL_PROTECTION_BED` and `THERMAL_PROTECTION_CHAMBER` (thermal runaway
+> protection) must stay enabled in the firmware: they cut the heaters when the
+> host can't.
+
 **Software (for users)**
 - macOS (Apple Silicon)
 
@@ -57,6 +66,27 @@ currently only available for mac users
 - **Pause / Resume / Stop / Restart** buttons control the print queue.
 - The **flow rate slider** (50–150%) adjusts extrusion speed live.
 - The status bar shows current line number and system state.
+
+### Temperatures
+
+The backend reads the printer's temperatures (Marlin's `M155` auto-report, or
+`M105` polling if the firmware doesn't auto-report) and logs every reading to
+the SQLite database, tagged with the print it belongs to.
+
+- `GET /temperature`: the latest reading, target and status (heating, cooling,
+  at target, off) of each sensor. If the printer never reports a temperature
+  after connecting, `state` is `no_sensors`.
+- `POST /temperature/target` `{"sensor": "T0", "target": 37}`: sets a target with
+  `M104` (T, T0, T1…), `M140` (bed) or `M141` (chamber); `0` turns the heater off.
+  Targets outside the sensor's range are refused. This works during a print,
+  since it doesn't move anything. `M109`/`M190`, which block the printer until
+  the temperature is reached, are never sent.
+- `GET /temperature/history?minutes=30` or `?session_id=…`: readings for a chart.
+- `GET /temperature/export.csv?session_id=…` or `?from=…&to=…` (ISO 8601): CSV
+  download (timestamp, sensor, name, actual, target).
+- `POST /print/start` `{"wait_for_temperature": true}`: the print holds its first
+  line until every sensor with a target has stayed within ±1 °C of it for 30 s.
+  Stopping the print cancels the wait.
 
 ### Manual control (Take Over screen)
 
@@ -157,5 +187,11 @@ This builds the Python backend into a standalone binary with PyInstaller, then p
 | `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the left nozzle may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60). Jogs (once zeroed) and prints that would leave it are refused. |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
 | `nozzle_offset_measured` | `true` / `false` | Set to `true` once `NOZZLE_OFFSET_X` in `backend/backend/gcode_processor.py` has been measured. Right-nozzle and dual prints are refused until then. |
+| `temperature.sensors` | `{"T0": {"name", "min", "max"}, …}` | A readable name per sensor key the printer reports, and the targets it accepts (besides 0 for off). Unlisted sensors show under their raw key and accept 0–120 °C. |
+| `temperature.retention_days` | number | Logged readings older than this are deleted at startup (default `30`) |
+| `temperature.target_band_c` | number | A sensor counts as at its target within ± this (default `1`) |
+| `temperature.settle_s` | number | How long every target has to hold before a waiting print starts (default `30`) |
+| `temperature.deviation_c`, `temperature.deviation_s` | numbers | Warn during a print when a sensor is further than `deviation_c` from its target for longer than `deviation_s` (defaults `3` °C, `60` s) |
+| `temperature.report_timeout_s` | number | Warn when no temperature report came for this long while connected (default `15`) |
 
 Slicer settings live in `context/octaris_settings.json` (CuraEngine profile). Printer geometry is in `context/fdmprinter.def.json`.

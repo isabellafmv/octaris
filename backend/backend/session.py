@@ -326,9 +326,11 @@ class PrinterSession:
 
     # --- printing ---------------------------------------------------------------
 
-    async def start_print(self) -> int:
+    async def start_print(self, wait_for_temperature: bool = False) -> int:
         """Start the loaded print; returns its line count. Raises LimitError
-        if it would leave the bed or run a syringe empty."""
+        if it would leave the bed or run a syringe empty. With
+        `wait_for_temperature`, its first line waits until every sensor
+        with a target has held it (see QueueWorker.start)."""
         worker = self.worker
         loaded = self.loaded
         if loaded is None:
@@ -375,7 +377,7 @@ class PrinterSession:
             source=loaded.source,
             settings=loaded.settings,
         )
-        worker.start(start_position=position)
+        worker.start(start_position=position, wait_for_temperature=wait_for_temperature)
         return worker.lines_total
 
     async def stop(self) -> tuple[bool, str | None]:

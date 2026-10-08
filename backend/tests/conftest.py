@@ -25,5 +25,6 @@ async def client():
         yield ac
     # Stops the serial reader thread of any port a test attached.
     await app.state.serial_manager.disconnect()
+    await app.state.temperature.close()
     app.state.history._traffic.stop()
     app.state.db.close()
