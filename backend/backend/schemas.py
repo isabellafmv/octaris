@@ -291,6 +291,8 @@ class UploadResult(BaseModel):
     time_estimate_s: int | None
     feed_log_entries: int
     preview_lines: list[str]
+    # Checks on a file sent as uploaded that don't stop it printing
+    warnings: list[str] = []
 
 
 class PrintStartRequest(BaseModel):
@@ -362,6 +364,7 @@ class PrintSession(BaseModel):
     pressurize_mm: float | None
     flow_multiplier: float | None
     travel_retract_multiplier: float | None
+    print_speed: float | None = None  # mm/s
     source: Literal["stl", "gcode"] | None
     end_reason: EndReason | None
     resume_line: int | None

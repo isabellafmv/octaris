@@ -18,7 +18,8 @@ const ROWS: (Field | null)[][] = [
   ],
   [
     { key: 'pressurizeMm', label: 'Pressurize (mm)', step: '0.1', placeholder: '0.2' },
-    { key: 'flowMultiplier', label: 'Flow multiplier', step: '0.1', placeholder: '1.0' }
+    { key: 'flowMultiplier', label: 'Flow multiplier', step: '0.1', placeholder: '1.0' },
+    { key: 'printSpeed', label: 'Print speed (mm/s)', step: '0.5', placeholder: '5' }
   ],
   [
     { key: 'travelRetractMultiplier', label: 'Travel retract ×', step: '0.1', placeholder: '3.0' },
@@ -101,8 +102,8 @@ export function PrintParametersSection(): React.JSX.Element {
             ))}
             <span className="text-[9px] text-text-subtle">
               Layer height defaults to 80% of nozzle diameter. Travel retract × scales the
-              pressurize distance for travel moves only — raise it to stop oozing between
-              segments.
+              pressurize distance for travel moves only — raise it to stop oozing between segments.
+              Print speed applies to printing and travel moves, up to the feed limit.
             </span>
           </div>
         </div>

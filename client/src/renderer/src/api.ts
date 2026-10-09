@@ -41,7 +41,8 @@ const SLICE_PARAMS = {
   layerHeight: 'layer_height',
   pressurizeMm: 'pressurize_mm',
   flowMultiplier: 'flow_multiplier',
-  travelRetractMultiplier: 'travel_retract_multiplier'
+  travelRetractMultiplier: 'travel_retract_multiplier',
+  printSpeed: 'print_speed'
 } as const
 
 export type SliceOptions = Partial<Record<keyof typeof SLICE_PARAMS, number>>
@@ -90,8 +91,13 @@ export const api = {
     }
     return uploadFile('/upload', file, params)
   },
-  uploadGcode: (file: File, syringeMode: SyringeMode) =>
-    uploadFile('/upload/gcode', file, new URLSearchParams({ syringe_mode: syringeMode })),
+  // needsChanges: post-process it; otherwise it is sent as uploaded, with warnings
+  uploadGcode: (file: File, syringeMode: SyringeMode, needsChanges: boolean) =>
+    uploadFile(
+      '/upload/gcode',
+      file,
+      new URLSearchParams({ syringe_mode: syringeMode, needs_changes: String(needsChanges) })
+    ),
   printStart: () => json<{ status: string }>('/print/start', { method: 'POST' }),
   printStop: () => json<{ status: string }>('/print/stop', { method: 'POST' }),
   printPause: () => json<{ status: string }>('/print/pause', { method: 'POST' }),

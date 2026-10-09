@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from backend.gcode_processor import MAX_FEED
+
 Target = Literal["macos", "rpi", "windows"]
 
 
@@ -102,6 +104,10 @@ class Config(BaseModel):
     # How far each plunger can travel with a full syringe. A print is refused
     # if it would push a plunger further, assuming the syringe starts full.
     syringe_travel_mm: float = 40.0
+    # Highest feed rate (mm/min) a print may use: converted prints are
+    # clamped to it, the print speed may not exceed it, and a file sent as
+    # uploaded gets a warning above it
+    max_feed_mm_min: float = Field(default=MAX_FEED, gt=0)
     # NOZZLE_OFFSET_X in gcode_processor.py is a placeholder until measured.
     # Right-nozzle and dual prints are refused until this is set to true.
     nozzle_offset_measured: bool = False

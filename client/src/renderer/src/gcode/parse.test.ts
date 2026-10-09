@@ -147,6 +147,34 @@ describe('relative (G91)', () => {
     ])
   })
 
+  // A lab file sent as uploaded ("Doesn't need changes"): comments, CRLF
+  // line endings, F on the moves, Z moves without G0, B pushed directly
+  it('reads a hand-written lab file as uploaded', () => {
+    const lab = [
+      '; lab protocol — written relative by hand',
+      'G91',
+      'G1 Z0.3 F300 ; down to the first layer',
+      'G1 X6 B-0.6 F150',
+      'G1 Y4 B-0.4 F150',
+      'G1 X-6 B-0.6 F150',
+      'G1 Y-4 B-0.4 F150',
+      'G1 Z0.25 F300 ; next layer',
+      'G1 X6 B-0.65 F150',
+      'G1 Z5 F300 ; clear'
+    ].join('\r\n')
+    expect(parseGcode(lab).layerHeights).toEqual([expect.closeTo(0.3), expect.closeTo(0.55)])
+    expect(segments(lab).map((s) => [s.to.map((v) => +v.toFixed(3)), s.kind, s.layer])).toEqual([
+      [[0, 0, 0.3], 'travel', 0],
+      [[6, 0, 0.3], 'extrude', 0],
+      [[6, 4, 0.3], 'extrude', 0],
+      [[0, 4, 0.3], 'extrude', 0],
+      [[0, 0, 0.3], 'extrude', 0],
+      [[0, 0, 0.55], 'travel', 1],
+      [[6, 0, 0.55], 'extrude', 1],
+      [[6, 0, 5.55], 'travel', 1]
+    ])
+  })
+
   it('extrudes with relative E', () => {
     expect(segments(gcode('G91', 'G1 X1 E0.1', 'G1 X1 E-0.1')).map((s) => s.kind)).toEqual([
       'extrude',

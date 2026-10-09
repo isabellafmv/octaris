@@ -7,6 +7,16 @@ import type { Upload, UploadMode } from './useUpload'
 
 const MODES: UploadMode[] = ['stl', 'gcode']
 
+const CHANGE_OPTIONS = [
+  { needsChanges: false, label: "Doesn't need changes" },
+  { needsChanges: true, label: 'Needs changes' }
+]
+
+const segmentClass = (active: boolean): string =>
+  `flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+    active ? 'bg-white text-primary shadow-[0_1px_3px_rgba(0,0,0,0.08)]' : 'text-text-muted'
+  }`
+
 // Left column: STL / G-code toggle and the file picker
 export function UploadSection({
   upload,
@@ -24,11 +34,7 @@ export function UploadSection({
           <button
             key={mode}
             onClick={() => upload.changeMode(mode)}
-            className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-              upload.mode === mode
-                ? 'bg-white text-primary shadow-[0_1px_3px_rgba(0,0,0,0.08)]'
-                : 'text-text-muted'
-            }`}
+            className={segmentClass(upload.mode === mode)}
           >
             {mode === 'stl' ? 'STL' : 'G-Code File'}
           </button>
@@ -43,12 +49,35 @@ export function UploadSection({
           dualMode={dualMode}
         />
       ) : (
-        <GcodeUpload
-          file={upload.gcodeFile}
-          loading={upload.slicing}
-          onFile={upload.uploadGcode}
-          onError={onError}
-        />
+        <>
+          <div className="flex flex-col gap-1">
+            <div className="flex rounded-xl p-1 gap-1 bg-surface-card">
+              {CHANGE_OPTIONS.map(({ needsChanges, label }) => (
+                <button
+                  key={label}
+                  onClick={() => upload.setNeedsChanges(needsChanges)}
+                  disabled={upload.slicing}
+                  aria-pressed={upload.needsChanges === needsChanges}
+                  className={segmentClass(upload.needsChanges === needsChanges)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="text-[9px] text-text-subtle px-1">
+              {upload.needsChanges
+                ? 'Converted for the printer: E to the plungers, pressurize and retracts added, made relative (G91).'
+                : 'Sent exactly as uploaded. Only checked; anything unusual is shown as a warning.'}
+            </span>
+          </div>
+          <GcodeUpload
+            file={upload.gcodeFile}
+            loading={upload.slicing}
+            needsChanges={upload.needsChanges}
+            onFile={upload.uploadGcode}
+            onError={onError}
+          />
+        </>
       )}
     </>
   )
@@ -92,6 +121,19 @@ export function UploadPreview({ upload }: { upload: Upload }): React.JSX.Element
         </button>
       )}
 
+      {result && result.warnings && result.warnings.length > 0 && (
+        <div className="rounded-2xl px-4 py-3 text-xs bg-[#F6E4DC] text-warning">
+          <p className="font-semibold mb-1">
+            {result.warnings.length === 1 ? 'Warning' : `${result.warnings.length} warnings`}
+          </p>
+          <ul className="list-disc pl-4 flex flex-col gap-0.5">
+            {result.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {result && <GcodePreview result={result} />}
 
       {result && (
@@ -100,7 +142,7 @@ export function UploadPreview({ upload }: { upload: Upload }): React.JSX.Element
           disabled={mode === 'stl' ? !canSlice : !gcodeFile || slicing}
           className="w-full py-2 rounded-xl text-xs font-medium transition-opacity active:opacity-60 disabled:opacity-40 bg-surface-card text-text-muted"
         >
-          {mode === 'stl' ? 'Re-slice' : 'Re-process'}
+          {mode === 'stl' ? 'Re-slice' : upload.needsChanges ? 'Re-process' : 'Reload'}
         </button>
       )}
     </>

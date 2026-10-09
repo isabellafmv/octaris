@@ -12,12 +12,15 @@ export interface Upload {
   // True while slicing an STL or processing a G-code file
   slicing: boolean
   result: UploadResult | null
+  // G-code only: post-process the file, or send it as uploaded
+  needsChanges: boolean
   canSlice: boolean
   changeMode: (mode: UploadMode) => void
   selectStl: (file: File) => void
   slice: () => Promise<void>
   uploadGcode: (file: File) => Promise<void>
   reprocessGcode: () => Promise<void>
+  setNeedsChanges: (needsChanges: boolean) => void
 }
 
 // File selection, slicing and the processed result for the Setup screen.
@@ -28,6 +31,7 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
   const [gcodeFile, setGcodeFile] = useState<File | null>(null)
   const [slicing, setSlicing] = useState(false)
   const [result, setResult] = useState<UploadResult | null>(null)
+  const [needsChanges, setNeedsChangesState] = useState(false)
 
   const changeMode = (next: UploadMode): void => {
     setMode(next)
@@ -59,14 +63,14 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
     }
   }, [stlFile, setError])
 
-  const uploadGcode = useCallback(
-    async (file: File) => {
+  const sendGcode = useCallback(
+    async (file: File, changes: boolean) => {
       setGcodeFile(file)
       setResult(null)
       setError(null)
       setSlicing(true)
       try {
-        setResult(await api.uploadGcode(file, usePrintSettings.getState().syringeMode))
+        setResult(await api.uploadGcode(file, usePrintSettings.getState().syringeMode, changes))
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Processing failed.')
       } finally {
@@ -76,10 +80,21 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
     [setError]
   )
 
+  const uploadGcode = useCallback(
+    (file: File) => sendGcode(file, needsChanges),
+    [sendGcode, needsChanges]
+  )
+
   const reprocessGcode = useCallback(async () => {
     if (!gcodeFile) return
     await uploadGcode(gcodeFile)
   }, [gcodeFile, uploadGcode])
+
+  // A file already picked is loaded again the new way
+  const setNeedsChanges = (next: boolean): void => {
+    setNeedsChangesState(next)
+    if (gcodeFile && !slicing) void sendGcode(gcodeFile, next)
+  }
 
   return {
     mode,
@@ -87,11 +102,13 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
     gcodeFile,
     slicing,
     result,
+    needsChanges,
     canSlice: stlFile !== null && !slicing,
     changeMode,
     selectStl,
     slice,
     uploadGcode,
-    reprocessGcode
+    reprocessGcode,
+    setNeedsChanges
   }
 }

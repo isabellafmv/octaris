@@ -90,16 +90,16 @@ def test_create_session_stores_source_and_settings():
         "both",
         500,
         source="stl",
-        settings={"nozzle_diameter": 0.41, "layer_height": 0.3, "flow_multiplier": 1.2},
+        settings={"nozzle_diameter": 0.41, "layer_height": 0.3, "flow_multiplier": 1.2, "print_speed": 4.0},
     )
 
     row = conn.execute(
         "SELECT source, nozzle_diameter, syringe_diameter, layer_height, "
-        "pressurize_mm, flow_multiplier, travel_retract_multiplier, "
+        "pressurize_mm, flow_multiplier, travel_retract_multiplier, print_speed, "
         "end_reason, resume_line FROM sessions WHERE id = ?",
         (sid,),
     ).fetchone()
-    assert row == ("stl", 0.41, None, 0.3, None, 1.2, None, None, None)
+    assert row == ("stl", 0.41, None, 0.3, None, 1.2, None, 4.0, None, None)
     conn.close()
 
 
@@ -133,6 +133,7 @@ def test_init_db_migrates_old_sessions_table(tmp_path):
         "pressurize_mm",
         "flow_multiplier",
         "travel_retract_multiplier",
+        "print_speed",
         "source",
         "end_reason",
         "resume_line",
