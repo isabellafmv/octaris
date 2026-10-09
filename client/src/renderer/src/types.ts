@@ -10,6 +10,9 @@ export type PrintStatus = Schemas['StatusEvent']['value']
 export type PortInfo = Schemas['PortInfo']
 export type SerialLogEntry = Schemas['SerialLogEntry']
 export type UploadResult = Schemas['UploadResult']
+// PUT /gcode/loaded: the edited program, with its new id (the GET's ETag)
+export type GcodeEditResult = Schemas['GcodeEditResult']
+export type GcodeLineError = Schemas['GcodeLineError']
 export type Snapshot = Schemas['Snapshot']
 // Which nozzles are zeroed: X/Y plus the nozzle's own height (Z left, A right)
 export type NozzleCalibration = Schemas['NozzleCalibration']

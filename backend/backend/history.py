@@ -43,6 +43,7 @@ class PrintHistory:
         total_lines: int,
         source: str | None,
         settings: Mapping[str, object],
+        edited: bool = False,
     ) -> int:
         if self._session_id is not None:
             logger.warning("Session %d still open at new print start", self._session_id)
@@ -55,6 +56,7 @@ class PrintHistory:
             total_lines,
             source=source,
             settings=settings,
+            edited=edited,
         )
         path = self._traffic.start(self._session_id)
         set_serial_log(self._conn, self._session_id, str(path))

@@ -291,6 +291,29 @@ class UploadResult(BaseModel):
     time_estimate_s: int | None
     feed_log_entries: int
     preview_lines: list[str]
+    # Changed in the G-code editor since it was loaded
+    edited: bool = False
+
+
+class GcodeEditResult(UploadResult):
+    """PUT /gcode/loaded's body. program_id changes on every load and edit;
+    GET /gcode/loaded sends it as its ETag."""
+
+    program_id: str
+
+
+class GcodeLineError(BaseModel):
+    line: int | None  # 1-based; None when the error isn't on one line
+    message: str
+
+
+class GcodeEditErrorResponse(BaseModel):
+    """PUT /gcode/loaded's 422 body: the edit was rejected, the loaded
+    program is unchanged. The checks stop at the first problem, so
+    `errors` holds one entry."""
+
+    detail: str
+    errors: list[GcodeLineError]
 
 
 class PrintStartRequest(BaseModel):
@@ -365,6 +388,7 @@ class PrintSession(BaseModel):
     source: Literal["stl", "gcode"] | None
     end_reason: EndReason | None
     resume_line: int | None
+    edited: bool = False  # the program was changed in the G-code editor
     serial_log: str | None = None  # path of the file with the print's serial traffic
     extrusion_events: list[ExtrusionChange]
 
