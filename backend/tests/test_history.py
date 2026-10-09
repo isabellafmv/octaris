@@ -51,7 +51,7 @@ class FakeSerial:
 async def printer(client):
     fake = FakeSerial()
     attach(app.state.serial_manager, fake)
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     # The synthetic prints below use both syringes
     app.state.config.nozzle_offset_measured = True
     return fake

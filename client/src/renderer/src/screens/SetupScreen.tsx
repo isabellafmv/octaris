@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { PrintStatus } from '../types'
+import { usePrintSettings } from '../stores/printSettings'
+import type { NozzleCalibration, PrintStatus, SyringeMode } from '../types'
+import { isCalibratedFor } from './setup/calibration'
 import { CalibrationSection } from './setup/CalibrationSection'
 import { ConnectionSection } from './setup/ConnectionSection'
 import { PrintParametersSection } from './setup/PrintParametersSection'
@@ -10,16 +12,21 @@ import { useUpload, type Upload } from './setup/useUpload'
 interface SetupScreenProps {
   printerConnected: boolean
   port: string | null
-  calibrated: boolean
+  calibratedNozzles: NozzleCalibration
   printStatus: PrintStatus
   onStartPrint: () => void
   externalError?: string | null
   onClearExternalError?: () => void
 }
 
-function nextStepHint(upload: Upload, calibrated: boolean): string {
-  if (upload.result)
-    return calibrated ? 'Ready to print' : 'Jog to position and set origin to continue'
+const CALIBRATE_HINT: Record<SyringeMode, string> = {
+  left: 'Jog to position and zero the left nozzle to continue',
+  right: 'Jog to position and zero the right nozzle to continue',
+  both: 'Zero the left, then the right nozzle to continue'
+}
+
+function nextStepHint(upload: Upload, mode: SyringeMode, calibrated: boolean): string {
+  if (upload.result) return calibrated ? 'Ready to print' : CALIBRATE_HINT[mode]
   if (upload.mode === 'stl')
     return upload.stlFile ? 'Slice the file to continue' : 'Upload an STL to get started'
   return upload.gcodeFile ? 'Processing…' : 'Upload a pre-sliced G-code file'
@@ -28,14 +35,15 @@ function nextStepHint(upload: Upload, calibrated: boolean): string {
 export function SetupScreen({
   printerConnected,
   port,
-  calibrated: calibratedFromEvents,
+  calibratedNozzles: nozzlesFromEvents,
   printStatus,
   onStartPrint,
   externalError,
   onClearExternalError
 }: SetupScreenProps): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
-  const [calibrated, setCalibrated] = useState(calibratedFromEvents)
+  const [nozzles, setNozzles] = useState(nozzlesFromEvents)
+  const syringeMode = usePrintSettings((s) => s.syringeMode)
   const upload = useUpload(setError)
 
   // Merge external errors (from failed print start) into local error state
@@ -49,11 +57,13 @@ export function SetupScreen({
   // Calibration state is pushed live over the websocket (snapshot on connect,
   // then calibration events), not polled.
   useEffect(() => {
-    setCalibrated(calibratedFromEvents)
-  }, [calibratedFromEvents])
+    setNozzles(nozzlesFromEvents)
+  }, [nozzlesFromEvents])
 
-  const handleCalibrated = useCallback(() => setCalibrated(true), [])
+  const handleCalibrated = useCallback((zeroed: NozzleCalibration) => setNozzles(zeroed), [])
 
+  // Every nozzle the selected mode prints with must be zeroed
+  const calibrated = isCalibratedFor(syringeMode, nozzles)
   const canStartPrint = upload.result !== null && !upload.slicing && calibrated
 
   return (
@@ -88,7 +98,7 @@ export function SetupScreen({
           <CalibrationSection
             printerConnected={printerConnected}
             printStatus={printStatus}
-            calibrated={calibrated}
+            nozzles={nozzles}
             hasUpload={upload.result !== null}
             onCalibrated={handleCalibrated}
             onError={setError}
@@ -108,7 +118,7 @@ export function SetupScreen({
             <span className="text-lg">→</span>
           </button>
           <p className="text-center text-xs -mt-2 text-text-subtle">
-            {nextStepHint(upload, calibrated)}
+            {nextStepHint(upload, syringeMode, calibrated)}
           </p>
         </div>
       </div>

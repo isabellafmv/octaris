@@ -540,8 +540,9 @@ def test_relative_extrusion_file_converts_like_absolute_one():
 def test_right_nozzle_offset_is_in_the_first_move():
     result = process_gcode((FIXTURES / "raw_sample.gcode").read_text(), "right")
     first_move = next(line for line in result.lines if line.startswith("G0"))
-    assert first_move == "G0 F400 X41 Y10 Z0.3"  # X10 + the 31 mm offset, from the zero point
-    assert result.start_position == {"X": 0, "Y": 0, "Z": 0}
+    # X10 + the 31 mm offset, from the zero point, on the right nozzle's height motor
+    assert first_move == "G0 F400 X41 Y10 A0.3"
+    assert result.start_position == {"X": 0, "Y": 0, "A": 0}
 
 
 LAB_FILE = """; lab file

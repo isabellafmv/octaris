@@ -39,6 +39,8 @@ class Checkpoint:
     position: dict[str, float]  # logical position reported by M114
     after: MachineState  # as-sent machine state right after the stopped line
     retract: dict[str, float] = field(default_factory=dict)  # plunger retract after the stop
+    # The height motors of the nozzle(s) printing: lifted to travel back
+    height_axes: tuple[str, ...] = ("Z",)
 
 
 def parse_m114(response: str) -> dict[str, float] | None:
@@ -174,7 +176,8 @@ def build_resume_commands(checkpoint: Checkpoint, actual: Mapping[str, float]) -
     override). The caller continues with the line after it, in G91."""
     stop = checkpoint.position
     line_after = checkpoint.after
-    stage: dict[str, float] = {axis: stop[axis] for axis in ("X", "Y", "Z", "A") if axis in stop}
+    stage_axes = ("X", "Y", *checkpoint.height_axes)
+    stage: dict[str, float] = {axis: stop[axis] for axis in stage_axes if axis in stop}
     commands = travel_moves(actual, stage) if moved(actual, stage) else ["G91"]
     plungers = _distances(actual, {axis: stop[axis] for axis in checkpoint.retract if axis in stop})
     if plungers:
@@ -198,14 +201,16 @@ def build_return_commands(
     paused_at: Mapping[str, float] | None,
     target: MachineState,
     restore_modes: bool = True,
+    height_axes: Sequence[str] = ("Z",),
 ) -> list[str]:
     """Commands that take a paused print back to where it was paused.
 
     `actual` is the printer's position now (M114), `paused_at` its position
     when the print was paused (M114, or None if it couldn't be read) and
     `target` the as-sent state where the print left off. If the stage was
-    moved (a jog, say), it travels back to `paused_at` — lift, X/Y, lower,
-    as relative moves — or to `target` without one. A plunger moved by hand
+    moved (a jog, say), it travels back to `paused_at` — lift `height_axes`
+    (those of the nozzles printing), X/Y, lower, as relative moves — or to
+    `target` without one. Another nozzle's height is left where it is. A plunger moved by hand
     stays where it is (priming, say) and is re-aligned with G92, so the
     print's coordinates carry on from there. With `restore_modes` (manual
     commands were sent, which may change them without moving anything), or
@@ -216,7 +221,7 @@ def build_return_commands(
     """
     goal = {axis: value for axis in AXES if (value := target.pos[axis]) is not None}
     if paused_at is None:
-        stage = [axis for axis in ("X", "Y", "Z", "A") if axis in actual]
+        stage = [axis for axis in ("X", "Y", *height_axes) if axis in actual]
         unknown = [axis for axis in stage if axis not in goal]
         if unknown or "X" not in stage or "Y" not in stage:
             missing = ", ".join(unknown) or "X/Y"
@@ -224,7 +229,7 @@ def build_return_commands(
         paused_at = goal
 
     commands: list[str] = []
-    stage_goal = {axis: paused_at[axis] for axis in ("X", "Y", "Z", "A") if axis in paused_at}
+    stage_goal = {axis: paused_at[axis] for axis in ("X", "Y", *height_axes) if axis in paused_at}
     if moved(actual, stage_goal):
         commands += travel_moves(actual, stage_goal)
     # Compared with where they were at the pause; re-aligned with the exact

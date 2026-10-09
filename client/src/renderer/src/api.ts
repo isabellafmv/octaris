@@ -1,4 +1,6 @@
 import type {
+  CalibrateResponse,
+  NozzleCalibration,
   PortInfo,
   SerialLogEntry,
   SyringeMode,
@@ -109,9 +111,15 @@ export const api = {
       body: JSON.stringify({ line })
     }),
   getSerialLog: (limit = 200) => json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
-  calibrationStatus: () => json<{ calibrated: boolean }>('/calibration/status'),
-  calibrationZero: () =>
-    json<{ status: string; command: string }>('/calibration/zero', { method: 'POST' }),
+  calibrationStatus: () =>
+    json<{ calibrated: boolean; nozzles: NozzleCalibration }>('/calibration/status'),
+  // Zero one nozzle where it is, for the selected mode (both mode: left, then right)
+  calibrationZero: (nozzle: 'left' | 'right', syringeMode: SyringeMode) =>
+    json<CalibrateResponse>('/calibration/zero', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nozzle, syringe_mode: syringeMode })
+    }),
   calibrationReset: () => json<{ status: string }>('/calibration/reset', { method: 'POST' }),
   getTemperature: () => json<TemperatureStatus>('/temperature'),
   getTemperatureHistory: (minutes: number) =>

@@ -81,7 +81,8 @@ export interface paths {
         };
         /**
          * Calibration Status
-         * @description Check whether the printer has been calibrated this session.
+         * @description Whether the printer is calibrated for the current syringe mode, and
+         *     which nozzles are zeroed.
          */
         get: operations["calibration_status_calibration_status_get"];
         put?: never;
@@ -103,14 +104,17 @@ export interface paths {
         put?: never;
         /**
          * Calibrate Zero
-         * @description Set the current nozzle position as the origin.
+         * @description Zero a nozzle where it is. X/Y are always set at the LEFT nozzle's
+         *     position over the print's start point; each nozzle's height with that
+         *     nozzle lowered onto the bed (about 0.2 mm above the surface).
          *
-         *     IMPORTANT: Always zero using the LEFT nozzle, even when printing with
-         *     the right nozzle or both. The software automatically applies the nozzle
-         *     offset (NOZZLE_OFFSET_X) for the right nozzle.
+         *     - left mode: `nozzle: "left"` → G92 X0 Y0 Z0 B0
+         *     - right mode: `nozzle: "right"` → G92 X0 Y0 A0 C0 (left nozzle over the
+         *       start point, right nozzle on the bed)
+         *     - both mode, two steps: `nozzle: "left"` → G92 X0 Y0 Z0 B0, then lower the
+         *       right nozzle onto the bed and `nozzle: "right"` → G92 A0 C0
          *
-         *     Jog the LEFT nozzle to the center of the print area at the correct Z
-         *     height (~0.2 mm above surface) before calling this endpoint.
+         *     The right nozzle's X offset (NOZZLE_OFFSET_X) is applied in post-processing.
          */
         post: operations["calibrate_zero_calibration_zero_post"];
         delete?: never;
@@ -456,34 +460,22 @@ export interface components {
         };
         /**
          * CalibrateRequest
-         * @description Optional overrides for the zeroing command.
+         * @description Which nozzle to zero, for which syringe mode (default: the loaded
+         *     print's, or the last calibration's).
          */
         CalibrateRequest: {
-            /**
-             * Zero Z
-             * @default true
-             */
-            zero_z?: boolean;
-            /**
-             * Zero B
-             * @default true
-             */
-            zero_b?: boolean;
-            /**
-             * Zero C
-             * @default false
-             */
-            zero_c?: boolean;
+            /** Nozzle */
+            nozzle?: ("left" | "right") | null;
+            /** Syringe Mode */
+            syringe_mode?: ("left" | "right" | "both") | null;
         };
         /** CalibrateResponse */
         CalibrateResponse: {
-            /**
-             * Status
-             * @constant
-             */
-            status: "calibrated";
             /** Command */
             command: string;
+            /** Calibrated */
+            calibrated: boolean;
+            nozzles: components["schemas"]["NozzleCalibration"];
         };
         /** CalibrationResetResponse */
         CalibrationResetResponse: {
@@ -497,6 +489,7 @@ export interface components {
         CalibrationStatusResponse: {
             /** Calibrated */
             calibrated: boolean;
+            nozzles: components["schemas"]["NozzleCalibration"];
         };
         /** ConnectRequest */
         ConnectRequest: {
@@ -605,6 +598,16 @@ export interface components {
             axis: string;
             /** Distance */
             distance: number;
+        };
+        /**
+         * NozzleCalibration
+         * @description Which nozzles are zeroed: X/Y and the nozzle's own height (Z left, A right).
+         */
+        NozzleCalibration: {
+            /** Left */
+            left: boolean;
+            /** Right */
+            right: boolean;
         };
         /** PauseResponse */
         PauseResponse: {
@@ -760,6 +763,7 @@ export interface components {
             lines_total: number;
             /** Calibrated */
             calibrated: boolean;
+            calibrated_nozzles: components["schemas"]["NozzleCalibration"];
             /** Flow Rate */
             flow_rate: number;
             /** Resumable */
@@ -873,7 +877,10 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
-        /** CalibrationEvent */
+        /**
+         * CalibrationEvent
+         * @description value: every nozzle of the current syringe mode is zeroed.
+         */
         CalibrationEvent: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -885,6 +892,7 @@ export interface components {
              * @enum {string}
              */
             value: "calibrated" | "uncalibrated";
+            nozzles: components["schemas"]["NozzleCalibration"];
         };
         /** ErrorEvent */
         ErrorEvent: {
@@ -993,6 +1001,7 @@ export interface components {
             lines_total: number;
             /** Calibrated */
             calibrated: boolean;
+            calibrated_nozzles: components["schemas"]["NozzleCalibration"];
             /** Flow Rate */
             flow_rate: number;
             /** Resumable */

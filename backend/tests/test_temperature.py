@@ -211,7 +211,7 @@ def test_existing_database_gets_the_table(tmp_path):
 
 async def test_readings_during_a_print_carry_its_session(client, tmp_path):
     attach(app.state.serial_manager, FakeSerial())
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     app.state.config.nozzle_offset_measured = True
     bus = app.state.event_bus
     store: TemperatureStore = app.state.temperature

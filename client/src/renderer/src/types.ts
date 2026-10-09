@@ -11,6 +11,9 @@ export type PortInfo = Schemas['PortInfo']
 export type SerialLogEntry = Schemas['SerialLogEntry']
 export type UploadResult = Schemas['UploadResult']
 export type Snapshot = Schemas['Snapshot']
+// Which nozzles are zeroed: X/Y plus the nozzle's own height (Z left, A right)
+export type NozzleCalibration = Schemas['NozzleCalibration']
+export type CalibrateResponse = Schemas['CalibrateResponse']
 export type PrintSession = Schemas['PrintSession']
 export type SensorInfo = Pick<SensorReading, 'sensor' | 'name' | 'min' | 'max' | 'settable'>
 export type SensorReading = Schemas['SensorReading']

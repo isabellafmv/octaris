@@ -58,7 +58,7 @@ async def wait_for(condition, timeout: float = 5.0) -> None:
 async def printer(client):
     printer = make_printer()
     attach(app.state.serial_manager, printer)
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     return printer
 
 
@@ -502,10 +502,11 @@ async def test_checkpoint_invalidated(client, printer, events, action):
 
 # The way back to the stop point after a 2 mm jog of each stage axis
 RETURN_AFTER_JOG = {
-    "X": ["G91", "G1 Z5 A5 F300", "G1 X-2 F300", "G1 Z-5 A-5 F300"],
-    "Y": ["G91", "G1 Z5 A5 F300", "G1 Y-2 F300", "G1 Z-5 A-5 F300"],
-    "Z": ["G91", "G1 Z5 A5 F300", "G1 Z-7 A-5 F300"],
-    "A": ["G91", "G1 Z5 A5 F300", "G1 Z-5 A-7 F300"],
+    "X": ["G91", "G1 Z5 F300", "G1 X-2 F300", "G1 Z-5 F300"],
+    "Y": ["G91", "G1 Z5 F300", "G1 Y-2 F300", "G1 Z-5 F300"],
+    "Z": ["G91", "G1 Z5 F300", "G1 Z-7 F300"],
+    # The right nozzle's height doesn't print in left mode: left where it is
+    "A": ["G91", "G1 B-0.2 F400"],
 }
 
 
@@ -522,7 +523,7 @@ async def test_stage_jog_keeps_checkpoint(client, printer, axis):
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
     # Back over the stop point first (after the resume's M114), then on.
     assert after(printer, "M114")[: len(RETURN_AFTER_JOG[axis])] == RETURN_AFTER_JOG[axis]
-    assert printer.position == RESUMED_END
+    assert printer.position == pytest.approx({**SAMPLE_END, "A": 2 if axis == "A" else 0}, abs=1e-6)
 
 
 # --- the end of a print ------------------------------------------------------------
@@ -614,9 +615,9 @@ async def test_jog_while_paused_in_a_relative_block_is_undone(client, printer):
         "M400",
         "M114",
         "G91",
-        "G1 Z5 A5 F300",
+        "G1 Z5 F300",
         "G1 X-3 Y2 F300",
-        "G1 Z-5 A-5 F300",
+        "G1 Z-5 F300",
         "G1 F600",
         "G91",
     ]

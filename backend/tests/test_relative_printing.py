@@ -169,7 +169,7 @@ async def wait_for(condition, timeout: float = 5.0) -> None:
 async def printer(client):
     printer = make_printer()
     attach(app.state.serial_manager, printer)
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     return printer
 
 
@@ -291,9 +291,9 @@ async def test_estop_and_resume_in_g91(client, printer):
     assert from_last(printer, "M114")[:7] == [
         "M114",  # where the head is now: X16 Y15 Z3.3, B-0.75 (retracted)
         "G91",
-        "G1 Z5 A5 F300",  # lift clear
+        "G1 Z5 F300",  # lift clear
         "G1 X4 F300",  # back over the stop point
-        "G1 Z-8 A-5 F300",  # down onto it
+        "G1 Z-8 F300",  # down onto it
         "G1 B-0.2 F400",  # undo the retract
         "G1 Y5 B-0.25 F200",  # the rest of the stopped line
     ]
@@ -380,9 +380,9 @@ async def test_jog_while_paused_stays_g91_and_resume_returns_to_the_pause_point(
         "M400",
         "M114",  # 6 mm along X, 2.5 back along Y and 4 up from the pause point
         "G91",
-        "G1 Z5 A5 F300",  # lift clear
+        "G1 Z5 F300",  # lift clear
         "G1 X-6 Y2.5 F300",  # back over the pause point
-        "G1 Z-9 A-5 F300",  # down onto it
+        "G1 Z-9 F300",  # down onto it
         f"G1 F{feed:g}",  # the print's feed rate
         "G91",  # and mode
         next_line,  # then on with the print

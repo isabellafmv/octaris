@@ -298,7 +298,7 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
     assert any(line.endswith("> N1 G91") for line in log1)
     assert any(line.endswith("> M410") for line in log1)
     assert any("< X:16.00 Y:10.00 Z:0.50" in line for line in log1)
-    assert any(line.endswith("> G1 Z5 A5 F300") for line in log1)  # the way back after the jog
+    assert any(line.endswith("> G1 Z5 F300") for line in log1)  # the way back after the jog
     assert log1[-1].endswith("< ok")
     # A manual command sent while it was paused is part of its traffic.
     assert any(line.endswith("> G4 P10") for line in log1)
@@ -337,7 +337,7 @@ async def test_full_print_lifecycle(client, dev_mode, data_dir):
 
     assert {"type": "extrusion_rate", "value": 80} in events
     assert {"type": "extrusion_rate", "value": 100} in events
-    assert {"type": "calibration", "value": "calibrated"} in events
+    assert {"type": "calibration", "value": "calibrated", "nozzles": {"left": True, "right": False}} in events
     assert {"type": "printer", "connected": True, "port": "virtual"} in events
     assert any(e["type"] == "progress" for e in events)
     assert any(e["type"] == "temperature" for e in events)  # M155 auto-reports
@@ -353,7 +353,7 @@ SAMPLE_END = {"X": 0.0, "Y": 0.0, "Z": 5.5, "A": 0.0, "B": -4.0, "C": 0.0}
 async def printer(client):
     printer = VirtualPrinter(**PRINTER_OPTIONS)
     attach(app.state.serial_manager, printer)
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     return printer
 
 
