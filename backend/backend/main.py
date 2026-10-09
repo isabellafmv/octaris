@@ -2,6 +2,7 @@ import logging
 import signal
 import sqlite3
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -151,7 +152,10 @@ def openapi_schema() -> dict:
         return app.openapi_schema
     schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
     schemas = schema.setdefault("components", {}).setdefault("schemas", {})
-    for name, model in (("WsEvent", WsEvent), ("ErrorResponse", ErrorResponse)):
+    # Typed as Any: the two entries are different kinds of type (a union and a
+    # model class), which newer pydantic/mypy reject for one TypeAdapter variable.
+    models: tuple[tuple[str, Any], ...] = (("WsEvent", WsEvent), ("ErrorResponse", ErrorResponse))
+    for name, model in models:
         extra = TypeAdapter(model).json_schema(
             mode="serialization", ref_template="#/components/schemas/{model}"
         )
