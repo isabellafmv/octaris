@@ -5,7 +5,9 @@ Control software for the Printess bioprinter. Upload an STL or a pre-sliced G-co
 
 ## Download
 
-Grab the latest `.dmg` from [Releases](../../releases).
+Grab the latest release from [Releases](../../releases): the `.dmg` for macOS (Apple Silicon), or `Octaris-<version>-win-setup.exe` for Windows (x64).
+
+### macOS
 
 After installing, open Terminal and run:
 
@@ -14,6 +16,14 @@ xattr -cr /Applications/Octaris.app
 ```
 
 This removes the macOS quarantine flag so the unsigned app can launch. You only need to do this once after the initial install (automatic updates don't require it)
+
+### Windows
+
+Run `Octaris-<version>-win-setup.exe`. It installs for the current user (no admin rights needed) and starts Octaris.
+
+The installer isn't code-signed yet, so Microsoft Defender SmartScreen shows *"Windows protected your PC"* the first time. Click **More info**, then **Run anyway**. Your browser may also flag the download as uncommon; choose **Keep**.
+
+The printer shows up as a COM port. Octaris lists only ports that belong to the STM32 board (USB vendor ID `0483`, or a driver name containing "STMicroelectronics" or "STM32"). If the board isn't listed, check in Device Manager under *Ports (COM & LPT)* that Windows recognises it.
 
 ---
 
@@ -113,6 +123,17 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+On Windows (PowerShell):
+
+```powershell
+cd backend
+py -3.13 -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+```
+
+Slicing STL files needs CuraEngine. On macOS the binary in `resources/bin/macos/` (or an installed UltiMaker Cura) is used. On Windows Octaris looks for `resources\bin\windows\CuraEngine.exe`, then the newest UltiMaker Cura install under `C:\Program Files\`, then `CuraEngine` on `PATH`. For development, installing [UltiMaker Cura](https://ultimaker.com/software/ultimaker-cura/) is enough.
+
 ### 2. Frontend
 
 ```bash
@@ -129,6 +150,8 @@ Terminal 1 (backend)
 cd backend
 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
+
+(On Windows, don't add `--reload`: with it uvicorn uses an event loop that can't start subprocesses, so slicing fails.)
 
 Terminal 2 (frontend)
 ```bash
@@ -159,20 +182,25 @@ cd ../client
 npm run typecheck && npm run lint
 ```
 
-`pre-commit install` (from the repository root, with the backend's dev dependencies installed) runs all of these on every commit. CI runs them on every push and pull request; pushing a tag builds the macOS app with `build.sh` and attaches the `.dmg` and `.zip` to the workflow run.
+`pre-commit install` (from the repository root, with the backend's dev dependencies installed) runs all of these on every commit. CI runs them on every push and pull request, and runs mypy and the tests on Windows too. Pushing a tag builds the macOS app and the Windows installer with `build.py` and attaches the `.dmg`, `.zip` and `.exe` to the workflow run.
 
 ### Logs
 
-The backend writes a rotating log to `~/Library/Application Support/Octaris/logs/octaris-backend.log`. Each print's serial traffic goes to its own file in `logs/prints/`, named in the print's history entry (`serial_log`). Set `OCTARIS_DATA_DIR` to put them elsewhere.
+The backend writes a rotating log to `logs/octaris-backend.log` in the app data folder: `~/Library/Application Support/Octaris/` on macOS, `%LOCALAPPDATA%\Octaris\` on Windows. The packaged app's database (`octaris_log.db`) lives there too. Each print's serial traffic goes to its own file in `logs/prints/`, named in the print's history entry (`serial_log`). Set `OCTARIS_DATA_DIR` to put them elsewhere.
 
 ### Building the desktop app
 
 ```bash
 pip install pyinstaller
-./build.sh
+python build.py        # or ./build.sh on macOS
 ```
 
-This builds the Python backend into a standalone binary with PyInstaller, then packages everything into a macOS `.app` with electron-builder. Output is in `client/dist/`.
+This builds the Python backend into a standalone folder with PyInstaller, then packages everything with electron-builder: a `.dmg` and `.zip` on macOS, an NSIS installer (`Octaris-<version>-win-setup.exe`) on Windows. Each OS builds its own app; there's no cross-building. Output is in `client/dist/`. Arguments are passed on to electron-builder (e.g. `python build.py --publish never`).
+
+The build bundles CuraEngine from `resources/bin/<target>/` and stops with an error if it's missing:
+
+- macOS: `resources/bin/macos/CuraEngine` and `UltiMaker-Cura` (in the repository).
+- Windows: `resources/bin/windows/CuraEngine.exe` is **not** in the repository yet. Copy `CuraEngine.exe` from an UltiMaker Cura 5 install (`C:\Program Files\UltiMaker Cura 5.x.x\`) into `resources\bin\windows\`, together with any DLLs it needs from that folder (`CuraEngine.exe --help` from a plain command prompt in `resources\bin\windows\` should run). Commit it through Git LFS (already set up in `.gitattributes` for `resources/bin/**`) so the tag build on CI can bundle it; until then that job fails at this check.
 
 ---
 
@@ -182,7 +210,7 @@ This builds the Python backend into a standalone binary with PyInstaller, then p
 
 | Key | Values | Description |
 |-----|--------|-------------|
-| `target` | `macos` / `rpi` | Platform, affects where CuraEngine is looked up |
+| `target` | `macos` / `windows` / `rpi` | Platform, affects where CuraEngine is looked up. Defaults to the OS it runs on (Linux → `rpi`); set it only to override that. |
 | `baud_rate` | integer | Serial baud rate (default `115200`) |
 | `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the left nozzle may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60). Jogs (once zeroed) and prints that would leave it are refused. |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |

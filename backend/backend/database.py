@@ -13,7 +13,7 @@ from backend.logs import data_dir
 def _default_db_path() -> Path:
     """Put the database in a writable location (not inside the frozen bundle)."""
     if getattr(sys, "frozen", False):
-        # Bundled app: the app data folder (~/Library/Application Support/Octaris/)
+        # Bundled app: the platform's app data folder (see logs.data_dir)
         app_data = data_dir()
         app_data.mkdir(parents=True, exist_ok=True)
         return app_data / "octaris_log.db"

@@ -1,14 +1,15 @@
 import logging
+import signal
 import sqlite3
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
-from backend import virtual_printer
+from backend import slicer, virtual_printer
 from backend.auth import get_token, token_is_valid
 from backend.config import Config, load_config
 from backend.database import init_db
@@ -85,6 +86,7 @@ async def lifespan(app: FastAPI):
         logger.warning("OCTARIS_TOKEN is not set — request authentication is disabled (dev mode)")
     wire(app, load_config(), init_db())
     yield
+    await slicer.stop_slicing()
     if app.state.serial_manager.is_connected:
         await app.state.serial_manager.disconnect()
     await app.state.temperature.close()
@@ -176,7 +178,37 @@ async def health():
     return {"status": "ok"}
 
 
+def request_exit(app: FastAPI) -> None:
+    """Make uvicorn shut down: the lifespan's cleanup runs, then the process exits."""
+    server = getattr(app.state, "uvicorn_server", None)
+    if server is not None:
+        server.should_exit = True
+    else:
+        # Started by the uvicorn CLI (dev): stop it the way Ctrl+C does
+        signal.raise_signal(signal.SIGINT)
+
+
+@app.post("/shutdown", include_in_schema=False)
+async def shutdown(request: Request, background: BackgroundTasks):
+    """Close the serial port, stop slicing, and exit once the reply is sent.
+
+    Electron calls this when it quits, on every platform (Windows has no
+    SIGTERM to ask a process to stop). Not in the schema: the renderer
+    never calls it.
+    """
+    logger.info("Shutdown requested")
+    await slicer.stop_slicing()
+    if request.app.state.serial_manager.is_connected:
+        await request.app.state.serial_manager.disconnect()
+    background.add_task(request_exit, request.app)
+    return {"status": "shutting down"}
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Our own Server rather than uvicorn.run(), so /shutdown can stop it. Open
+    # WebSockets get a few seconds to close before uvicorn gives up on them.
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=8000, timeout_graceful_shutdown=3))
+    app.state.uvicorn_server = server
+    server.run()

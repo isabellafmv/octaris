@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import platform
 import sys
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
+
+Target = Literal["macos", "rpi", "windows"]
 
 
 def get_project_root() -> Path:
@@ -19,6 +22,16 @@ def get_project_root() -> Path:
 
 
 PROJECT_ROOT = get_project_root()
+
+
+def default_target() -> Target:
+    """The target for the OS this runs on, used when config.json doesn't set one."""
+    system = platform.system()
+    if system == "Windows":
+        return "windows"
+    if system == "Linux":
+        return "rpi"
+    return "macos"
 
 
 class AxisRange(BaseModel):
@@ -80,7 +93,7 @@ class TemperatureConfig(BaseModel):
 
 
 class Config(BaseModel):
-    target: Literal["macos", "rpi"] = "macos"
+    target: Target = Field(default_factory=default_target)
     touch_mode: bool = False
     baud_rate: int = 115200
     # After an e-stop, pull the plunger(s) back by pressurize_mm to stop oozing

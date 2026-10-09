@@ -21,6 +21,23 @@ def test_list_ports_returns_list():
         assert ports[0]["device"] == "/dev/cu.usbmodem1234"
 
 
+def test_list_ports_on_windows_picks_the_stm32_board():
+    def port(device, description, vid=None):
+        return MagicMock(device=device, description=description, vid=vid)
+
+    with (
+        patch("backend.serial_manager.serial.tools.list_ports.comports") as mock_comports,
+        patch("backend.serial_manager.platform.system", return_value="Windows"),
+    ):
+        mock_comports.return_value = [
+            port("COM1", "Communications Port (COM1)"),
+            port("COM3", "USB Serial Device (COM3)", vid=0x0483),
+            port("COM4", "STMicroelectronics Virtual COM Port (COM4)"),
+            port("COM5", "USB Serial Device (COM5)", vid=0x2341),
+        ]
+        assert [p["device"] for p in SerialManager.list_ports()] == ["COM3", "COM4"]
+
+
 async def test_connect_failure_raises():
     manager = SerialManager()
     with (

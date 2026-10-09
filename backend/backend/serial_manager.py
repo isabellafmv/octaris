@@ -38,6 +38,9 @@ RECONNECT_DELAY_S = 2.0
 SERIAL_TIMEOUT_S = 1.0
 # Overall time to wait for "ok"/"error" after sending a command.
 REPLY_DEADLINE_S = 60.0
+# The printer's board (STMicroelectronics), as listed on Windows
+STM32_VENDOR_ID = 0x0483
+STM32_DESCRIPTIONS = ("STMicroelectronics", "STM32")
 # Commands that can legitimately block for minutes (homing, dwell, drain the
 # move buffer, wait for temperature).
 SLOW_COMMANDS = frozenset({"G28", "G4", "M400", "M109", "M190"})
@@ -704,5 +707,13 @@ def _hardware_ports() -> list[dict[str, str]]:
             {"device": p.device, "description": p.description}
             for p in ports
             if "ttyUSB" in p.device or "ttyACM" in p.device
+        ]
+    if system == "Windows":
+        # Every port is a COMn, so pick the board by its USB vendor ID, or by
+        # the name the driver gives it when the vendor ID isn't reported.
+        return [
+            {"device": p.device, "description": p.description}
+            for p in ports
+            if p.vid == STM32_VENDOR_ID or any(word in (p.description or "") for word in STM32_DESCRIPTIONS)
         ]
     return [{"device": p.device, "description": p.description} for p in ports]
