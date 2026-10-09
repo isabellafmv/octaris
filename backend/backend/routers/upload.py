@@ -12,6 +12,8 @@ from backend.slicer import PrintSettings, SlicingError
 router = APIRouter()
 
 ACCEPTED_MODEL_EXTENSIONS = (".stl", ".3mf")
+# Plain text G-code (.txt) is read exactly like .gcode
+ACCEPTED_GCODE_EXTENSIONS = (".gcode", ".gco", ".txt")
 SYRINGE_MODES = ("left", "right", "both")
 
 
@@ -29,6 +31,7 @@ def _upload_result(filename: str, gcode: ProcessedGcode) -> UploadResult:
         time_estimate_s=gcode.time_estimate_s,
         feed_log_entries=len(gcode.feed_log),
         preview_lines=gcode.lines[:40],
+        warnings=gcode.warnings,
     )
 
 
@@ -42,6 +45,7 @@ async def upload_model(
     pressurize_mm: float | None = None,
     flow_multiplier: float | None = None,
     travel_retract_multiplier: float | None = None,
+    print_speed: float | None = None,
     session: PrinterSession = Depends(get_session),
 ):
     if not file.filename or not file.filename.lower().endswith(ACCEPTED_MODEL_EXTENSIONS):
@@ -55,8 +59,16 @@ async def upload_model(
         "pressurize_mm": pressurize_mm,
         "flow_multiplier": flow_multiplier,
         "travel_retract_multiplier": travel_retract_multiplier,
+        "print_speed": print_speed,
     }
     _check_positive(**settings)
+    max_feed = session.config.max_feed_mm_min
+    if print_speed is not None and print_speed * 60 > max_feed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Print speed {print_speed:g} mm/s is above the limit of {max_feed / 60:g} mm/s "
+            f"({max_feed:g} mm/min, max_feed_mm_min in config.json)",
+        )
 
     try:
         gcode = await session.load_model(
@@ -71,16 +83,20 @@ async def upload_model(
 
 @router.post("/upload/gcode", response_model=UploadResult)
 async def upload_gcode(
-    file: UploadFile, syringe_mode: str = "left", session: PrinterSession = Depends(get_session)
+    file: UploadFile,
+    syringe_mode: str = "left",
+    # False: sent exactly as uploaded, only checked (see check_as_uploaded)
+    needs_changes: bool = True,
+    session: PrinterSession = Depends(get_session),
 ):
-    if not file.filename or not file.filename.lower().endswith((".gcode", ".gco")):
-        raise HTTPException(status_code=400, detail="Only .gcode files are accepted")
+    if not file.filename or not file.filename.lower().endswith(ACCEPTED_GCODE_EXTENSIONS):
+        raise HTTPException(status_code=400, detail="Only .gcode and .txt files are accepted")
     if syringe_mode not in SYRINGE_MODES:
         raise HTTPException(status_code=400, detail="Invalid syringe_mode")
 
     raw = (await file.read()).decode("utf-8", errors="replace")
     try:
-        gcode = session.load_gcode(file.filename, raw, cast(SyringeMode, syringe_mode))
+        gcode = session.load_gcode(file.filename, raw, cast(SyringeMode, syringe_mode), needs_changes)
     except (GcodeValidationError, LimitError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _upload_result(file.filename, gcode)

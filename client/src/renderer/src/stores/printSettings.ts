@@ -28,6 +28,7 @@ export const usePrintSettings = create<PrintSettingsState>()((set) => ({
   pressurizeMm: '',
   flowMultiplier: '',
   travelRetractMultiplier: '3',
+  printSpeed: '5',
   jogStep: 5,
   nordsonGauge: null,
   selectNordsonTip: (tip) =>
@@ -49,6 +50,7 @@ export function sliceOptions(settings: PrintParameters): SliceOptions {
     layerHeight: num(settings.layerHeight),
     pressurizeMm: num(settings.pressurizeMm),
     flowMultiplier: num(settings.flowMultiplier),
-    travelRetractMultiplier: num(settings.travelRetractMultiplier)
+    travelRetractMultiplier: num(settings.travelRetractMultiplier),
+    printSpeed: num(settings.printSpeed)
   }
 }

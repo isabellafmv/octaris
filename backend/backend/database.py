@@ -66,6 +66,7 @@ _SESSION_COLUMNS = {
     "pressurize_mm": "REAL",
     "flow_multiplier": "REAL",
     "travel_retract_multiplier": "REAL",
+    "print_speed": "REAL",  # mm/s
     "source": "TEXT CHECK (source IN ('stl', 'gcode'))",
     "end_reason": "TEXT CHECK (end_reason IN ('completed', 'stopped', 'estop', 'error'))",
     "resume_line": "INTEGER",
@@ -80,6 +81,7 @@ PRINT_SETTING_KEYS = (
     "pressurize_mm",
     "flow_multiplier",
     "travel_retract_multiplier",
+    "print_speed",
 )
 
 END_REASONS = ("completed", "stopped", "estop", "error")
