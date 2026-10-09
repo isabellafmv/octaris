@@ -15,6 +15,7 @@ from backend.gcode_processor import (
     render,
     scale_flow,
     substitute_extrusion,
+    to_relative,
     trim_to_print,
     validate,
 )
@@ -47,8 +48,13 @@ def test_trim_drops_start_code():
         "G1 F200 X20 Y10 E0.5",
     ]
     result = run(trim_to_print, lines)
-    assert result[0] == "G0 F600 X10 Y10 Z0.3"
-    assert len(result) == 2
+    # The modes in effect at the start are kept, Marlin's defaults if unset.
+    assert result == ["G90", "M82 ;absolute extrusion mode", *lines[-2:]]
+
+
+def test_trim_keeps_cura_relative_extrusion_mode():
+    lines = ["M83 ;relative extrusion mode", "G92 E0", "G0 F600 X10 Y10 Z0.3", "G1 X20 E0.5"]
+    assert run(trim_to_print, lines) == ["G90", "M83 ;relative extrusion mode", *lines[2:]]
 
 
 def test_trim_drops_end_code():
@@ -67,8 +73,7 @@ def test_trim_drops_end_code():
         ";End of Gcode",
     ]
     result = run(trim_to_print, lines)
-    assert len(result) == 1
-    assert result[0] == "G1 F200 X10 Y10 E4.0"
+    assert result == ["G90", "M82", "G1 F200 X10 Y10 E4.0"]
 
 
 def test_substitute_extrusion_left():
@@ -130,7 +135,8 @@ def test_clamp_feed_rates_no_change():
 def test_build_preamble_left():
     preamble = build_preamble("left")
     non_comment = [line for line in preamble if not line.strip().startswith(";")]
-    assert non_comment[0] == "G90"
+    assert non_comment[0] == "G91"
+    assert "G90" not in preamble
     joined = "".join(preamble)
     assert "B-0.2" in joined  # B pressurizes in negative direction
     assert "G92 B0" in joined  # reset after pressurization
@@ -159,7 +165,7 @@ def test_build_footer_right():
 def test_validate_passes():
     lines = [
         "; Octaris — preamble",
-        "G90 ; absolute positioning",
+        "G91 ; relative positioning",
         "G1 X10 B0.5 F200",
     ]
     validate(parse(lines))  # should not raise
@@ -168,7 +174,7 @@ def test_validate_passes():
 def test_validate_fails_leftover_e():
     lines = [
         "; Octaris — preamble",
-        "G90 ; absolute positioning",
+        "G91 ; relative positioning",
         "G1 X10 E0.5 F200",
     ]
     with pytest.raises(GcodeValidationError, match="Unsubstituted E command"):
@@ -178,16 +184,23 @@ def test_validate_fails_leftover_e():
 def test_validate_fails_high_f():
     lines = [
         "; Octaris — preamble",
-        "G90 ; absolute positioning",
+        "G91 ; relative positioning",
         "G1 X10 B0.5 F600",
     ]
     with pytest.raises(GcodeValidationError, match="exceeds 400"):
         validate(parse(lines))
 
 
-def test_validate_fails_no_g90():
-    lines = ["G91", "G1 X10"]
-    with pytest.raises(GcodeValidationError, match="G90"):
+def test_validate_fails_no_g91():
+    lines = ["G90", "G1 X10"]
+    with pytest.raises(GcodeValidationError, match="must start with G91"):
+        validate(parse(lines))
+
+
+@pytest.mark.parametrize("absolute", ["G90", "G53"])
+def test_validate_rejects_absolute_moves_after_the_start(absolute):
+    lines = ["G91", "G1 X10", absolute, "G1 X0"]
+    with pytest.raises(GcodeValidationError, match=f"Line 3: {absolute} .* must stay relative"):
         validate(parse(lines))
 
 
@@ -241,9 +254,11 @@ def test_process_gcode_integration():
 
     assert result.time_estimate_s == 847
 
-    # Preamble should start with G90
+    # Relative from the first line on, and never absolute again
     non_comment = [line for line in result.lines if not line.strip().startswith(";")]
-    assert non_comment[0].startswith("G90")
+    assert non_comment[0].startswith("G91")
+    assert not any(line.startswith(("G90", "G92")) for line in non_comment)
+    assert result.start_position == {"X": 0, "Y": 0, "Z": 0}
 
     # No E commands should remain
     for line in result.lines:
@@ -263,9 +278,9 @@ def test_process_gcode_integration():
             break
     assert found_b, "No negative B substitution found"
 
-    # Footer should return to origin
-    last_lines = "\n".join(result.lines[-5:])
-    assert "X0 Y0" in last_lines
+    # Footer should return to origin: back from where the print ended
+    assert result.lines[-1] == "G1 X-10 Y-10 F300 ; return to origin"
+    assert result.state_after[-1].pos["X"] == result.state_after[-1].pos["Y"] == 0
 
 
 def test_process_gcode_right():
@@ -398,7 +413,7 @@ def test_numbers_without_leading_zero():
     result = run(substitute_extrusion, ["G1 X-.5 Y1 E.01234 F200"], "right")
     assert result == ["G1 X30.5 Y1 C-0.01234 F200"]
     with pytest.raises(GcodeValidationError, match="Unsubstituted E"):
-        validate(parse(["G90", "G1 X1 E.5"]))
+        validate(parse(["G91", "G1 X1 E.5"]))
 
 
 def test_trim_drops_any_end_code_after_the_last_move():
@@ -409,7 +424,7 @@ def test_trim_drops_any_end_code_after_the_last_move():
         "M82 ;absolute extrusion mode",
         ";End of Gcode",
     ]
-    assert run(trim_to_print, lines) == lines[:2]
+    assert run(trim_to_print, lines) == ["G90", "M82", *lines[:2]]
 
 
 def test_unchanged_lines_are_written_back_verbatim():
@@ -422,3 +437,136 @@ def test_scale_flow():
     assert scale_flow("G1 B-0.2 F400 ; pressurize B", 0.5) == "G1 B-0.1 F400 ; pressurize B"
     assert scale_flow("G1 X1 Y1", 0.5) == "G1 X1 Y1"
     assert scale_flow("G1 B-1.5", 1.0) == "G1 B-1.5"
+    # Fixed point, never an exponent Marlin can't read, and no digits lost
+    assert scale_flow("G1 X1 B-0.00005", 0.8) == "G1 X1 B-0.00004"
+    assert scale_flow("G1 X1 B-10.55675", 1.5) == "G1 X1 B-15.835125"
+    # Only moves: a coordinate reset or a setting isn't a distance to push
+    assert scale_flow("G92 B-4", 0.5) == "G92 B-4"
+    assert scale_flow("M92 B800", 0.5) == "M92 B800"
+
+
+# --- relative conversion -----------------------------------------------------------
+
+
+def test_to_relative_writes_distances_behind_one_g91():
+    lines = ["G90", "M82", "G0 F300 X10 Y10 Z0.3", "G1 X20 Y10 B-0.5 F200", "G1 X20.25 Y5 B-0.75"]
+    assert run(to_relative, lines) == [
+        "G91 ; relative positioning for the whole print",
+        "G0 F300 X10 Y10 Z0.3",
+        "G1 X10 B-0.5 F200",  # unchanged axes are left out
+        "G1 X0.25 Y-5 B-0.25",
+    ]
+
+
+def test_to_relative_follows_the_programs_modes():
+    lines = [
+        "G90",
+        "M83",  # B carries relative E
+        "G1 X5 B-0.5",
+        "G1 X6 B-0.5",
+        "G91",  # everything relative
+        "G1 X1 B0.2",
+        "G90",  # positioning absolute again; B stays relative (M83)
+        "G1 X10 B-0.2",
+        "M82",
+        "G92 B0",  # absolute B, counted from here
+        "G1 X11 B-1",
+        "G92 X0",  # X renumbered: the next X2 is 2 mm on
+        "G1 X2",
+    ]
+    assert run(to_relative, lines) == [
+        "G91 ; relative positioning for the whole print",
+        "G1 X5 B-0.5",
+        "G1 X1 B-0.5",
+        "G1 X1 B0.2",
+        "G1 X3 B-0.2",
+        "G1 X1 B-1",
+        "G1 X2",
+    ]
+
+
+def test_to_relative_starts_from_the_given_position():
+    assert run(to_relative, ["G90", "G1 X10 Y10"], {"X": 4, "Y": 0}) == [
+        "G91 ; relative positioning for the whole print",
+        "G1 X6 Y10",
+    ]
+
+
+def test_to_relative_rounding_never_accumulates():
+    # 1000 steps of 0.0004 mm: each one rounds to 0 on its own, but the
+    # absolute targets they reach don't, and those are what's written.
+    lines = ["G91", *["G1 X0.0004"] * 1000, "G1 B-0.000004"]
+    moves = run(to_relative, lines)[1:]
+    assert sum(float(line.split("X")[1]) for line in moves if "X" in line) == pytest.approx(0.4)
+    assert len(moves) == 400  # one 0.001 move each time the target rounds up; B rounds to 0
+
+
+def test_to_relative_drops_moves_that_go_nowhere():
+    lines = ["G90", "G1 X1 Y1", "G1 X1 ; same place", "G1 Y1", "G1 X1 F200"]
+    assert run(to_relative, lines) == [
+        "G91 ; relative positioning for the whole print",
+        "G1 X1 Y1",
+        "; same place",
+        "G1 F200",  # keeps the feed rate it sets
+    ]
+
+
+def test_to_relative_rejects_homing():
+    with pytest.raises(GcodeValidationError, match="Homing"):
+        to_relative(parse(["G90", "G1 X1", "G28 X"]))
+
+
+def test_relative_extrusion_file_converts_like_absolute_one():
+    """Cura with relative_extrusion writes M83 and per-move E; the same
+    model with absolute E must give the same program."""
+    absolute = (FIXTURES / "raw_sample.gcode").read_text()
+    previous = 0.0
+    relative_lines = []
+    for line in absolute.splitlines():
+        if line.startswith("M82"):
+            line = "M83 ;relative extrusion mode"
+        elif line.startswith("G92 E"):
+            previous = float(line.split("E")[1])
+            continue  # nothing to reset with relative E
+        elif " E" in line and line.startswith("G1"):
+            head, e = line.split(" E")
+            e_abs = float(e.split()[0])
+            line, previous = f"{head} E{e_abs - previous:.5f}", e_abs
+        relative_lines.append(line)
+
+    assert process_gcode("\n".join(relative_lines), "left").lines == process_gcode(absolute, "left").lines
+
+
+def test_right_nozzle_offset_is_in_the_first_move():
+    result = process_gcode((FIXTURES / "raw_sample.gcode").read_text(), "right")
+    first_move = next(line for line in result.lines if line.startswith("G0"))
+    assert first_move == "G0 F400 X41 Y10 Z0.3"  # X10 + the 31 mm offset, from the zero point
+    assert result.start_position == {"X": 0, "Y": 0, "Z": 0}
+
+
+LAB_FILE = """; lab file
+G91
+G1 X5 Y5 B-0.5 F200 ; first
+G92 B0
+
+G1 X5 B-0.5 F200"""
+
+
+def test_lab_relative_file_is_kept_as_it_is():
+    result = process_gcode(LAB_FILE, "right")
+    assert result.lines == LAB_FILE.splitlines()
+    assert result.start_position is None  # starts wherever the head is
+    assert result.extrusion_axes == ("B",)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "G90\nG1 X5 B-0.5",  # absolute
+        "G1 X5 B-0.5\nG91\nG1 X5",  # a move before the G91
+        "G91\nG1 X5 E0.5",  # slicer E, not substituted yet
+        "G91\nG1 X5\nG90\nG1 X0",  # switches back
+    ],
+)
+def test_other_files_are_converted(raw):
+    assert process_gcode(raw, "left").lines != raw.splitlines()

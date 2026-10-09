@@ -163,9 +163,14 @@ class QueueWorker:
         # Set exactly while the state is STOPPED_RESUMABLE
         self._checkpoint: Checkpoint | None = None
         self._stop_reason: str | None = None  # why the last stop can't be resumed
-        # A manual command was sent while paused: the print's position and
-        # modes are restored before its next line goes out.
+        # A manual command was sent while paused: the print's feedrate and
+        # mode are restored before its next line goes out.
         self._restore_needed = False
+        # Where the printer was when the print was paused (M114), read by
+        # _pause_reading. On resume, a head moved since is brought back there
+        # first: in a relative print, any offset would shift all that follows.
+        self._paused_at: dict[str, float] | None = None
+        self._pause_reading: asyncio.Task | None = None
         self._task: asyncio.Task | None = None
         self._on_event = on_event
         self._flow_rate: float = 100.0  # percentage, same semantics as M221
@@ -289,6 +294,7 @@ class QueueWorker:
         self._next = 0
         self._tracker.reset()
         self._restore_needed = False
+        self._forget_pause_position()
         self._time_estimate_s = time_estimate_s
         self._extrusion_axes = tuple(extrusion_axes)
         self._retract_mm = pressurize_mm
@@ -339,11 +345,31 @@ class QueueWorker:
 
     def pause(self) -> None:
         self._transition(PAUSED)
+        # Read where the printer is, in the background: the M114 queues
+        # behind the line in flight (which may wait for a whole move to make
+        # room in the planner), but ahead of anything sent after the pause.
+        self._paused_at = None
+        self._pause_reading = asyncio.create_task(self._read_pause_position())
+
+    async def _read_pause_position(self) -> None:
+        reading = asyncio.current_task()
+        try:
+            reply = await self._serial.send("M114")
+        except SerialError as exc:
+            logger.error("Couldn't read the position at the pause: %s", exc)
+            return
+        if self._pause_reading is reading:  # not a pause since forgotten
+            self._paused_at = parse_m114(reply)
+            logger.info("Paused at %s", self._paused_at)
+
+    def _forget_pause_position(self) -> None:
+        self._pause_reading = None
+        self._paused_at = None
 
     def manual_command(self) -> None:
-        """A manual command is about to be sent. During a pause, it may move
-        the printer or change its feedrate or distance mode, so those are
-        restored before the print continues."""
+        """A manual command is about to be sent. During a pause, it may
+        change the printer's feedrate or distance mode without moving it, so
+        those are restored before the print continues."""
         if self._state == PAUSED:
             self._restore_needed = True
 
@@ -395,6 +421,7 @@ class QueueWorker:
         if self._state not in (STOPPED, STOPPED_RESUMABLE):
             self._transition(STOPPED)  # the worker won't send another line
         self.flush_priority()
+        self._forget_pause_position()  # a resume now starts from the stop
         try:
             await self._serial.emergency_write("M410")
         except SerialError:
@@ -447,8 +474,10 @@ class QueueWorker:
         if self._retract_on_estop and axes and self._retract_mm > 0:
             # Plungers extrude in the negative direction, so retract is positive.
             move = " ".join(f"{axis}{fmt(self._retract_mm)}" for axis in axes)
+            # The print's own mode is left in place (G91 for any print).
+            restore = [] if self._tracker.state.relative else ["G90"]
             try:
-                await self._serial.send_lines(["G91", f"G1 {move} F{PRESSURIZE_FEED}", "G90"])
+                await self._serial.send_lines(["G91", f"G1 {move} F{PRESSURIZE_FEED}", *restore])
             except SerialError as exc:
                 self._not_resumable(f"Retracting the plungers failed: {exc}")
                 return
@@ -470,7 +499,12 @@ class QueueWorker:
         if self._state != STOPPED_RESUMABLE or checkpoint is None:
             raise NotResumable(self._stop_reason or "No stopped print to resume")
         await self.wait_until_sent()
-        await self._serial.send_lines(build_resume_commands(checkpoint))
+        # Where the head is now: the stage may have been jogged since the stop.
+        [reply] = await self._serial.send_lines(["M114"])
+        position = parse_m114(reply)
+        if position is None:
+            raise SerialError(f"Couldn't parse the printer position from {reply!r}")
+        await self._serial.send_lines(build_resume_commands(checkpoint, position))
         if self._checkpoint is not checkpoint:
             # Invalidated while the return moves were being sent
             raise NotResumable(self._stop_reason or "The checkpoint was invalidated")
@@ -478,6 +512,7 @@ class QueueWorker:
         # The tracker continues from where the resume commands actually left
         # the machine — the checkpoint's as-sent after-state.
         self._tracker.resume_at(checkpoint.line, checkpoint.after)
+        self._forget_pause_position()
         self._next = checkpoint.line + 1
         self._transition(PRINTING)
         self._emit(PrintResumedEvent())
@@ -599,8 +634,12 @@ class QueueWorker:
                 if self._state not in ACTIVE:
                     break
 
-                if self._restore_needed:
-                    await self._restore_after_pause()
+                if self._pause_reading is not None:
+                    await self._pause_reading  # where it was paused, usually long known
+                    self._pause_reading = None
+                    continue
+                if self._paused_at is not None or self._restore_needed:
+                    await self._return_after_pause()
                     continue  # paused or stopped meanwhile, or failed: look again
 
                 if self._next >= len(self._lines):
@@ -636,17 +675,21 @@ class QueueWorker:
                 len(self._lines),
             )
 
-    async def _restore_after_pause(self) -> None:
-        """Bring the printer back to where the print left off, after manual
-        commands during a pause (see build_return_commands). If that fails,
-        the print is paused again, to retry on the next resume."""
+    async def _return_after_pause(self) -> None:
+        """Bring the printer back to where the print was paused, if it was
+        moved since, and restore what manual commands may have changed (see
+        build_return_commands). If that fails, the print is paused again, to
+        retry on the next resume."""
         try:
             replies = await self._serial.send_lines(["M400", "M114"])
             position = parse_m114(replies[1])
             if position is None:
                 raise ValueError(f"couldn't parse the printer position from {replies[1]!r}")
-            commands = build_return_commands(position, self._tracker.state)
-            await self._serial.send_lines(commands)
+            commands = build_return_commands(
+                position, self._paused_at, self._tracker.state, restore_modes=self._restore_needed
+            )
+            if commands:
+                await self._serial.send_lines(commands)
         except (SerialError, ValueError) as exc:
             logger.error("Returning to the print after manual commands failed: %s", exc)
             if self._state == PRINTING:
@@ -658,7 +701,9 @@ class QueueWorker:
             )
             return
         self._restore_needed = False
-        logger.info("Returned to the print after manual commands: %s", commands)
+        self._forget_pause_position()
+        if commands:
+            logger.info("Returned to where the print was paused: %s", commands)
 
     def _emit_progress(self) -> None:
         total = len(self._lines)
