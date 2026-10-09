@@ -42,6 +42,16 @@ function ArrowButton({
   )
 }
 
+// Each nozzle has its own height motor: Z for the left one, A for the right
+function HeightAxisLabel({ axis, nozzle }: { axis: string; nozzle: string }): React.JSX.Element {
+  return (
+    <div className="w-16 h-16 rounded-full flex flex-col items-center justify-center text-text-muted">
+      <span className="text-xs font-semibold tracking-widest">{axis}</span>
+      <span className="text-[9px]">{nozzle}</span>
+    </div>
+  )
+}
+
 export function JogPanel({
   syringeMode,
   disabled: panelDisabled
@@ -232,9 +242,7 @@ export function JogPanel({
             </svg>
           </ArrowButton>
 
-          <div className="w-16 h-16 rounded-full flex items-center justify-center text-xs font-semibold tracking-widest text-text-muted">
-            Z
-          </div>
+          <HeightAxisLabel axis="Z" nozzle="left" />
 
           <ArrowButton
             label="Z-"
@@ -256,8 +264,8 @@ export function JogPanel({
           </ArrowButton>
         </div>
 
-        {/* A axis — only in dual syringe mode */}
-        {syringeMode === 'both' && (
+        {/* A axis — the right nozzle's height, whenever it prints */}
+        {(syringeMode === 'right' || syringeMode === 'both') && (
           <div className="flex flex-col items-center gap-2">
             <ArrowButton
               label="A+"
@@ -278,9 +286,7 @@ export function JogPanel({
               </svg>
             </ArrowButton>
 
-            <div className="w-16 h-16 rounded-full flex items-center justify-center text-xs font-semibold tracking-widest text-text-muted">
-              A
-            </div>
+            <HeightAxisLabel axis="A" nozzle="right" />
 
             <ArrowButton
               label="A-"

@@ -85,6 +85,13 @@ class TemperatureStatus(BaseModel):
     sensors: list[SensorReading]
 
 
+class NozzleCalibration(BaseModel):
+    """Which nozzles are zeroed: X/Y and the nozzle's own height (Z left, A right)."""
+
+    left: bool
+    right: bool
+
+
 class Snapshot(BaseModel):
     """Current connection and print state."""
 
@@ -93,7 +100,9 @@ class Snapshot(BaseModel):
     print_status: PrintStatus
     lines_sent: int
     lines_total: int
+    # Every nozzle of the current syringe mode is zeroed
     calibrated: bool
+    calibrated_nozzles: NozzleCalibration
     flow_rate: float
     resumable: bool
     stop_reason: str | None
@@ -167,6 +176,24 @@ class TemperatureStatusEvent(Event, TemperatureStatus):
     type: Literal["temperature_status"] = "temperature_status"
 
 
+class TemperatureWaitSensor(BaseModel):
+    sensor: str
+    name: str
+    actual: float
+    target: float
+    stable_s: float  # how long it has been within target_band_c of its target
+
+
+class TemperatureWaitEvent(Event):
+    """Sent about once a second while a print waits for its temperatures,
+    and once with waiting=False when it stops waiting (reached or stopped)."""
+
+    type: Literal["temperature_wait"] = "temperature_wait"
+    waiting: bool
+    settle_s: float  # how long each target has to hold
+    sensors: list[TemperatureWaitSensor]
+
+
 class PrinterEvent(Event):
     type: Literal["printer"] = "printer"
     connected: bool
@@ -174,8 +201,11 @@ class PrinterEvent(Event):
 
 
 class CalibrationEvent(Event):
+    """value: every nozzle of the current syringe mode is zeroed."""
+
     type: Literal["calibration"] = "calibration"
     value: Literal["calibrated", "uncalibrated"]
+    nozzles: NozzleCalibration
 
 
 class PrintEndEvent(Event):
@@ -203,6 +233,7 @@ WsEvent = Annotated[
     | SerialLogEvent
     | TemperatureEvent
     | TemperatureStatusEvent
+    | TemperatureWaitEvent
     | PrinterEvent
     | CalibrationEvent
     | PrintEndEvent
@@ -238,11 +269,15 @@ class DisconnectResponse(BaseModel):
 
 class CalibrationStatusResponse(BaseModel):
     calibrated: bool
+    nozzles: NozzleCalibration
 
 
 class CalibrateResponse(BaseModel):
-    status: Literal["calibrated"]
+    # The G92 sent, and the calibration after it: in both mode, calibrated
+    # only once the second (right nozzle) step is done too.
     command: str
+    calibrated: bool
+    nozzles: NozzleCalibration
 
 
 class CalibrationResetResponse(BaseModel):
@@ -256,6 +291,12 @@ class UploadResult(BaseModel):
     time_estimate_s: int | None
     feed_log_entries: int
     preview_lines: list[str]
+
+
+class PrintStartRequest(BaseModel):
+    # Hold the print until every sensor with a target has stayed within
+    # temperature.target_band_c of it for temperature.settle_s
+    wait_for_temperature: bool = False
 
 
 class PrintStartResponse(BaseModel):

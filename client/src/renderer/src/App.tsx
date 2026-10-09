@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { SetupScreen } from './screens/SetupScreen'
 import { PrintScreen } from './screens/PrintScreen'
 import { TakeOverScreen } from './screens/TakeOverScreen'
+import { TemperatureScreen } from './screens/TemperatureScreen'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useScreenNavigation, type Screen } from './hooks/useScreenNavigation'
 import { Sidebar } from './components/Sidebar'
@@ -10,6 +11,7 @@ import { api } from './api'
 const screenTitles: Record<Screen, string> = {
   setup: 'Setup',
   print: 'Monitoring',
+  temperature: 'Temperature',
   takeover: 'Manual Control'
 }
 
@@ -110,7 +112,7 @@ function App(): React.JSX.Element {
             <SetupScreen
               printerConnected={printerConnected}
               port={ws.port}
-              calibrated={ws.calibrated}
+              calibratedNozzles={ws.calibratedNozzles}
               printStatus={ws.status}
               onStartPrint={handleStartPrint}
               externalError={startError}
@@ -130,6 +132,8 @@ function App(): React.JSX.Element {
               printError={ws.lastError}
               stopInfo={ws.stopInfo}
             />
+          ) : screen === 'temperature' ? (
+            <TemperatureScreen printerConnected={printerConnected} lastError={ws.lastError} />
           ) : (
             <TakeOverScreen
               printerConnected={printerConnected}

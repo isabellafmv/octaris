@@ -88,7 +88,7 @@ async def wait_for(condition, timeout: float = 3.0) -> None:
 async def printer(client):
     fake = FakePrinter()
     attach(app.state.serial_manager, fake)
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     return fake
 
 
@@ -174,7 +174,7 @@ async def test_serial_error_when_idle_reconnects_without_resending():
 
 
 async def test_connection_lost_mid_print_stops_for_good(client, printer, events):
-    printer.drop_on = "G1 F200 X20 Y20 B-1"
+    printer.drop_on = "G1 F200 Y10 B-0.5"
     assert (await upload_sample(client)).status_code == 200
     events()  # discard upload events
     worker = app.state.queue_worker
@@ -192,7 +192,11 @@ async def test_connection_lost_mid_print_stops_for_good(client, printer, events)
     published = events()
     assert {"type": "status", "value": "stopped"} in published
     assert {"type": "printer", "connected": False, "port": None} in published
-    assert {"type": "calibration", "value": "uncalibrated"} in published
+    assert {
+        "type": "calibration",
+        "value": "uncalibrated",
+        "nozzles": {"left": False, "right": False},
+    } in published
     assert {"type": "stop", "resumable": False, "reason": CONNECTION_LOST} in published
 
     [session] = (await client.get("/history")).json()["sessions"]
@@ -238,7 +242,11 @@ async def test_idle_reconnect_resets_calibration(client, printer, events):
     # (Ignoring serial log entries, e.g. the M155 sent after reconnecting,
     # and the temperature status, which also follows the reconnect.)
     published = [e for e in published if e["type"] not in ("serial_log", "temperature_status")]
-    assert published[-1] == {"type": "calibration", "value": "uncalibrated"}
+    assert published[-1] == {
+        "type": "calibration",
+        "value": "uncalibrated",
+        "nozzles": {"left": False, "right": False},
+    }
 
 
 @pytest.mark.parametrize(
@@ -258,7 +266,7 @@ async def test_port_changes_refused_during_print(client, printer, route, body):
 
 
 async def test_manual_connect_resets_calibration(client):
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     with patch("backend.serial_manager.serial.Serial", return_value=FakePrinter()):
         assert (await client.post("/connect", json={"port": "/dev/fake"})).status_code == 200
     assert app.state.session.calibrated is False
@@ -371,7 +379,7 @@ async def test_jog_seeds_unknown_position_from_m114(client, printer):
 
 
 async def test_jog_unlimited_before_calibration(client, printer):
-    app.state.session.calibrated = False
+    app.state.session.zeroed = set()
 
     resp = await client.post("/jog", json={"axis": "X", "distance": 100})
 

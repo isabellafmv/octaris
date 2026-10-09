@@ -1,7 +1,8 @@
 """Log files: the backend's own rotating log, and one serial traffic file per print.
 
-Both live in the app data folder (~/Library/Application Support/Octaris/logs
-on macOS), or under OCTARIS_DATA_DIR if that is set.
+Both live in the platform's app data folder (from platformdirs:
+~/Library/Application Support/Octaris on macOS, %LOCALAPPDATA%\\Octaris on
+Windows, ~/.local/share/Octaris on Linux), or under OCTARIS_DATA_DIR if set.
 """
 
 from __future__ import annotations

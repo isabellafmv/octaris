@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSerialLog } from '../stores/serialLog'
-import type { PrintStatus, StopInfo, WsEvent } from '../types'
+import { useTemperature } from '../stores/temperature'
+import { NO_NOZZLES } from '../screens/setup/calibration'
+import type { NozzleCalibration, PrintStatus, StopInfo, WsEvent } from '../types'
 
 const WS_BASE_URL = 'ws://127.0.0.1:8000/ws'
 
@@ -23,7 +25,8 @@ interface PrintState {
   // Whether the backend currently has a serial connection to the printer.
   printerConnected: boolean
   port: string | null
-  calibrated: boolean
+  // Which nozzles are zeroed; whether that's enough depends on the syringe mode
+  calibratedNozzles: NozzleCalibration
   // id changes on every error event, so a repeated message is shown again
   lastError: { id: number; message: string } | null
   stopInfo: StopInfo
@@ -39,7 +42,7 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
     wsConnected: false,
     printerConnected: false,
     port: null,
-    calibrated: false,
+    calibratedNozzles: NO_NOZZLES,
     lastError: null,
     stopInfo: null
   })
@@ -64,6 +67,10 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
       // Serial lines go to their own store so they don't re-render the app
       if (data.type === 'serial_log') {
         if (data.entry) useSerialLog.getState().append(data.entry)
+        return
+      }
+      if (data.type === 'temperature_status') {
+        useTemperature.getState().applyStatus(data)
         return
       }
       setState((prev) => {
@@ -109,7 +116,7 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
               status: data.print_status,
               linesSent: data.lines_sent,
               linesTotal: data.lines_total,
-              calibrated: data.calibrated,
+              calibratedNozzles: data.calibrated_nozzles,
               extrusionRate: data.flow_rate,
               stopInfo:
                 data.print_status === 'stopped'
@@ -119,7 +126,7 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
             }
           }
           case 'calibration':
-            return { ...prev, calibrated: data.value === 'calibrated' }
+            return { ...prev, calibratedNozzles: data.nozzles }
           default:
             return prev
         }

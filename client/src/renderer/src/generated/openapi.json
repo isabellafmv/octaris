@@ -100,7 +100,7 @@
     "/calibration/status": {
       "get": {
         "summary": "Calibration Status",
-        "description": "Check whether the printer has been calibrated this session.",
+        "description": "Whether the printer is calibrated for the current syringe mode, and\nwhich nozzles are zeroed.",
         "operationId": "calibration_status_calibration_status_get",
         "responses": {
           "200": {
@@ -119,7 +119,7 @@
     "/calibration/zero": {
       "post": {
         "summary": "Calibrate Zero",
-        "description": "Set the current nozzle position as the origin.\n\nIMPORTANT: Always zero using the LEFT nozzle, even when printing with\nthe right nozzle or both. The software automatically applies the nozzle\noffset (NOZZLE_OFFSET_X) for the right nozzle.\n\nJog the LEFT nozzle to the center of the print area at the correct Z\nheight (~0.2 mm above surface) before calling this endpoint.",
+        "description": "Zero a nozzle where it is. X/Y are always set at the LEFT nozzle's\nposition over the print's start point; each nozzle's height with that\nnozzle lowered onto the bed (about 0.2 mm above the surface).\n\n- left mode: `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0\n- right mode: `nozzle: \"right\"` \u2192 G92 X0 Y0 A0 C0 (left nozzle over the\n  start point, right nozzle on the bed)\n- both mode, two steps: `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0, then lower the\n  right nozzle onto the bed and `nozzle: \"right\"` \u2192 G92 A0 C0\n\nThe right nozzle's X offset (NOZZLE_OFFSET_X) is applied in post-processing.",
         "operationId": "calibrate_zero_calibration_zero_post",
         "requestBody": {
           "content": {
@@ -381,6 +381,23 @@
       "post": {
         "summary": "Start Print",
         "operationId": "start_print_print_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PrintStartRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -388,6 +405,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PrintStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -926,42 +953,61 @@
       },
       "CalibrateRequest": {
         "properties": {
-          "zero_z": {
-            "type": "boolean",
-            "title": "Zero Z",
-            "default": true
+          "nozzle": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nozzle"
           },
-          "zero_b": {
-            "type": "boolean",
-            "title": "Zero B",
-            "default": true
-          },
-          "zero_c": {
-            "type": "boolean",
-            "title": "Zero C",
-            "default": false
+          "syringe_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "right",
+                  "both"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Syringe Mode"
           }
         },
         "type": "object",
         "title": "CalibrateRequest",
-        "description": "Optional overrides for the zeroing command."
+        "description": "Which nozzle to zero, for which syringe mode (default: the loaded\nprint's, or the last calibration's)."
       },
       "CalibrateResponse": {
         "properties": {
-          "status": {
-            "type": "string",
-            "const": "calibrated",
-            "title": "Status"
-          },
           "command": {
             "type": "string",
             "title": "Command"
+          },
+          "calibrated": {
+            "type": "boolean",
+            "title": "Calibrated"
+          },
+          "nozzles": {
+            "$ref": "#/components/schemas/NozzleCalibration"
           }
         },
         "type": "object",
         "required": [
-          "status",
-          "command"
+          "command",
+          "calibrated",
+          "nozzles"
         ],
         "title": "CalibrateResponse"
       },
@@ -984,11 +1030,15 @@
           "calibrated": {
             "type": "boolean",
             "title": "Calibrated"
+          },
+          "nozzles": {
+            "$ref": "#/components/schemas/NozzleCalibration"
           }
         },
         "type": "object",
         "required": [
-          "calibrated"
+          "calibrated",
+          "nozzles"
         ],
         "title": "CalibrationStatusResponse"
       },
@@ -1224,6 +1274,25 @@
           "distance"
         ],
         "title": "JogResponse"
+      },
+      "NozzleCalibration": {
+        "description": "Which nozzles are zeroed: X/Y and the nozzle's own height (Z left, A right).",
+        "properties": {
+          "left": {
+            "title": "Left",
+            "type": "boolean"
+          },
+          "right": {
+            "title": "Right",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "left",
+          "right"
+        ],
+        "title": "NozzleCalibration",
+        "type": "object"
       },
       "PauseResponse": {
         "properties": {
@@ -1461,6 +1530,17 @@
         "title": "PrintSession",
         "description": "One print in the history."
       },
+      "PrintStartRequest": {
+        "properties": {
+          "wait_for_temperature": {
+            "type": "boolean",
+            "title": "Wait For Temperature",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "PrintStartRequest"
+      },
       "PrintStartResponse": {
         "properties": {
           "status": {
@@ -1657,6 +1737,9 @@
             "type": "boolean",
             "title": "Calibrated"
           },
+          "calibrated_nozzles": {
+            "$ref": "#/components/schemas/NozzleCalibration"
+          },
           "flow_rate": {
             "type": "number",
             "title": "Flow Rate"
@@ -1696,6 +1779,7 @@
           "lines_sent",
           "lines_total",
           "calibrated",
+          "calibrated_nozzles",
           "flow_rate",
           "resumable",
           "stop_reason",
@@ -1981,6 +2065,7 @@
         "title": "ValidationError"
       },
       "CalibrationEvent": {
+        "description": "value: every nozzle of the current syringe mode is zeroed.",
         "properties": {
           "type": {
             "const": "calibration",
@@ -1995,11 +2080,15 @@
             ],
             "title": "Value",
             "type": "string"
+          },
+          "nozzles": {
+            "$ref": "#/components/schemas/NozzleCalibration"
           }
         },
         "required": [
           "type",
-          "value"
+          "value",
+          "nozzles"
         ],
         "title": "CalibrationEvent",
         "type": "object"
@@ -2230,6 +2319,9 @@
             "title": "Calibrated",
             "type": "boolean"
           },
+          "calibrated_nozzles": {
+            "$ref": "#/components/schemas/NozzleCalibration"
+          },
           "flow_rate": {
             "title": "Flow Rate",
             "type": "number"
@@ -2275,6 +2367,7 @@
           "lines_sent",
           "lines_total",
           "calibrated",
+          "calibrated_nozzles",
           "flow_rate",
           "resumable",
           "stop_reason",
@@ -2440,6 +2533,73 @@
         "title": "TemperatureStatusEvent",
         "type": "object"
       },
+      "TemperatureWaitEvent": {
+        "description": "Sent about once a second while a print waits for its temperatures,\nand once with waiting=False when it stops waiting (reached or stopped).",
+        "properties": {
+          "type": {
+            "const": "temperature_wait",
+            "default": "temperature_wait",
+            "title": "Type",
+            "type": "string"
+          },
+          "waiting": {
+            "title": "Waiting",
+            "type": "boolean"
+          },
+          "settle_s": {
+            "title": "Settle S",
+            "type": "number"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/TemperatureWaitSensor"
+            },
+            "title": "Sensors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "waiting",
+          "settle_s",
+          "sensors"
+        ],
+        "title": "TemperatureWaitEvent",
+        "type": "object"
+      },
+      "TemperatureWaitSensor": {
+        "properties": {
+          "sensor": {
+            "title": "Sensor",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "actual": {
+            "title": "Actual",
+            "type": "number"
+          },
+          "target": {
+            "title": "Target",
+            "type": "number"
+          },
+          "stable_s": {
+            "title": "Stable S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sensor",
+          "name",
+          "actual",
+          "target",
+          "stable_s"
+        ],
+        "title": "TemperatureWaitSensor",
+        "type": "object"
+      },
       "WarningEvent": {
         "description": "E.g. a syringe running low during a print.",
         "properties": {
@@ -2477,6 +2637,7 @@
             "stop": "#/components/schemas/StopEvent",
             "temperature": "#/components/schemas/TemperatureEvent",
             "temperature_status": "#/components/schemas/TemperatureStatusEvent",
+            "temperature_wait": "#/components/schemas/TemperatureWaitEvent",
             "warning": "#/components/schemas/WarningEvent"
           },
           "propertyName": "type"
@@ -2511,6 +2672,9 @@
           },
           {
             "$ref": "#/components/schemas/TemperatureStatusEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TemperatureWaitEvent"
           },
           {
             "$ref": "#/components/schemas/PrinterEvent"

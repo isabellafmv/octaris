@@ -1,5 +1,4 @@
 {
-  "target": "macos",
   "touch_mode": false,
   "baud_rate": 115200,
   "bed": {

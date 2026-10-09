@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -88,10 +89,38 @@ def _check_3mf(path: Path) -> None:
             raise SlicingError("3MF archive does not contain a 3D model file.")
 
 
+def _windows_cura_installs() -> list[Path]:
+    """CuraEngine.exe of each UltiMaker Cura install under Program Files, newest first."""
+    roots = {root for var in ("ProgramFiles", "ProgramW6432") if (root := os.environ.get(var))}
+    found = {
+        exe
+        for root in roots
+        for exe in Path(root).glob("*/CuraEngine.exe")
+        if exe.parent.name.lower().startswith("ultimaker cura")
+    }
+
+    def version(exe: Path) -> tuple[int, ...]:
+        return tuple(int(n) for n in re.findall(r"\d+", exe.parent.name))
+
+    return sorted(found, key=version, reverse=True)
+
+
 def _find_cura_engine() -> str:
     """Locate the CuraEngine binary, raising SlicingError if not found."""
     config = load_config()
     bin_dir = PROJECT_ROOT / "resources" / "bin" / config.target
+
+    if config.target == "windows":
+        exe = next((p for p in [bin_dir / "CuraEngine.exe", *_windows_cura_installs()] if p.exists()), None)
+        if exe:
+            return str(exe)
+        found = shutil.which("CuraEngine")
+        if found is None:
+            raise SlicingError(
+                f"CuraEngine not found — place CuraEngine.exe in {bin_dir} or install UltiMaker Cura"
+            )
+        return found
+
     bundled = next(
         (p for name in ("UltiMaker-Cura", "CuraEngine") if (p := bin_dir / name).exists()),
         None,
@@ -110,8 +139,25 @@ def _find_cura_engine() -> str:
         return str(bundled)
     found = shutil.which("CuraEngine")
     if found is None:
-        raise SlicingError("CuraEngine not found — place binary in resources/bin/macos/")
+        raise SlicingError(f"CuraEngine not found — place binary in {bin_dir}")
     return found
+
+
+# CuraEngine processes still running, so a shutdown can stop them
+_running: set[asyncio.subprocess.Process] = set()
+
+
+async def stop_slicing() -> None:
+    """Kill any CuraEngine still running; its slice_model() raises SlicingError."""
+    for proc in list(_running):
+        if proc.returncode is None:
+            logger.info("Stopping CuraEngine (pid %d)", proc.pid)
+            proc.kill()
+    for proc in list(_running):
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning("CuraEngine (pid %d) did not exit", proc.pid)
 
 
 class PrintSettings(TypedDict, total=False):
@@ -226,7 +272,11 @@ async def slice_model(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    _running.add(proc)
+    try:
+        stdout, stderr = await proc.communicate()
+    finally:
+        _running.discard(proc)
 
     if proc.returncode != 0:
         err = stderr.decode("utf-8", errors="replace").strip()

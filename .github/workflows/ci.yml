@@ -34,6 +34,26 @@ jobs:
       - name: Pytest
         run: pytest -q
 
+  backend-windows:
+    name: Backend (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Mypy
+        run: mypy
+      - name: Pytest
+        run: pytest -q
+
   client:
     name: Client
     runs-on: macos-latest

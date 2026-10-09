@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import time
 from pathlib import Path
@@ -210,7 +211,7 @@ def test_existing_database_gets_the_table(tmp_path):
 
 async def test_readings_during_a_print_carry_its_session(client, tmp_path):
     attach(app.state.serial_manager, FakeSerial())
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     app.state.config.nozzle_offset_measured = True
     bus = app.state.event_bus
     store: TemperatureStore = app.state.temperature
@@ -355,3 +356,201 @@ def test_csv(db, clock):
         "2023-11-14T22:13:20.000+00:00,P,P,20,",
         "2023-11-14T22:13:22.500+00:00,T0,Left syringe,22,37",
     ]
+
+
+# --- warnings ----------------------------------------------------------------------------
+
+
+class Watched:
+    """A store as the app wires it, with the printing and connection state
+    in plain attributes and the published events collected."""
+
+    def __init__(self, db, clock, **config):
+        self.connected = True
+        self.printing = True
+        self.events: list[dict] = []
+        self.store = TemperatureStore(
+            db,
+            TemperatureConfig(**config),
+            is_connected=lambda: self.connected,
+            is_printing=lambda: self.printing,
+            publish=self.events.append,
+            clock=clock,
+        )
+        self.store.on_event({"type": "printer", "connected": True, "port": "virtual"})
+
+    def warnings(self) -> list[str]:
+        return [e["message"] for e in self.events if e["type"] == "warning"]
+
+
+@pytest.fixture
+def watched(db, clock) -> Watched:
+    return Watched(db, clock)
+
+
+def tick(watched: Watched, clock: Clock, seconds: float, **sensors) -> None:
+    """Let `seconds` pass with a report every 2 s and a check every second."""
+    end = clock.now + seconds
+    while clock.now < end:
+        step = min(1.0, end - clock.now)
+        clock.advance(step)
+        if sensors and int(clock.now) % 2 == 0:
+            watched.store.record(report(**sensors))
+        watched.store.check()
+
+
+def test_deviation_from_target_while_printing(watched, clock):
+    watched.store.record(report(T0=(30.0, 37.0)))
+    tick(watched, clock, 59, T0=(30.0, 37.0))
+    assert watched.warnings() == []
+
+    tick(watched, clock, 2, T0=(30.0, 37.0))
+    assert watched.warnings() == ["T0 is at 30.0 °C, more than 3 °C from its 37 °C target for over 60 s."]
+    tick(watched, clock, 120, T0=(30.0, 37.0))
+    assert len(watched.warnings()) == 1  # once per excursion
+
+    tick(watched, clock, 4, T0=(35.0, 37.0))  # back within 3 °C
+    tick(watched, clock, 62, T0=(41.0, 37.0))
+    assert len(watched.warnings()) == 2
+
+
+def test_deviation_within_tolerance_or_shorter_is_fine(watched, clock):
+    tick(watched, clock, 120, T0=(34.0, 37.0))  # 3 °C off: within tolerance
+    tick(watched, clock, 50, T0=(20.0, 37.0))
+    tick(watched, clock, 4, T0=(36.0, 37.0))
+    tick(watched, clock, 50, T0=(20.0, 37.0))
+    assert watched.warnings() == []
+
+
+def test_new_target_restarts_the_grace_period(watched, clock):
+    tick(watched, clock, 50, T0=(20.0, 37.0))
+    tick(watched, clock, 50, T0=(20.0, 40.0))
+    assert watched.warnings() == []
+    tick(watched, clock, 12, T0=(20.0, 40.0))
+    assert len(watched.warnings()) == 1
+
+
+def test_no_deviation_warning_unless_printing(watched, clock):
+    watched.printing = False  # also while a print waits for its temperatures
+    tick(watched, clock, 120, T0=(20.0, 37.0), B=(20.0, 0.0))
+    assert watched.warnings() == []
+
+
+def test_deviation_tolerance_is_configurable(db, clock):
+    watched = Watched(db, clock, deviation_c=1.0, deviation_s=10)
+    tick(watched, clock, 12, T0=(35.5, 37.0))
+    assert watched.warnings() == ["T0 is at 35.5 °C, more than 1 °C from its 37 °C target for over 10 s."]
+
+
+def test_reports_stopping(watched, clock):
+    watched.printing = False
+    tick(watched, clock, 10, B=(20.0, 0.0))
+    tick(watched, clock, 14)
+    assert watched.warnings() == []
+    tick(watched, clock, 2)
+    assert watched.warnings() == ["No temperature report from the printer for 15 s."]
+    tick(watched, clock, 60)
+    assert len(watched.warnings()) == 1
+
+    tick(watched, clock, 2, B=(20.0, 0.0))  # reports again
+    tick(watched, clock, 16)
+    assert len(watched.warnings()) == 2
+
+
+def test_no_report_warning_while_disconnected(watched, clock):
+    tick(watched, clock, 4, B=(20.0, 0.0))
+    watched.connected = False
+    watched.store.on_event({"type": "printer", "connected": False, "port": None})
+    tick(watched, clock, 60)
+    assert watched.warnings() == []
+
+
+def test_no_sensors_is_a_state_not_a_warning(watched, clock):
+    tick(watched, clock, 14)
+    assert watched.events[-1]["state"] == "waiting"
+    tick(watched, clock, 2)
+    assert watched.events[-1] == {"type": "temperature_status", "state": "no_sensors", "sensors": []}
+    tick(watched, clock, 60)
+    assert watched.warnings() == []
+
+
+@pytest.mark.parametrize("actual", [-20.5, 300.5, -273.0, 999.0])
+def test_implausible_reading(watched, clock, actual):
+    watched.store.record(report(B=(actual, 0.0)))
+    watched.store.record(report(B=(actual, 0.0)))
+    assert watched.warnings() == [
+        f"B reads {actual:g} °C, which isn't plausible. Check that the sensor is connected."
+    ]
+    watched.store.record(report(B=(20.0, 0.0)))
+    watched.store.record(report(B=(actual, 0.0)))
+    assert len(watched.warnings()) == 2
+
+
+@pytest.mark.parametrize("actual", [-20.0, 4.0, 300.0])
+def test_plausible_reading(watched, clock, actual):
+    watched.store.record(report(B=(actual, 0.0)))
+    assert watched.warnings() == []
+
+
+async def test_watchdog_runs_while_connected(db, monkeypatch):
+    from backend import temperature
+
+    monkeypatch.setattr(temperature, "WATCH_INTERVAL_S", 0.01)
+    watched = Watched(db, time.time, report_timeout_s=0.05)
+    watched.store.record(report(B=(20.0, 0.0)))
+    await asyncio.sleep(0.2)
+    assert watched.warnings() == ["No temperature report from the printer for 0.05 s."]
+
+    watched.store.on_event({"type": "printer", "connected": False, "port": None})
+    assert watched.store._watchdog is None
+    await watched.store.close()
+
+
+# --- waiting for temperatures -----------------------------------------------------------------
+
+
+def test_targets_reached_once_held_for_the_settle_time(db, clock):
+    store = make_store(db, clock, settle_s=30, target_band_c=1.0)
+    store.record(report(T0=(30.0, 37.0), T1=(21.0, 0.0), B=(20.0, 0.0)))
+    assert not store.targets_reached()
+    assert [(s.sensor, s.stable_s) for s in store.wait_status()] == [("T0", 0.0)]
+
+    clock.advance(2)
+    store.record(report(T0=(36.2, 37.0)))  # within ±1 °C from here
+    clock.advance(28)
+    store.record(report(T0=(37.9, 37.0)))
+    assert store.wait_status()[0].stable_s == 28
+    assert not store.targets_reached()
+    clock.advance(2)
+    store.record(report(T0=(37.0, 37.0)))
+    assert store.targets_reached()
+
+
+def test_leaving_the_band_restarts_the_settle_time(db, clock):
+    store = make_store(db, clock, settle_s=30)
+    store.record(report(B=(30.0, 30.0)))
+    clock.advance(20)
+    store.record(report(B=(28.5, 30.0)))
+    clock.advance(20)
+    store.record(report(B=(30.0, 30.0)))
+    clock.advance(20)
+    store.record(report(B=(30.0, 30.0)))
+    assert not store.targets_reached()
+    clock.advance(10)
+    store.record(report(B=(30.0, 30.0)))
+    assert store.targets_reached()
+
+
+def test_every_target_has_to_hold(db, clock):
+    store = make_store(db, clock, settle_s=10)
+    store.record(report(T0=(37.0, 37.0), B=(20.0, 30.0)))
+    clock.advance(10)
+    store.record(report(T0=(37.0, 37.0), B=(25.0, 30.0)))
+    assert not store.targets_reached()
+
+
+def test_nothing_to_wait_for_without_targets(db, clock):
+    store = make_store(db, clock)
+    assert store.targets_reached()  # no sensors at all
+    store.record(report(T0=(21.0, 0.0), P=(22.0, None)))
+    assert store.targets_reached()

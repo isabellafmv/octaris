@@ -36,6 +36,24 @@ function MonitorIcon(): React.JSX.Element {
   )
 }
 
+function TemperatureIcon(): React.JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      className="w-5 h-5"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M14 14.76V4.5a2 2 0 1 0-4 0v10.26a4 4 0 1 0 4 0ZM12 8v9.5"
+      />
+    </svg>
+  )
+}
+
 function LogsIcon(): React.JSX.Element {
   return (
     <svg
@@ -58,6 +76,7 @@ function LogsIcon(): React.JSX.Element {
 const NAV_ITEMS: { id: Screen; icon: React.JSX.Element; label: string }[] = [
   { id: 'setup', icon: <SetupIcon />, label: 'SETUP' },
   { id: 'print', icon: <MonitorIcon />, label: 'MONITOR' },
+  { id: 'temperature', icon: <TemperatureIcon />, label: 'TEMP' },
   { id: 'takeover', icon: <LogsIcon />, label: 'LOGS' }
 ]
 

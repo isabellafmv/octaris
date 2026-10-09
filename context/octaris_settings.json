@@ -29,6 +29,7 @@
     "speed_print": { "default_value": 5.0 },
     "speed_travel": { "default_value": 5.0 },
     "retraction_enable": { "default_value": false },
+    "relative_extrusion": { "default_value": true },
     "cool_fan_enabled": { "default_value": false },
     "adhesion_type": { "default_value": "none" },
     "support_enable": { "default_value": false },

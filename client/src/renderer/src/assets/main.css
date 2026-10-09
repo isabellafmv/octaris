@@ -31,6 +31,16 @@
   --color-nozzle-left: var(--color-primary);
   --color-nozzle-right: var(--color-warning);
   --color-travel: var(--color-text-subtle);
+  /* Chart series, in this fixed order (validated together on the surface
+     color for color-blind separation; slot 6 is below 3:1 contrast, so it
+     always comes with a named legend). Never cycled: past six, chart-other. */
+  --color-chart-1: #009A86;
+  --color-chart-2: #D95926;
+  --color-chart-3: #4A3AA7;
+  --color-chart-4: #2A78D6;
+  --color-chart-5: #D55181;
+  --color-chart-6: #C98500;
+  --color-chart-other: #8B9090;
 
   /* Dark window chrome around the main card */
   --color-chrome: #262929;

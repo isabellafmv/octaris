@@ -268,6 +268,19 @@ class VirtualPrinter:
             machine = self._machine_at(self._clock.now())
             return {axis: machine[axis] + self._offset[axis] for axis in AXES}
 
+    def machine_coordinates(self) -> dict[str, float]:
+        """Where the axes physically are right now, in machine coordinates:
+        unlike the logical ones, G92 doesn't change them."""
+        with self._lock:
+            return self._machine_at(self._clock.now())
+
+    def run_direct(self, command: str) -> list[str]:
+        """Run one command on the firmware straight away, bypassing the
+        serial line (no line numbers, no "ok" sent), and return its replies.
+        For tests that only need the motion model, e.g. a whole file run at
+        speed=math.inf."""
+        return self._execute(command)
+
     @property
     def moves_planned(self) -> int:
         with self._lock:

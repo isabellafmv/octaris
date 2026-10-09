@@ -38,6 +38,9 @@ RECONNECT_DELAY_S = 2.0
 SERIAL_TIMEOUT_S = 1.0
 # Overall time to wait for "ok"/"error" after sending a command.
 REPLY_DEADLINE_S = 60.0
+# The printer's board (STMicroelectronics), as listed on Windows
+STM32_VENDOR_ID = 0x0483
+STM32_DESCRIPTIONS = ("STMicroelectronics", "STM32")
 # Commands that can legitimately block for minutes (homing, dwell, drain the
 # move buffer, wait for temperature).
 SLOW_COMMANDS = frozenset({"G28", "G4", "M400", "M109", "M190"})
@@ -225,6 +228,12 @@ class SerialManager:
     def position(self) -> dict[str, float | None]:
         """Tracked logical position per axis; None where unknown."""
         return dict(self._state.pos)
+
+    @property
+    def relative(self) -> bool:
+        """The printer is in relative positioning (G91), as last sent.
+        False on a fresh connection: Marlin starts in G90."""
+        return self._state.relative
 
     @staticmethod
     def list_ports() -> list[dict[str, str]]:
@@ -580,12 +589,15 @@ class SerialManager:
 
     def _is_emergency_ok(self, pending: _Pending | None) -> bool:
         """Whether an "ok" is the ack of an emergency line, not a reply to
-        `pending`: the command that was in flight when it went out has had
-        its own "ok" already."""
+        `pending`: nothing was in flight when it went out, or what was has
+        had its own "ok" already. (Marlin acks in order, so a command sent
+        after the emergency line gets its "ok" after it.)"""
         with self._state_lock:
-            if self._emergency_oks and self._emergency_oks[0] is not pending:
-                self._emergency_oks.popleft()
-                return True
+            if self._emergency_oks:
+                in_flight = self._emergency_oks[0]
+                if in_flight is None or in_flight is not pending:
+                    self._emergency_oks.popleft()
+                    return True
         return False
 
     def _on_ok(self, ser: Any, pending: _Pending, line: str) -> None:
@@ -701,5 +713,13 @@ def _hardware_ports() -> list[dict[str, str]]:
             {"device": p.device, "description": p.description}
             for p in ports
             if "ttyUSB" in p.device or "ttyACM" in p.device
+        ]
+    if system == "Windows":
+        # Every port is a COMn, so pick the board by its USB vendor ID, or by
+        # the name the driver gives it when the vendor ID isn't reported.
+        return [
+            {"device": p.device, "description": p.description}
+            for p in ports
+            if p.vid == STM32_VENDOR_ID or any(word in (p.description or "") for word in STM32_DESCRIPTIONS)
         ]
     return [{"device": p.device, "description": p.description} for p in ports]

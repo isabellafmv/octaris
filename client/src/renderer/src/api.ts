@@ -1,4 +1,13 @@
-import type { PortInfo, SerialLogEntry, SyringeMode, UploadResult } from './types'
+import type {
+  CalibrateResponse,
+  NozzleCalibration,
+  PortInfo,
+  SerialLogEntry,
+  SyringeMode,
+  TemperatureHistoryResponse,
+  TemperatureStatus,
+  UploadResult
+} from './types'
 
 const BASE = 'http://127.0.0.1:8000'
 
@@ -36,6 +45,27 @@ const SLICE_PARAMS = {
 } as const
 
 export type SliceOptions = Partial<Record<keyof typeof SLICE_PARAMS, number>>
+
+// Saves a file the backend sends as an attachment. Fetched rather than linked
+// to, so the request carries the auth header.
+async function download(url: string, fallbackName: string): Promise<void> {
+  const res = await fetch(`${BASE}${url}`, { headers: authHeaders() })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(body.detail || res.statusText)
+  }
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName
+  const href = URL.createObjectURL(await res.blob())
+  const link = document.createElement('a')
+  link.href = href
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(href)
+}
+
+// A time range, or one print session's readings
+export type TemperatureRange = { from: Date; to: Date } | { sessionId: number }
 
 function uploadFile(path: string, file: File, params: URLSearchParams): Promise<UploadResult> {
   const form = new FormData()
@@ -88,8 +118,30 @@ export const api = {
   getLoadedGcode: async (signal?: AbortSignal) =>
     (await request('/gcode/loaded', { signal })).text(),
   getSerialLog: (limit = 200) => json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
-  calibrationStatus: () => json<{ calibrated: boolean }>('/calibration/status'),
-  calibrationZero: () =>
-    json<{ status: string; command: string }>('/calibration/zero', { method: 'POST' }),
-  calibrationReset: () => json<{ status: string }>('/calibration/reset', { method: 'POST' })
+  calibrationStatus: () =>
+    json<{ calibrated: boolean; nozzles: NozzleCalibration }>('/calibration/status'),
+  // Zero one nozzle where it is, for the selected mode (both mode: left, then right)
+  calibrationZero: (nozzle: 'left' | 'right', syringeMode: SyringeMode) =>
+    json<CalibrateResponse>('/calibration/zero', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nozzle, syringe_mode: syringeMode })
+    }),
+  calibrationReset: () => json<{ status: string }>('/calibration/reset', { method: 'POST' }),
+  getTemperature: () => json<TemperatureStatus>('/temperature'),
+  getTemperatureHistory: (minutes: number) =>
+    json<TemperatureHistoryResponse>(`/temperature/history?minutes=${minutes}`),
+  setTemperatureTarget: (sensor: string, target: number) =>
+    json<{ status: string; command: string }>('/temperature/target', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sensor, target })
+    }),
+  exportTemperatureCsv: (range: TemperatureRange) => {
+    const params =
+      'sessionId' in range
+        ? new URLSearchParams({ session_id: String(range.sessionId) })
+        : new URLSearchParams({ from: range.from.toISOString(), to: range.to.toISOString() })
+    return download(`/temperature/export.csv?${params}`, 'temperature.csv')
+  }
 }
