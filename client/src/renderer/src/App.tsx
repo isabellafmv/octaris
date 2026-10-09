@@ -112,7 +112,7 @@ function App(): React.JSX.Element {
             <SetupScreen
               printerConnected={printerConnected}
               port={ws.port}
-              calibrated={ws.calibrated}
+              calibratedNozzles={ws.calibratedNozzles}
               printStatus={ws.status}
               onStartPrint={handleStartPrint}
               externalError={startError}

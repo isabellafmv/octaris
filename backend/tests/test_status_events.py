@@ -42,6 +42,7 @@ def test_ws_sends_snapshot_right_after_connect():
         "lines_sent": 0,
         "lines_total": 0,
         "calibrated": False,
+        "calibrated_nozzles": {"left": False, "right": False},
         "flow_rate": 100.0,
         "resumable": False,
         "stop_reason": None,
@@ -63,6 +64,7 @@ def test_status_endpoint_matches_snapshot_shape():
         "lines_sent": 0,
         "lines_total": 0,
         "calibrated": False,
+        "calibrated_nozzles": {"left": False, "right": False},
         "flow_rate": 100.0,
         "resumable": False,
         "stop_reason": None,
@@ -103,7 +105,11 @@ def test_disconnect_endpoint_publishes_printer_disconnected_event():
         client.post("/connect", json={"port": "/dev/ttyUSB0"})
         receive_state_event(ws)  # printer connected event
         # Opening the port may reset the board, so calibration is reset
-        assert receive_state_event(ws) == {"type": "calibration", "value": "uncalibrated"}
+        assert receive_state_event(ws) == {
+            "type": "calibration",
+            "value": "uncalibrated",
+            "nozzles": {"left": False, "right": False},
+        }
 
         resp = client.post("/disconnect")
         assert resp.status_code == 200

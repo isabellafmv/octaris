@@ -85,6 +85,13 @@ class TemperatureStatus(BaseModel):
     sensors: list[SensorReading]
 
 
+class NozzleCalibration(BaseModel):
+    """Which nozzles are zeroed: X/Y and the nozzle's own height (Z left, A right)."""
+
+    left: bool
+    right: bool
+
+
 class Snapshot(BaseModel):
     """Current connection and print state."""
 
@@ -93,7 +100,9 @@ class Snapshot(BaseModel):
     print_status: PrintStatus
     lines_sent: int
     lines_total: int
+    # Every nozzle of the current syringe mode is zeroed
     calibrated: bool
+    calibrated_nozzles: NozzleCalibration
     flow_rate: float
     resumable: bool
     stop_reason: str | None
@@ -192,8 +201,11 @@ class PrinterEvent(Event):
 
 
 class CalibrationEvent(Event):
+    """value: every nozzle of the current syringe mode is zeroed."""
+
     type: Literal["calibration"] = "calibration"
     value: Literal["calibrated", "uncalibrated"]
+    nozzles: NozzleCalibration
 
 
 class PrintEndEvent(Event):
@@ -257,11 +269,15 @@ class DisconnectResponse(BaseModel):
 
 class CalibrationStatusResponse(BaseModel):
     calibrated: bool
+    nozzles: NozzleCalibration
 
 
 class CalibrateResponse(BaseModel):
-    status: Literal["calibrated"]
+    # The G92 sent, and the calibration after it: in both mode, calibrated
+    # only once the second (right nozzle) step is done too.
     command: str
+    calibrated: bool
+    nozzles: NozzleCalibration
 
 
 class CalibrationResetResponse(BaseModel):

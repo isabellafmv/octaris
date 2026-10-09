@@ -20,6 +20,9 @@ TRAVEL_FEED = 300
 # Highest feed rate sent to the printer (mm/min)
 MAX_FEED = 400
 
+# Each nozzle has its own height motor and plunger:
+#   left nozzle:  height Z, plunger B
+#   right nozzle: height A, plunger C
 # Distance between left (B) and right (C) nozzle tips in mm.
 # The right nozzle is this far in the +X direction from the left nozzle.
 # Always zero/calibrate at the LEFT nozzle — the software applies this offset
@@ -62,6 +65,9 @@ class ProcessedGcode:
     # Plunger axes this file extrudes with, and its pressurization distance
     extrusion_axes: tuple[str, ...] = ()
     pressurize_mm: float = 0.0
+    # The height motors of the nozzle(s) the print uses (Z left, A right):
+    # what lifts and lowers on a resume or a return after a pause.
+    height_axes: tuple[str, ...] = ("Z",)
     # Where the relative moves assume the print starts: the zero point, for
     # a converted file, which the head travels back to if it isn't there.
     # None: wherever the head is (a lab G91 file, sent as it is).
@@ -243,7 +249,14 @@ def _extrusion_axes(mode: SyringeMode) -> list[str]:
 
 
 def _z_axis(mode: SyringeMode) -> str:
+    """The height axis that marks a layer change: in both mode every move
+    carries Z and A together (see map_height_axes), so Z."""
     return {"left": "Z", "right": "A", "both": "Z"}[mode]
+
+
+def height_axes(mode: SyringeMode) -> tuple[str, ...]:
+    """The height motors of the nozzle(s) in use: Z left, A right."""
+    return {"left": ("Z",), "right": ("A",), "both": ("Z", "A")}[mode]
 
 
 def trim_to_print(cmds: list[Command]) -> list[Command]:
@@ -294,6 +307,29 @@ def substitute_extrusion(cmds: list[Command], mode: SyringeMode) -> list[Command
             cmd = _rename_e(cmd, "C" if tool == "T1" else "B")
             if tool == "T1" and cmd.is_move:
                 cmd = cmd.map_axis("X", lambda x: x + NOZZLE_OFFSET_X)
+        result.append(cmd)
+    return result
+
+
+def map_height_axes(cmds: list[Command], mode: SyringeMode) -> list[Command]:
+    """Cura writes one height axis, Z; each nozzle has its own motor. Right
+    mode: every Z becomes A (the right nozzle's height). Both mode: every Z
+    is kept and the same value added as A, so both nozzles rise together.
+    G92 is mapped the same way, so the coordinates stay consistent."""
+    if mode == "left":
+        return cmds
+    result = []
+    for cmd in cmds:
+        if cmd.has("Z"):
+            words: list[Word] = []
+            for w in cmd.words:
+                if w.letter != "Z":
+                    words.append(w)
+                elif mode == "right":
+                    words.append(Word("A", w.value, w.text))
+                else:
+                    words += [w, Word("A", w.value, w.text)]
+            cmd = cmd.with_words(words)
         result.append(cmd)
     return result
 
@@ -365,7 +401,8 @@ def _plunger_moves(axes: list[str], pull_back_mm: float, label: str = "") -> lis
 def insert_layer_depressurize(
     cmds: list[Command], mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM
 ) -> list[Command]:
-    """Wrap layer-change travel moves (G0 with Z/A) with depressurize/repressurize.
+    """Wrap layer-change travel moves (G0 with the mode's height axis, see
+    _z_axis) with depressurize/repressurize.
 
     Skips the very first G0-with-Z since that's the initial positioning before
     any extrusion has happened (the preamble handles the first pressurization).
@@ -437,9 +474,10 @@ def build_footer(mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> lis
     lines = ["; Octaris — footer", "G91"]
     for ax in _extrusion_axes(mode):
         lines.append(f"G1 {ax}{pressurize_mm:g} F{PRESSURIZE_FEED} ; depressurize {ax}")
+    raise_ = " ".join(f"{ax}{CLEARANCE_Z_MM}" for ax in height_axes(mode))
     lines.extend(
         [
-            f"G1 {_z_axis(mode)}{CLEARANCE_Z_MM} F{TRAVEL_FEED} ; raise nozzle",
+            f"G1 {raise_} F{TRAVEL_FEED} ; raise nozzle",
             "G90",
             f"G1 X0 Y0 F{TRAVEL_FEED} ; return to origin",
         ]
@@ -584,6 +622,7 @@ def build_print(
     Also returns the feed rate clamping log."""
     cmds = trim_to_print(cmds)
     cmds = substitute_extrusion(cmds, mode)
+    cmds = map_height_axes(cmds, mode)
     cmds = apply_flow_multiplier(cmds, flow_multiplier)
     cmds, feed_log = clamp_feed_rates(cmds)
     cmds = insert_layer_depressurize(cmds, mode, pressurize_mm)
@@ -614,6 +653,7 @@ def process_gcode(
             state_after=state_after,
             extrusion_axes=tuple(ax for ax in "BC" if any(c.is_move and c.has(ax) for c in cmds)),
             pressurize_mm=pressurize_mm,
+            height_axes=tuple(ax for ax in "ZA" if any(c.is_move and c.has(ax) for c in cmds)) or ("Z",),
         )
 
     cmds, feed_log = build_print(cmds, mode, pressurize_mm, flow_multiplier, travel_retract_multiplier)
@@ -632,5 +672,6 @@ def process_gcode(
         state_after=state_after,
         extrusion_axes=tuple(_extrusion_axes(mode)),
         pressurize_mm=pressurize_mm,
+        height_axes=height_axes(mode),
         start_position=start,
     )

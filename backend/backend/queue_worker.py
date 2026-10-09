@@ -158,6 +158,7 @@ class QueueWorker:
         self._next = 0
         self._tracker = SentTracker()
         self._extrusion_axes: tuple[str, ...] = ()
+        self._height_axes: tuple[str, ...] = ("Z",)
         self._retract_mm = 0.0
         self._retract_on_estop = retract_on_estop
         # Set exactly while the state is STOPPED_RESUMABLE
@@ -271,6 +272,7 @@ class QueueWorker:
         state_after: Sequence[MachineState] | None = None,
         extrusion_axes: Sequence[str] = (),
         pressurize_mm: float = 0.0,
+        height_axes: Sequence[str] = ("Z",),
     ) -> None:
         """Load a print, replacing any stopped or finished one.
 
@@ -297,6 +299,7 @@ class QueueWorker:
         self._forget_pause_position()
         self._time_estimate_s = time_estimate_s
         self._extrusion_axes = tuple(extrusion_axes)
+        self._height_axes = tuple(height_axes)
         self._retract_mm = pressurize_mm
         self._plunger_pushed = {axis: 0.0 for axis in PLUNGER_AXES}
         self._low_travel_warned = set()
@@ -484,7 +487,9 @@ class QueueWorker:
             retract = {axis: self._retract_mm for axis in axes}
 
         self._transition(STOPPED_RESUMABLE)
-        self._checkpoint = Checkpoint(line=line, position=position, after=after, retract=retract)
+        self._checkpoint = Checkpoint(
+            line=line, position=position, after=after, retract=retract, height_axes=self._height_axes
+        )
         self._stop_reason = None
         logger.info("E-stop checkpoint: line %d (%s) at %s", line, self._lines[line], position)
         self._emit(StopEvent(resumable=True, reason=None, line=line))
@@ -686,7 +691,11 @@ class QueueWorker:
             if position is None:
                 raise ValueError(f"couldn't parse the printer position from {replies[1]!r}")
             commands = build_return_commands(
-                position, self._paused_at, self._tracker.state, restore_modes=self._restore_needed
+                position,
+                self._paused_at,
+                self._tracker.state,
+                restore_modes=self._restore_needed,
+                height_axes=self._height_axes,
             )
             if commands:
                 await self._serial.send_lines(commands)

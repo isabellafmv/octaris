@@ -156,7 +156,7 @@ async def test_target_goes_out_between_print_lines(client, dev_mode, tmp_path):
     from tests.test_history import upload_stl
 
     printer = await connect_virtual(client, speed=5)
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     app.state.config.nozzle_offset_measured = True
     worker = app.state.queue_worker
     await upload_stl(client, tmp_path, 200)
@@ -265,7 +265,7 @@ async def ready_to_print(client, dev_mode, tmp_path, monkeypatch):
 
     monkeypatch.setattr(queue_worker, "TEMPERATURE_WAIT_POLL_S", 0.02)
     printer = await connect_virtual(client, speed=5)  # heaters at 10 °C/s
-    app.state.session.calibrated = True
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
     app.state.config.nozzle_offset_measured = True
     await upload_stl(client, tmp_path, 50)
     return printer

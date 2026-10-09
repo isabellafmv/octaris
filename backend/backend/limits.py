@@ -23,7 +23,8 @@ class LimitError(Exception):
 
 
 def _ranges(bed: BedLimits) -> dict[str, AxisRange]:
-    return {"X": bed.x, "Y": bed.y, "Z": bed.z}
+    """A is the right nozzle's height motor: the same range as Z."""
+    return {"X": bed.x, "Y": bed.y, "Z": bed.z, "A": bed.z}
 
 
 def _describe(axis: str, value: float, allowed: AxisRange) -> str:
@@ -46,15 +47,24 @@ def start_state(position: dict[str, float] | None) -> MachineState:
     return MachineState(pos={ax: position.get(ax) for ax in AXES})
 
 
-def check_path(bed: BedLimits, lines: Sequence[str], start: MachineState | None = None) -> None:
+def check_path(
+    bed: BedLimits,
+    lines: Sequence[str],
+    start: MachineState | None = None,
+    height_axes: Sequence[str] = ("Z",),
+) -> None:
     """Raise LimitError if any move in `lines` ends outside the bed.
+
+    X, Y and `height_axes` are checked: the height motors of the nozzle(s)
+    the print uses (Z left, A right). The other nozzle's height isn't zeroed
+    for this print, so its coordinate means nothing.
 
     Every move is a straight line and the bed is a box, so a path stays on
     the bed if all its end points do. An axis whose position is unknown (a
     relative move before the program or `start` set it) can't be checked;
     pass the printer's current position as `start` to cover those.
     """
-    ranges = _ranges(bed)
+    ranges = {axis: allowed for axis, allowed in _ranges(bed).items() if axis in ("X", "Y", *height_axes)}
     state = start or start_state(None)
     for number, line in enumerate(lines, start=1):
         state = step(state, line)
