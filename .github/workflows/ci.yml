@@ -22,9 +22,13 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/requirements-dev.txt
       - name: Install
-        run: pip install -e ".[dev]"
+        # Exact versions from the lock file, so a new release upstream can't
+        # break CI overnight; Dependabot proposes updates as pull requests
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
       - name: Ruff (lint)
         run: ruff check --output-format=github .
       - name: Ruff (format)
@@ -46,9 +50,13 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: backend/requirements-dev.txt
       - name: Install
-        run: pip install -e ".[dev]"
+        # Exact versions from the lock file, so a new release upstream can't
+        # break CI overnight; Dependabot proposes updates as pull requests
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --no-deps -e .
       - name: Mypy
         run: mypy
       - name: Pytest

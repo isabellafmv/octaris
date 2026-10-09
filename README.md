@@ -1,6 +1,6 @@
 # Octaris
 
-Control software for the Printess bioprinter. Upload an STL or a pre-sliced G-code file, configure your syringe mode, and manage the full print workflow including slicing, previewing, and live monitoring
+Control software for the Printess bioprinter. Upload an STL or a pre-sliced G-code file, configure your syringe mode, and manage the full print workflow: slicing, a 3D preview, calibration, printing with pause, stop and resume, and temperature monitoring.
 
 
 ## Download
@@ -49,9 +49,7 @@ The printer shows up as a COM port. Octaris lists only ports that belong to the 
 > host can't.
 
 **Software (for users)**
-- macOS (Apple Silicon)
-
-currently only available for mac users
+- macOS (Apple Silicon) or Windows (x64)
 
 
 ## Using the App
@@ -60,15 +58,22 @@ currently only available for mac users
 
 1. **Connect the printer**: use the port selector in the top-right corner. Click *Connect*.
 
-2. **Select syringe mode**: choose *Left*, *Right*, or *Both* (both mode is not fully functional yet) syringes. This controls which axes receive extrusion commands. Always zero/calibrate at the left nozzle (the software applies the right nozzle offset automatically).
+2. **Select syringe mode**: choose *Left*, *Right*, or *Both* (both mode is not fully functional yet) syringes. This controls which axes receive extrusion commands.
 
-3. **Upload a file** (two modes are available via the toggle below the syringe selector):
+3. **Calibrate (zero the nozzles)** with the jog panel. X/Y are always set with the *left* nozzle over the print's start point; each nozzle's height (Z for the left, A for the right) is set with that nozzle lowered onto the bed. The right nozzle's X offset is applied automatically.
+   - *Left*: jog the left nozzle over the start point, lower it onto the bed, click **Zero left**.
+   - *Right*: jog the left nozzle over the start point, then lower the right nozzle onto the bed (A), click **Zero right**.
+   - *Both*, in two steps: first lower the left nozzle onto the bed over the start point and click **Zero left**, then lower the right nozzle onto the bed and click **Zero right**.
+
+   Connecting, disconnecting or losing the USB link resets the calibration.
+
+4. **Upload a file** (two modes are available via the toggle below the syringe selector):
    - **STL File**: upload a `.stl` model, then click *Click to Slice*. The backend runs CuraEngine and post-processes the G-code (extrusion substitution, feed-rate clamping, travel retraction). Requires UltiMaker Cura to be installed.
    - **G-Code File**: upload a pre-sliced `.gcode` file. Processing (extrusion substitution and validation) happens automatically on upload.
 
-4. **Review the G-code preview**: after slicing or upload you'll see the first 40 lines, total line count, and estimated print time.
+5. **Review the preview**: after slicing or upload you'll see the total line count and estimated print time, and either the first 40 lines or a **3D view** of the toolpath: each nozzle in its own colour, a slider to show the layers up to a given one, and toggles for *This layer only* and *Travel* moves. Drag to orbit, scroll to zoom.
 
-5. **Proceed to Preview**: click the button to move to the print screen.
+6. **Proceed to Preview**: click the button to move to the print screen.
 
 ### Print screen
 
@@ -77,7 +82,19 @@ currently only available for mac users
 - The **flow rate slider** (50–150%) adjusts extrusion speed live.
 - The status bar shows current line number and system state.
 
+**Pause and resume.** You can jog or send commands while paused; on resume the head goes back to where it paused and the print continues.
+
+**Stop and resume.** *Stop* sends `M410`, which halts the motors at once, then reads the position back (`M114`) to find the line the printer stopped on. If that works, the stop dialog offers **Resume**: the head returns to the stop point and the print continues from the rest of that line. A stop can't be resumed (the dialog says why) if the USB link dropped, the printer was reconnected, or something changed the coordinates or plungers in the meantime (`G92`, a manual B/C move). *Restart* starts the print from the beginning.
+
+### Relative printing
+
+Every print is sent fully relative: the post-processor turns the sliced program into `G91` moves behind a single `G91` and drops every `G90`/`G92`, and jogs, stops and resumes keep the printer in `G91`. A print therefore starts wherever the nozzle was zeroed. Pre-sliced files that are already relative (lab `G91` files) are sent as they are.
+
 ### Temperatures
+
+> Temperature monitoring is new since v1.0.0; v1.0 has none.
+
+The **Temperature** screen (sidebar) shows each sensor's reading, target and status, a chart of actual vs. target, and a CSV export. Warnings appear when a sensor drifts from its target during a print, stops reporting, or reads something implausible (see the safety note above).
 
 The backend reads the printer's temperatures (Marlin's `M155` auto-report, or
 `M105` polling if the firmware doesn't auto-report) and logs every reading to
@@ -138,20 +155,28 @@ Slicing STL files needs CuraEngine. On macOS the binary in `resources/bin/macos/
 
 ```bash
 cd client
-npm install
+npm ci
 ```
+
+`npm ci` installs exactly what `package-lock.json` pins (same on Windows). Use `npm install <package>` only to add or change a dependency.
 
 ### Running (dev mode)
 
 Open two terminal windows.
 
-Terminal 1 (backend)
+Terminal 1 (backend, with its virtualenv activated)
 ```bash
 cd backend
-uvicorn backend.main:app --host 127.0.0.1 --port 8000
+uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-(On Windows, don't add `--reload`: with it uvicorn uses an event loop that can't start subprocesses, so slicing fails.)
+On Windows (PowerShell), leave out `--reload`: with it uvicorn uses an event loop that can't start subprocesses, so slicing fails.
+
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
 
 Terminal 2 (frontend)
 ```bash
@@ -169,6 +194,13 @@ Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers 
 OCTARIS_VIRTUAL_PRINTER=1 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
+On Windows (PowerShell):
+
+```powershell
+$env:OCTARIS_VIRTUAL_PRINTER = "1"
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
 ### Tests and checks
 
 ```bash
@@ -182,7 +214,31 @@ cd ../client
 npm run typecheck && npm run lint
 ```
 
+To use exactly the versions CI uses, install from the lock file instead of `pip install -e ".[dev]"`:
+
+```bash
+pip install -r requirements-dev.txt
+pip install --no-deps -e .
+```
+
 `pre-commit install` (from the repository root, with the backend's dev dependencies installed) runs all of these on every commit. CI runs them on every push and pull request, and runs mypy and the tests on Windows too. Pushing a tag builds the macOS app and the Windows installer with `build.py` and attaches the `.dmg`, `.zip` and `.exe` to the workflow run.
+
+### Pinned dependencies
+
+`backend/pyproject.toml` keeps flexible version ranges. `backend/requirements-dev.txt` is the lock file: exact versions of everything, dev tools included, resolved for Python 3.10+ on macOS, Windows and Linux. CI installs from it, and the client from `client/package-lock.json` with `npm ci`, so a new upstream release can't break CI overnight.
+
+Dependabot (`.github/dependabot.yml`) opens weekly pull requests that bump pip, npm and GitHub Actions versions (minor and patch updates grouped, majors one PR each). CI checks them before merging.
+
+To update the lock file by hand (after changing `pyproject.toml`, or to pull in new versions), use [uv](https://docs.astral.sh/uv/) (`pip install uv`):
+
+```bash
+cd backend
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.10 -o requirements-dev.txt                 # after editing pyproject.toml; keeps other pins
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.10 -o requirements-dev.txt --upgrade-package fastapi  # bump one package
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.10 -o requirements-dev.txt --upgrade        # bump everything
+```
+
+Then reinstall from it, run the checks, and commit the lock file with the change. Keep `ruff`'s version in step with the `ruff-pre-commit` rev in `.pre-commit-config.yaml`. For the client, `npm install <package>@<version>` updates `package-lock.json`; commit both files.
 
 ### Logs
 
