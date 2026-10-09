@@ -122,5 +122,6 @@ async def replace_loaded_gcode(
         feed_log_entries=len(gcode.feed_log),
         preview_lines=gcode.lines[:40],
         edited=True,
+        warnings=gcode.warnings,
         program_id=session.program_id,
     )

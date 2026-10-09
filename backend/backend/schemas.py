@@ -293,6 +293,8 @@ class UploadResult(BaseModel):
     preview_lines: list[str]
     # Changed in the G-code editor since it was loaded
     edited: bool = False
+    # Checks on a file sent as uploaded that don't stop it printing
+    warnings: list[str] = []
 
 
 class GcodeEditResult(UploadResult):
@@ -314,8 +316,6 @@ class GcodeEditErrorResponse(BaseModel):
 
     detail: str
     errors: list[GcodeLineError]
-    # Checks on a file sent as uploaded that don't stop it printing
-    warnings: list[str] = []
 
 
 class PrintStartRequest(BaseModel):

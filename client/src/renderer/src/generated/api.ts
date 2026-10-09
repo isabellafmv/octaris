@@ -611,6 +611,11 @@ export interface components {
              * @default false
              */
             edited?: boolean;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
             /** Program Id */
             program_id: string;
         };
@@ -954,6 +959,11 @@ export interface components {
              * @default false
              */
             edited?: boolean;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
         };
         /** ValidationError */
         ValidationError: {

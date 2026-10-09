@@ -1338,6 +1338,14 @@
             "title": "Edited",
             "default": false
           },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          },
           "program_id": {
             "type": "string",
             "title": "Program Id"
@@ -2260,6 +2268,14 @@
             "type": "boolean",
             "title": "Edited",
             "default": false
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
           }
         },
         "type": "object",

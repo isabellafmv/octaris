@@ -167,13 +167,67 @@ async def test_syringe_travel_enforced(client):
     assert "left plunger (B)" in resp.json()["detail"]
 
 
-async def test_lab_file_gets_the_upload_check(client):
+async def test_lab_file_gets_the_full_validation(client):
+    """Uploaded with "Needs changes" on, a lab file is a processed print."""
     await upload_lab_file(client)
 
     assert_rejected(await put(client, "G91\nG90\nG1 X1\n"), 2, "Line 2: G90")
-    assert_rejected(await put(client, "G91\nG1 X1 E1\n"), 2, "Line 2: E isn't")
-    assert_rejected(await put(client, "M83\nG1 X1\nG91\n"), 2, "Line 2: a move before G91")
-    assert_rejected(await put(client, "M83\n"), None, "relative positioning (G91)")
+    assert_rejected(await put(client, "G91\nG1 X1 E1\n"), 2, "Line 2: Unsubstituted E")
+    assert_rejected(await put(client, "M83\nG1 X1\nG91\n"), 1, "must start with G91")
+
+
+async def test_processed_edit_with_g90_is_rejected(client):
+    await upload_sample(client)
+    before = list(loaded_lines())
+
+    assert_rejected(await put(client, edited(6, "G90")), 6, "Line 6: G90")
+    assert loaded_lines() == before
+
+
+# --- files sent as uploaded ------------------------------------------------------
+
+# Absolute (no G91), so it loads with a warning
+AS_UPLOADED_FILE = "G1 X1 B-0.1 F200\nG1 Y1 B-0.1\n"
+
+
+async def upload_as_uploaded(client, raw: str = AS_UPLOADED_FILE) -> list[str]:
+    resp = await client.post(
+        "/upload/gcode",
+        params={"needs_changes": "false"},
+        files={"file": ("plain.gcode", raw.encode(), "text/plain")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert app.state.session.loaded.as_uploaded
+    return resp.json()["warnings"]
+
+
+async def test_unchanged_as_uploaded_file_with_warnings_saves(client):
+    warnings = await upload_as_uploaded(client)
+    assert any("No G91" in w for w in warnings)
+
+    resp = await put(client, AS_UPLOADED_FILE)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["warnings"] == warnings
+    assert app.state.session.loaded.gcode.warnings == warnings
+
+
+async def test_as_uploaded_edit_adding_g90_saves_with_a_warning(client):
+    raw = "G91\nG1 X1 B-0.1 F200\nG1 Y1 B-0.1\n"
+    assert await upload_as_uploaded(client, raw) == []
+
+    resp = await put(client, "G91\nG1 X1 B-0.1 F200\nG90\nG1 Y1 B-0.1\n")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["warnings"] == ["Line 3: G90 switches the print back to absolute positioning"]
+    assert loaded_lines()[2] == "G90"
+
+
+async def test_as_uploaded_edit_without_moves_is_rejected(client):
+    await upload_as_uploaded(client)
+
+    assert_rejected(await put(client, "M83\n"), None, "no motion commands")
+    assert_rejected(await put(client, "; nothing\n"), None, "Empty G-code")
 
 
 async def test_lab_file_edit_rederives_its_axes(client):

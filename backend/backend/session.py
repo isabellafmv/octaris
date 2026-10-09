@@ -22,6 +22,8 @@ from backend.gcode_processor import (
     MachineState,
     ProcessedGcode,
     SyringeMode,
+    as_uploaded,
+    check_as_uploaded,
     parse,
     parse_words,
     process_gcode,
@@ -121,6 +123,9 @@ class LoadedPrint:
     settings: PrintSettings = field(default_factory=lambda: PrintSettings())
     # Changed in the G-code editor since it was loaded
     edited: bool = False
+    # Sent exactly as uploaded ("Needs changes" off), so an edit gets the
+    # upload's check_as_uploaded instead of the processed print's validation
+    as_uploaded: bool = False
 
 
 class PrinterSession:
@@ -410,7 +415,7 @@ class PrinterSession:
         # A converted print is checked from the zero point it starts at; a
         # lab file starts wherever the head is, so only at print start.
         check_path(self.config.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
-        self._load(LoadedPrint(gcode, filename, mode, "gcode"))
+        self._load(LoadedPrint(gcode, filename, mode, "gcode", as_uploaded=not needs_changes))
         return gcode
 
     def _load(self, loaded: LoadedPrint, reason: str = "A new file was loaded") -> None:
@@ -431,10 +436,11 @@ class PrinterSession:
         """Replace the loaded print's lines with `text`, an edited copy of
         them (as GET /gcode/loaded sends them, one line per line).
 
-        The edit gets the checks a loaded print gets (validation, the bed
-        limits from the print's start point) and the syringe travel check
-        (start_print repeats it with the flow override). The print keeps its
-        filename, mode and start point, and is marked edited.
+        The edit gets the checks a loaded print gets (validation, or for a
+        file sent as uploaded check_as_uploaded with its warnings recomputed;
+        the bed limits from the print's start point) and the syringe travel
+        check (start_print repeats it with the flow override). The print
+        keeps its filename, mode and start point, and is marked edited.
 
         Raises Conflict while a print is printing or paused, NotReady if
         nothing is loaded, StaleProgram if `program_id` is given and isn't
@@ -442,7 +448,7 @@ class PrinterSession:
         """
         loaded = self._editable(program_id)
         # Half a million lines take a few seconds to check: off the event loop
-        gcode = await asyncio.to_thread(self._check_edit, loaded.gcode, split_lines(text))
+        gcode = await asyncio.to_thread(self._check_edit, loaded, split_lines(text))
         if self._editable(program_id) is not loaded:
             raise StaleProgram("Another file was loaded while the edit was checked")
         self._load(replace(loaded, gcode=gcode, edited=True), "The loaded program was edited")
@@ -457,21 +463,28 @@ class PrinterSession:
             raise StaleProgram("The loaded program has changed since the editor opened it")
         return self.loaded
 
-    def _check_edit(self, old: ProcessedGcode, lines: list[str]) -> ProcessedGcode:
+    def _check_edit(self, loaded: LoadedPrint, lines: list[str]) -> ProcessedGcode:
+        old = loaded.gcode
         cmds = parse(lines)
-        if old.start_position is None:
-            # A lab file is kept as uploaded, so it is held to the upload's check
-            _check_relative_program(cmds)
+        max_feed = self.config.max_feed_mm_min
+        warnings: list[str] = []
+        if loaded.as_uploaded:
+            # Held to the upload's check: only an empty file or one without
+            # moves fails, the rest is warned about
+            try:
+                warnings = check_as_uploaded(cmds, max_feed)
+            except GcodeValidationError as exc:
+                raise GcodeEditError(str(exc)) from exc
         else:
             try:
-                validate(cmds)
+                validate(cmds, max_feed)
             except GcodeValidationError as exc:
                 raise GcodeEditError(str(exc), _line_in(str(exc)) or _first_command_line(cmds)) from exc
 
         # From where the print was planned to start: its zero point, or for
-        # a lab file, unknown
+        # a file kept as uploaded, unknown
         before, after = simulate_states(lines, old.state_before[0] if old.state_before else None)
-        gcode = replace(old, lines=lines, state_before=before, state_after=after)
+        gcode = replace(old, lines=lines, state_before=before, state_after=after, warnings=warnings)
         if old.start_position is None:
             # As process_gcode derives them for a lab file, in one pass
             moved = {w.letter for c in cmds if c.is_move for w in c.words}
@@ -611,30 +624,6 @@ def _line_in(message: str) -> int | None:
 
 def _first_command_line(cmds: list[Command]) -> int | None:
     return next((i for i, cmd in enumerate(cmds, start=1) if cmd.code), None)
-
-
-def _check_relative_program(cmds: list[Command]) -> None:
-    """is_relative_program, an upload's check of a lab file, saying which
-    line breaks it."""
-    relative = False
-    for number, cmd in enumerate(cmds, start=1):
-        if cmd.code == "G91":
-            relative = True
-        elif cmd.code in ("G90", "G53"):
-            raise GcodeEditError(
-                f"Line {number}: {cmd.code} would make the following moves absolute; "
-                f"the print must stay relative (G91)",
-                number,
-            )
-        elif cmd.has("E"):
-            raise GcodeEditError(
-                f"Line {number}: E isn't a printer axis here; move the plungers with B (left) or C (right)",
-                number,
-            )
-        elif cmd.is_move and not relative:
-            raise GcodeEditError(f"Line {number}: a move before G91; the print must be relative", number)
-    if not relative:
-        raise GcodeEditError("The print must switch to relative positioning (G91)", None)
 
 
 def _plunger_overrun_line(lines: list[str], start: MachineState, available_mm: float) -> int | None:
