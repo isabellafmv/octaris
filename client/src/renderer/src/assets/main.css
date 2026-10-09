@@ -27,6 +27,10 @@
   --color-danger-strong: #9B4A3A;
   --color-warning: #B5614A;
 
+  /* G-code preview: one color per nozzle, and travel moves */
+  --color-nozzle-left: var(--color-primary);
+  --color-nozzle-right: var(--color-warning);
+  --color-travel: var(--color-text-subtle);
   /* Chart series, in this fixed order (validated together on the surface
      color for color-blind separation; slot 6 is below 3:1 contrast, so it
      always comes with a named legend). Never cycled: past six, chart-other. */

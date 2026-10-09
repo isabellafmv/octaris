@@ -633,6 +633,28 @@
         }
       }
     },
+    "/gcode/loaded": {
+      "get": {
+        "summary": "Get Loaded Gcode",
+        "description": "The loaded print's processed G-code, one line per line, as sent to\nthe printer (before flow scaling).",
+        "operationId": "get_loaded_gcode_gcode_loaded_get",
+        "responses": {
+          "200": {
+            "description": "G-code",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No print loaded"
+          }
+        }
+      }
+    },
     "/history": {
       "get": {
         "summary": "Get History",

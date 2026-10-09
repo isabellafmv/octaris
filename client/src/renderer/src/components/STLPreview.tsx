@@ -2,11 +2,7 @@ import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-
-// Theme colors from main.css, for three.js which can't use CSS classes
-function themeColor(name: string): THREE.Color {
-  return new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue(name).trim())
-}
+import { themeColor } from '../themeColor'
 
 interface STLPreviewProps {
   file: File
