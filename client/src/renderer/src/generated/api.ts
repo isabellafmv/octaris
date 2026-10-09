@@ -333,10 +333,20 @@ export interface paths {
         /**
          * Get Loaded Gcode
          * @description The loaded print's processed G-code, one line per line, as sent to
-         *     the printer (before flow scaling).
+         *     the printer (before flow scaling). Its ETag is the program id, which
+         *     changes on every load and edit.
          */
         get: operations["get_loaded_gcode_gcode_loaded_get"];
-        put?: never;
+        /**
+         * Replace Loaded Gcode
+         * @description Replace the loaded print's lines with the request body (text/plain,
+         *     one G-code line per line, as GET /gcode/loaded sends them).
+         *
+         *     The edit is validated, simulated and checked against the bed limits and
+         *     the syringe travel; if it fails, nothing changes and the 422 body says
+         *     which line. With If-Match, it is only applied to that program.
+         */
+        put: operations["replace_loaded_gcode_gcode_loaded_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -563,6 +573,59 @@ export interface components {
             /** Rate */
             rate: number;
         };
+        /**
+         * GcodeEditErrorResponse
+         * @description PUT /gcode/loaded's 422 body: the edit was rejected, the loaded
+         *     program is unchanged. The checks stop at the first problem, so
+         *     `errors` holds one entry.
+         */
+        GcodeEditErrorResponse: {
+            /** Detail */
+            detail: string;
+            /** Errors */
+            errors: components["schemas"]["GcodeLineError"][];
+        };
+        /**
+         * GcodeEditResult
+         * @description PUT /gcode/loaded's body. program_id changes on every load and edit;
+         *     GET /gcode/loaded sends it as its ETag.
+         */
+        GcodeEditResult: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "ready";
+            /** Filename */
+            filename: string;
+            /** Lines Total */
+            lines_total: number;
+            /** Time Estimate S */
+            time_estimate_s: number | null;
+            /** Feed Log Entries */
+            feed_log_entries: number;
+            /** Preview Lines */
+            preview_lines: string[];
+            /**
+             * Edited
+             * @default false
+             */
+            edited?: boolean;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
+            /** Program Id */
+            program_id: string;
+        };
+        /** GcodeLineError */
+        GcodeLineError: {
+            /** Line */
+            line: number | null;
+            /** Message */
+            message: string;
+        };
         /** GcodeSendRequest */
         GcodeSendRequest: {
             /** Line */
@@ -689,6 +752,11 @@ export interface components {
             end_reason: ("completed" | "stopped" | "estop" | "error") | null;
             /** Resume Line */
             resume_line: number | null;
+            /**
+             * Edited
+             * @default false
+             */
+            edited?: boolean;
             /** Serial Log */
             serial_log?: string | null;
             /** Extrusion Events */
@@ -886,6 +954,11 @@ export interface components {
             feed_log_entries: number;
             /** Preview Lines */
             preview_lines: string[];
+            /**
+             * Edited
+             * @default false
+             */
+            edited?: boolean;
             /**
              * Warnings
              * @default []
@@ -1646,7 +1719,9 @@ export interface operations {
     get_loaded_gcode_gcode_loaded_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "if-none-match"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1661,12 +1736,84 @@ export interface operations {
                     "text/plain": string;
                 };
             };
+            /** @description Unchanged since the ETag in If-None-Match */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description No print loaded */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_loaded_gcode_gcode_loaded_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "if-match"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "text/plain": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcodeEditResult"];
+                };
+            };
+            /** @description No print loaded */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A print is printing or paused */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description If-Match names a program that is no longer loaded */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The edit failed a check */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcodeEditErrorResponse"];
+                };
             };
         };
     };

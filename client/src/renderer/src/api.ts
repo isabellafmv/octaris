@@ -1,5 +1,7 @@
 import type {
   CalibrateResponse,
+  GcodeEditResult,
+  GcodeLineError,
   NozzleCalibration,
   PortInfo,
   SerialLogEntry,
@@ -32,6 +34,16 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return (await request(url, init)).json()
+}
+
+// A rejected G-code edit. `errors` say which line, when the backend knows.
+export class GcodeSaveError extends Error {
+  constructor(
+    message: string,
+    readonly errors: GcodeLineError[] = []
+  ) {
+    super(message)
+  }
 }
 
 // Slicer options for /upload, keyed by their query parameter names
@@ -123,6 +135,27 @@ export const api = {
   // The loaded print's full processed G-code, for the 3D preview
   getLoadedGcode: async (signal?: AbortSignal) =>
     (await request('/gcode/loaded', { signal })).text(),
+  // The same, with its program id (ETag), for the editor to save it against
+  getLoadedGcodeForEdit: async (signal?: AbortSignal) => {
+    const res = await request('/gcode/loaded', { signal, cache: 'no-store' })
+    return { text: await res.text(), etag: res.headers.get('ETag') }
+  },
+  // Replace the loaded program's lines. With `etag`, only if it is still the
+  // program the editor opened. Throws GcodeSaveError if a check fails.
+  saveLoadedGcode: async (text: string, etag: string | null): Promise<GcodeEditResult> => {
+    const res = await fetch(`${BASE}/gcode/loaded`, {
+      method: 'PUT',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'text/plain; charset=utf-8',
+        ...(etag ? { 'If-Match': etag } : {})
+      },
+      body: text
+    })
+    if (res.ok) return res.json()
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new GcodeSaveError(body.detail || res.statusText, body.errors ?? [])
+  },
   getSerialLog: (limit = 200) => json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
   calibrationStatus: () =>
     json<{ calibrated: boolean; nozzles: NozzleCalibration }>('/calibration/status'),

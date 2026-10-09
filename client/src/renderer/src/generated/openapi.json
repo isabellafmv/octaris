@@ -662,8 +662,26 @@
     "/gcode/loaded": {
       "get": {
         "summary": "Get Loaded Gcode",
-        "description": "The loaded print's processed G-code, one line per line, as sent to\nthe printer (before flow scaling).",
+        "description": "The loaded print's processed G-code, one line per line, as sent to\nthe printer (before flow scaling). Its ETag is the program id, which\nchanges on every load and edit.",
         "operationId": "get_loaded_gcode_gcode_loaded_get",
+        "parameters": [
+          {
+            "name": "if-none-match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "G-code",
@@ -675,8 +693,85 @@
               }
             }
           },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match"
+          },
           "404": {
             "description": "No print loaded"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace Loaded Gcode",
+        "description": "Replace the loaded print's lines with the request body (text/plain,\none G-code line per line, as GET /gcode/loaded sends them).\n\nThe edit is validated, simulated and checked against the bed limits and\nthe syringe travel; if it fails, nothing changes and the 422 body says\nwhich line. With If-Match, it is only applied to that program.",
+        "operationId": "replace_loaded_gcode_gcode_loaded_put",
+        "parameters": [
+          {
+            "name": "if-match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcodeEditResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No print loaded"
+          },
+          "409": {
+            "description": "A print is printing or paused"
+          },
+          "412": {
+            "description": "If-Match names a program that is no longer loaded"
+          },
+          "422": {
+            "description": "The edit failed a check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcodeEditErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
           }
         }
       }
@@ -1179,6 +1274,121 @@
         ],
         "title": "ExtrusionResponse"
       },
+      "GcodeEditErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/GcodeLineError"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail",
+          "errors"
+        ],
+        "title": "GcodeEditErrorResponse",
+        "description": "PUT /gcode/loaded's 422 body: the edit was rejected, the loaded\nprogram is unchanged. The checks stop at the first problem, so\n`errors` holds one entry."
+      },
+      "GcodeEditResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ready",
+            "title": "Status"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          },
+          "feed_log_entries": {
+            "type": "integer",
+            "title": "Feed Log Entries"
+          },
+          "preview_lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Preview Lines"
+          },
+          "edited": {
+            "type": "boolean",
+            "title": "Edited",
+            "default": false
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          },
+          "program_id": {
+            "type": "string",
+            "title": "Program Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "filename",
+          "lines_total",
+          "time_estimate_s",
+          "feed_log_entries",
+          "preview_lines",
+          "program_id"
+        ],
+        "title": "GcodeEditResult",
+        "description": "PUT /gcode/loaded's body. program_id changes on every load and edit;\nGET /gcode/loaded sends it as its ETag."
+      },
+      "GcodeLineError": {
+        "properties": {
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "line",
+          "message"
+        ],
+        "title": "GcodeLineError"
+      },
       "GcodeSendRequest": {
         "properties": {
           "line": {
@@ -1524,6 +1734,11 @@
               }
             ],
             "title": "Resume Line"
+          },
+          "edited": {
+            "type": "boolean",
+            "title": "Edited",
+            "default": false
           },
           "serial_log": {
             "anyOf": [
@@ -2048,6 +2263,11 @@
             },
             "type": "array",
             "title": "Preview Lines"
+          },
+          "edited": {
+            "type": "boolean",
+            "title": "Edited",
+            "default": false
           },
           "warnings": {
             "items": {

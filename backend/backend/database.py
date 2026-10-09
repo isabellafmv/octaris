@@ -72,6 +72,8 @@ _SESSION_COLUMNS = {
     "resume_line": "INTEGER",
     # Path of the file holding the print's serial traffic
     "serial_log": "TEXT",
+    # 1 if the program was changed in the G-code editor before printing
+    "edited": "INTEGER NOT NULL DEFAULT 0",
 }
 
 PRINT_SETTING_KEYS = (
@@ -114,10 +116,11 @@ def create_session(
     total_lines: int,
     source: str | None = None,
     settings: Mapping[str, object] | None = None,
+    edited: bool = False,
 ) -> int:
     settings = settings or {}
-    columns = ["started_at", "filename", "syringe_config", "total_lines", "source"]
-    values: list[Any] = [_now(), filename, syringe_config, total_lines, source]
+    columns = ["started_at", "filename", "syringe_config", "total_lines", "source", "edited"]
+    values: list[Any] = [_now(), filename, syringe_config, total_lines, source, int(edited)]
     for key in PRINT_SETTING_KEYS:
         columns.append(key)
         values.append(settings.get(key))
@@ -186,6 +189,7 @@ def list_sessions(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, A
         by_id = {s["id"]: s for s in sessions}
         for s in sessions:
             s["completed"] = bool(s["completed"])
+            s["edited"] = bool(s["edited"])
             s["extrusion_events"] = []
         if by_id:
             placeholders = ", ".join("?" for _ in by_id)

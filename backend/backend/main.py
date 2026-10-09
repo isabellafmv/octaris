@@ -173,7 +173,9 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "null"],
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["Content-Type", "X-Octaris-Token"],
+    allow_headers=["Content-Type", "X-Octaris-Token", "If-Match"],
+    # The G-code editor reads the loaded program's id from GET /gcode/loaded
+    expose_headers=["ETag"],
 )
 
 
