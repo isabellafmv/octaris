@@ -3,6 +3,8 @@ import { useRef } from 'react'
 interface GcodeUploadProps {
   file: File | null
   loading: boolean
+  // Post-processed on upload; otherwise only checked
+  needsChanges: boolean
   onFile: (f: File) => void
   onError: (msg: string) => void
 }
@@ -10,6 +12,7 @@ interface GcodeUploadProps {
 export function GcodeUpload({
   file,
   loading,
+  needsChanges,
   onFile,
   onError
 }: GcodeUploadProps): React.JSX.Element {
@@ -20,13 +23,13 @@ export function GcodeUpload({
       <input
         ref={inputRef}
         type="file"
-        accept=".gcode,.gco"
+        accept=".gcode,.gco,.txt"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0]
           if (!f) return
-          if (!f.name.toLowerCase().match(/\.(gcode|gco)$/)) {
-            onError('Only .gcode files are accepted')
+          if (!f.name.toLowerCase().match(/\.(gcode|gco|txt)$/)) {
+            onError('Only .gcode and .txt files are accepted')
             return
           }
           onFile(f)
@@ -69,10 +72,12 @@ export function GcodeUpload({
           </p>
           <p className="text-xs mt-0.5 text-text-muted">
             {loading
-              ? 'Applying extrusion substitution'
+              ? needsChanges
+                ? 'Applying extrusion substitution'
+                : 'Checking the file'
               : file
                 ? 'Click to replace file'
-                : 'Select a pre-sliced .gcode file'}
+                : 'Select a pre-sliced .gcode or .txt file'}
           </p>
         </div>
         <svg

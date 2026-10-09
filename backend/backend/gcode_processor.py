@@ -17,8 +17,9 @@ TRAVEL_RETRACT_MULTIPLIER = 3.0
 # Nozzle clearance height (mm) to raise before returning to origin
 CLEARANCE_Z_MM = 5
 TRAVEL_FEED = 300
-# Highest feed rate sent to the printer (mm/min)
-MAX_FEED = 400
+# Highest feed rate sent to the printer (mm/min): the default for
+# max_feed_mm_min in config.json, which is what the app uses
+MAX_FEED = 400.0
 
 # Each nozzle has its own height motor and plunger:
 #   left nozzle:  height Z, plunger B
@@ -72,6 +73,8 @@ class ProcessedGcode:
     # a converted file, which the head travels back to if it isn't there.
     # None: wherever the head is (a lab G91 file, sent as it is).
     start_position: dict[str, float] | None = None
+    # What a file sent as uploaded may do differently than intended
+    warnings: list[str] = field(default_factory=list)
 
 
 # A letter and its number. The number may lack a leading zero (Cura writes
@@ -373,7 +376,7 @@ def clamp_feed_rates(cmds: list[Command], max_f: float = MAX_FEED) -> tuple[list
     for i, cmd in enumerate(cmds):
         for w in cmd.words:
             if w.letter == "F" and w.value > max_f:
-                log_entries.append(f"Line {i + 1}: F{w.value} clamped to F{max_f}")
+                log_entries.append(f"Line {i + 1}: F{w.value:g} clamped to F{max_f:g}")
         result.append(cmd.map_axis("F", lambda f: min(f, max_f)))
     return result, log_entries
 
@@ -575,7 +578,7 @@ def to_relative(cmds: list[Command], start: Mapping[str, float] | None = None) -
     return result
 
 
-def validate(cmds: list[Command]) -> None:
+def validate(cmds: list[Command], max_feed: float = MAX_FEED) -> None:
     numbered = [(i, cmd) for i, cmd in enumerate(cmds) if cmd.code]
     if not numbered:
         raise GcodeValidationError("Empty G-code")
@@ -594,8 +597,48 @@ def validate(cmds: list[Command]) -> None:
                 f"Line {i + 1}: Unsubstituted E command found: {render_line(cmd).strip()}"
             )
         for w in cmd.words:
-            if w.letter == "F" and w.value > MAX_FEED:
-                raise GcodeValidationError(f"Line {i + 1}: F value {str(w)[1:]} exceeds {MAX_FEED}")
+            if w.letter == "F" and w.value > max_feed:
+                raise GcodeValidationError(f"Line {i + 1}: F value {str(w)[1:]} exceeds {max_feed:g}")
+
+
+def check_as_uploaded(cmds: list[Command], max_feed: float = MAX_FEED) -> list[str]:
+    """Check a file that is sent exactly as uploaded: raise
+    GcodeValidationError if there is nothing to print, and return warnings
+    for what would print differently than intended (nothing is changed)."""
+    numbered = [(i, cmd) for i, cmd in enumerate(cmds) if cmd.code]
+    if not numbered:
+        raise GcodeValidationError("Empty G-code")
+    if not any(cmd.is_move and any(cmd.has(ax) for ax in AXES) for _, cmd in numbered):
+        raise GcodeValidationError("The file has no motion commands (G0/G1 moves)")
+
+    warnings = []
+    fast = [(i, cmd.get("F")) for i, cmd in numbered if (cmd.get("F") or 0) > max_feed]
+    if fast:
+        top = max(f for _, f in fast if f is not None)
+        warnings.append(
+            f"{len(fast)} line(s) set a feed rate above the {max_feed:g} mm/min limit "
+            f"(first on line {fast[0][0] + 1}, up to F{top:g}); they are sent unchanged"
+        )
+    with_e = [i for i, cmd in numbered if cmd.has("E")]
+    if with_e:
+        warnings.append(
+            f"{len(with_e)} line(s) use E (first on line {with_e[0] + 1}); the plungers are "
+            f'B (left) and C (right), so E moves no syringe. Choose "Needs changes" to convert them'
+        )
+    first_move = next((i for i, cmd in numbered if cmd.is_move), len(cmds))
+    if not any(cmd.code == "G91" for i, cmd in numbered if i < first_move):
+        warnings.append(
+            "No G91 before the first move: this is an absolute file, so its moves go to "
+            "coordinates from the zero point instead of distances from where the head is"
+        )
+    else:
+        absolute = [i for i, cmd in numbered if cmd.code in ("G90", "G53")]
+        if absolute:
+            line = absolute[0]
+            warnings.append(
+                f"Line {line + 1}: {cmds[line].code} switches the print back to absolute positioning"
+            )
+    return warnings
 
 
 def is_relative_program(cmds: list[Command]) -> bool:
@@ -616,6 +659,7 @@ def build_print(
     pressurize_mm: float = PRESSURIZE_MM,
     flow_multiplier: float = 1.0,
     travel_retract_multiplier: float = TRAVEL_RETRACT_MULTIPLIER,
+    max_feed: float = MAX_FEED,
 ) -> tuple[list[Command], list[str]]:
     """The print in the slicer's own (absolute) coordinates, with the
     preamble, footer and retracts added; process_gcode makes it relative.
@@ -624,10 +668,32 @@ def build_print(
     cmds = substitute_extrusion(cmds, mode)
     cmds = map_height_axes(cmds, mode)
     cmds = apply_flow_multiplier(cmds, flow_multiplier)
-    cmds, feed_log = clamp_feed_rates(cmds)
     cmds = insert_layer_depressurize(cmds, mode, pressurize_mm)
     cmds = insert_travel_retract(cmds, mode, pressurize_mm * travel_retract_multiplier)
-    return add_preamble_and_footer(cmds, mode, pressurize_mm), feed_log
+    cmds = add_preamble_and_footer(cmds, mode, pressurize_mm)
+    # Last, so the pressurize and retract moves added above keep to it too
+    return clamp_feed_rates(cmds, max_feed)
+
+
+def as_uploaded(
+    raw: str, pressurize_mm: float = PRESSURIZE_MM, warnings: list[str] | None = None
+) -> ProcessedGcode:
+    """The file exactly as it is, starting wherever the head is: its states
+    planned from unknown positions, its plungers and height motors those it
+    moves. `pressurize_mm` is what an e-stop pulls the plungers back."""
+    lines = raw.splitlines()
+    cmds = parse(lines)
+    state_before, state_after = simulate_states(lines)
+    return ProcessedGcode(
+        lines=lines,
+        time_estimate_s=extract_time_metadata(raw),
+        state_before=state_before,
+        state_after=state_after,
+        extrusion_axes=tuple(ax for ax in "BC" if any(c.is_move and c.has(ax) for c in cmds)),
+        pressurize_mm=pressurize_mm,
+        height_axes=tuple(ax for ax in "ZA" if any(c.is_move and c.has(ax) for c in cmds)) or ("Z",),
+        warnings=warnings or [],
+    )
 
 
 def process_gcode(
@@ -636,6 +702,7 @@ def process_gcode(
     pressurize_mm: float = PRESSURIZE_MM,
     flow_multiplier: float = 1.0,
     travel_retract_multiplier: float = TRAVEL_RETRACT_MULTIPLIER,
+    max_feed: float = MAX_FEED,
 ) -> ProcessedGcode:
     """Turn sliced G-code into the relative (G91) program sent to the printer.
 
@@ -644,22 +711,14 @@ def process_gcode(
     """
     cmds = parse(raw.splitlines())
     if is_relative_program(cmds):
-        lines = raw.splitlines()
-        state_before, state_after = simulate_states(lines)
-        return ProcessedGcode(
-            lines=lines,
-            time_estimate_s=extract_time_metadata(raw),
-            state_before=state_before,
-            state_after=state_after,
-            extrusion_axes=tuple(ax for ax in "BC" if any(c.is_move and c.has(ax) for c in cmds)),
-            pressurize_mm=pressurize_mm,
-            height_axes=tuple(ax for ax in "ZA" if any(c.is_move and c.has(ax) for c in cmds)) or ("Z",),
-        )
+        return as_uploaded(raw, pressurize_mm)
 
-    cmds, feed_log = build_print(cmds, mode, pressurize_mm, flow_multiplier, travel_retract_multiplier)
+    cmds, feed_log = build_print(
+        cmds, mode, pressurize_mm, flow_multiplier, travel_retract_multiplier, max_feed
+    )
     start = start_position(cmds)
     cmds = to_relative(cmds, start)
-    validate(cmds)
+    validate(cmds, max_feed)
     lines = render(cmds)
     # The plungers count from 0 at the start, like the other axes the print moves
     planned_start = MachineState(pos={ax: start.get(ax, 0.0 if ax in "BC" else None) for ax in AXES})

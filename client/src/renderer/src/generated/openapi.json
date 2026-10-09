@@ -291,6 +291,22 @@
               ],
               "title": "Travel Retract Multiplier"
             }
+          },
+          {
+            "name": "print_speed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Speed"
+            }
           }
         ],
         "requestBody": {
@@ -340,6 +356,16 @@
               "type": "string",
               "default": "left",
               "title": "Syringe Mode"
+            }
+          },
+          {
+            "name": "needs_changes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Needs Changes"
             }
           }
         ],
@@ -1646,6 +1672,17 @@
               }
             ],
             "title": "Travel Retract Multiplier"
+          },
+          "print_speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Print Speed"
           },
           "source": {
             "anyOf": [

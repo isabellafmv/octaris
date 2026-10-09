@@ -739,6 +739,8 @@ export interface components {
             flow_multiplier: number | null;
             /** Travel Retract Multiplier */
             travel_retract_multiplier: number | null;
+            /** Print Speed */
+            print_speed?: number | null;
             /** Source */
             source: ("stl" | "gcode") | null;
             /** End Reason */
@@ -1413,6 +1415,7 @@ export interface operations {
                 pressurize_mm?: number | null;
                 flow_multiplier?: number | null;
                 travel_retract_multiplier?: number | null;
+                print_speed?: number | null;
             };
             header?: never;
             path?: never;
@@ -1448,6 +1451,7 @@ export interface operations {
         parameters: {
             query?: {
                 syringe_mode?: string;
+                needs_changes?: boolean;
             };
             header?: never;
             path?: never;

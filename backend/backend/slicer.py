@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from backend.config import PROJECT_ROOT, load_config
-from backend.gcode_processor import PRESSURIZE_MM, ProcessedGcode, SyringeMode, process_gcode
+from backend.gcode_processor import MAX_FEED, PRESSURIZE_MM, ProcessedGcode, SyringeMode, process_gcode
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,37 @@ PRINT_BED_MM = (60.0, 60.0, 60.0)  # X, Y, Z limits (must match octaris_settings
 
 # Layer height as a fraction of nozzle diameter
 DEFAULT_LAYER_HEIGHT_RATIO = 0.8
+
+# Set to the print speed: speed_print and speed_travel, and the speeds Cura
+# derives from them. CuraEngine doesn't evaluate the definitions' formulas, so
+# these would otherwise keep fdmprinter's defaults (walls at 30-60 mm/s).
+# Layer-change Z moves keep speed_z_hop; the feed cap clamps them.
+PRINT_SPEED_SETTINGS = (
+    "speed_print",
+    "speed_travel",
+    "speed_infill",
+    "speed_wall",
+    "speed_wall_0",
+    "speed_wall_x",
+    "speed_wall_0_roofing",
+    "speed_wall_x_roofing",
+    "speed_wall_0_flooring",
+    "speed_wall_x_flooring",
+    "speed_topbottom",
+    "speed_roofing",
+    "speed_flooring",
+    "speed_support",
+    "speed_support_infill",
+    "speed_support_interface",
+    "speed_support_roof",
+    "speed_support_bottom",
+    "speed_prime_tower",
+    "speed_ironing",
+    "speed_layer_0",
+    "speed_print_layer_0",
+    "speed_travel_layer_0",
+    "skirt_brim_speed",
+)
 
 
 class SlicingError(Exception):
@@ -169,6 +200,8 @@ class PrintSettings(TypedDict, total=False):
     pressurize_mm: float | None
     flow_multiplier: float | None
     travel_retract_multiplier: float | None
+    # mm/s, for both printing and travel moves
+    print_speed: float | None
 
 
 async def slice_model(
@@ -180,6 +213,8 @@ async def slice_model(
     pressurize_mm: float | None = None,
     flow_multiplier: float | None = None,
     travel_retract_multiplier: float | None = None,
+    print_speed: float | None = None,
+    max_feed: float = MAX_FEED,
     profile_path: Path | None = None,
 ) -> ProcessedGcode:
     """Slice an STL or 3MF file and return processed G-code.
@@ -187,6 +222,10 @@ async def slice_model(
     Accepts both .stl and .3mf inputs.  For 3MF files the extruder-to-mesh
     mapping embedded in the archive is used by CuraEngine, so multi-material
     prints are supported when syringe_mode is "both".
+
+    `print_speed` (mm/s) sets Cura's speed_print and speed_travel (see
+    PRINT_SPEED_SETTINGS); `max_feed` (mm/min) is the cap every feed rate
+    is clamped to.
     """
     if profile_path is None:
         profile_path = PROFILE_PATH
@@ -247,6 +286,9 @@ async def slice_model(
     if layer_height is not None:
         cmd.extend(["-s", f"layer_height={layer_height}"])
         cmd.extend(["-s", f"layer_height_0={layer_height}"])
+    if print_speed is not None:
+        for setting in PRINT_SPEED_SETTINGS:
+            cmd.extend(["-s", f"{setting}={print_speed}"])
 
     if dual:
         # Extruder 1 with its definition and same settings
@@ -262,6 +304,9 @@ async def slice_model(
         if layer_height is not None:
             cmd.extend(["-s", f"layer_height={layer_height}"])
             cmd.extend(["-s", f"layer_height_0={layer_height}"])
+        if print_speed is not None:
+            for setting in PRINT_SPEED_SETTINGS:
+                cmd.extend(["-s", f"{setting}={print_speed}"])
 
     cmd.extend(["-o", str(output_path), "-l", str(model_path)])
 
@@ -304,6 +349,7 @@ async def slice_model(
         pressurize_mm=pressurize_mm or PRESSURIZE_MM,
         flow_multiplier=flow_multiplier or 1.0,
         travel_retract_multiplier=travel_retract_multiplier or 3.0,
+        max_feed=max_feed,
     )
 
 

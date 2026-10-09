@@ -385,7 +385,7 @@ class PrinterSession:
         model_path = DATA_DIR / filename
         model_path.write_bytes(content)
         try:
-            gcode = await slice_model(model_path, mode, **settings)
+            gcode = await slice_model(model_path, mode, **settings, max_feed=self.config.max_feed_mm_min)
             check_path(self.config.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
         except Exception:
             self._publish(StatusEvent(value="idle"))
@@ -393,12 +393,20 @@ class PrinterSession:
         self._load(LoadedPrint(gcode, filename, mode, "stl", settings))
         return gcode
 
-    def load_gcode(self, filename: str, raw: str, mode: SyringeMode) -> ProcessedGcode:
-        """Post-process and load an uploaded G-code file.
+    def load_gcode(
+        self, filename: str, raw: str, mode: SyringeMode, needs_changes: bool = True
+    ) -> ProcessedGcode:
+        """Load an uploaded G-code file: post-processed if it `needs_changes`,
+        otherwise exactly as uploaded, with warnings for what may print
+        differently than intended.
 
         Raises GcodeValidationError or LimitError if it can't be printed.
         """
-        gcode = process_gcode(raw, mode)
+        max_feed = self.config.max_feed_mm_min
+        if needs_changes:
+            gcode = process_gcode(raw, mode, max_feed=max_feed)
+        else:
+            gcode = as_uploaded(raw, warnings=check_as_uploaded(parse(raw.splitlines()), max_feed))
         # A converted print is checked from the zero point it starts at; a
         # lab file starts wherever the head is, so only at print start.
         check_path(self.config.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
