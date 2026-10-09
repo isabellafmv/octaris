@@ -27,6 +27,11 @@
   --color-danger-strong: #9B4A3A;
   --color-warning: #B5614A;
 
+  /* G-code preview: one color per nozzle, and travel moves */
+  --color-nozzle-left: var(--color-primary);
+  --color-nozzle-right: var(--color-warning);
+  --color-travel: var(--color-text-subtle);
+
   /* Dark window chrome around the main card */
   --color-chrome: #262929;
   --color-chrome-dot: #3D4040;

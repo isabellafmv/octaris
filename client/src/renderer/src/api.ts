@@ -9,7 +9,7 @@ function authHeaders(): Record<string, string> {
   return token ? { 'X-Octaris-Token': token } : {}
 }
 
-async function json<T>(url: string, init?: RequestInit): Promise<T> {
+async function request(url: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(`${BASE}${url}`, {
     ...init,
     headers: { ...authHeaders(), ...(init?.headers || {}) }
@@ -18,7 +18,11 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(body.detail || res.statusText)
   }
-  return res.json()
+  return res
+}
+
+async function json<T>(url: string, init?: RequestInit): Promise<T> {
+  return (await request(url, init)).json()
 }
 
 // Slicer options for /upload, keyed by their query parameter names
@@ -80,6 +84,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ line })
     }),
+  // The loaded print's full processed G-code, for the 3D preview
+  getLoadedGcode: async (signal?: AbortSignal) =>
+    (await request('/gcode/loaded', { signal })).text(),
   getSerialLog: (limit = 200) => json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
   calibrationStatus: () => json<{ calibrated: boolean }>('/calibration/status'),
   calibrationZero: () =>

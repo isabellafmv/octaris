@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from backend.routers import get_session
@@ -25,3 +26,19 @@ async def send_gcode(body: GcodeSendRequest, session: PrinterSession = Depends(g
 async def get_serial_log(limit: int = 200, session: PrinterSession = Depends(get_session)):
     """Return the most recent serial log entries."""
     return {"entries": session.serial_log(limit)}
+
+
+@router.get(
+    "/gcode/loaded",
+    response_class=PlainTextResponse,
+    responses={
+        200: {"content": {"text/plain": {"schema": {"type": "string"}}}, "description": "G-code"},
+        404: {"description": "No print loaded"},
+    },
+)
+async def get_loaded_gcode(session: PrinterSession = Depends(get_session)):
+    """The loaded print's processed G-code, one line per line, as sent to
+    the printer (before flow scaling)."""
+    if session.loaded is None:
+        raise HTTPException(status_code=404, detail="No print loaded")
+    return PlainTextResponse("\n".join(session.loaded.gcode.lines))
