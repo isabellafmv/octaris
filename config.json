@@ -8,7 +8,7 @@
   },
   "syringe_travel_mm": 40,
   "max_feed_mm_min": 400,
-  "nozzle_offset_measured": false,
+  "nozzle_offset_measured": true,
   "temperature": {
     "sensors": {
       "T": { "name": "Syringe", "min": 4, "max": 60 },

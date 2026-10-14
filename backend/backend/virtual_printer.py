@@ -141,6 +141,7 @@ class VirtualPrinter:
         ok_delay_s: float = 0.0,
         busy_interval_s: float | None = 2.0,
         autoreport: bool = True,
+        answers_m105: bool = True,
         report_scale: float = 1.0,
         sensors: dict[str, float] | None = None,
     ):
@@ -157,6 +158,8 @@ class VirtualPrinter:
         self.busy_interval_s = busy_interval_s
         # M155 is accepted either way; without autoreport nothing is reported.
         self.autoreport = autoreport
+        # False: M105 gets no reply at all, like a build without temperature sensors.
+        self.answers_m105 = answers_m105
         # M155 S<n> reports every n * report_scale seconds.
         self.report_scale = report_scale
 
@@ -436,6 +439,8 @@ class VirtualPrinter:
                 if code in ("M109", "M190") and target:
                     self._wait(lambda: abs(self.temperatures[key][0] - target) < 1)
         elif code == "M105":
+            if not self.answers_m105:
+                return []
             return [f"ok {self.temperature_report()}".rstrip()]
         elif code == "M110":
             self._last_n = int(params.get("N", 0))

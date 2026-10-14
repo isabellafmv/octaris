@@ -45,6 +45,10 @@ STM32_DESCRIPTIONS = ("STMicroelectronics", "STM32")
 # move buffer, wait for temperature).
 SLOW_COMMANDS = frozenset({"G28", "G4", "M400", "M109", "M190"})
 SLOW_REPLY_DEADLINE_S = 300.0
+# Queries answered straight away, without waiting for moves. A firmware that
+# never answers one would otherwise hold the line for REPLY_DEADLINE_S.
+QUICK_COMMANDS = frozenset({"M105", "M115", "M155"})
+QUICK_REPLY_DEADLINE_S = 5.0
 SERIAL_LOG_MAX_ENTRIES = 500
 # Numbered lines kept for answering resend requests.
 RESEND_HISTORY = 100
@@ -101,6 +105,8 @@ def reply_deadline_s(line: str) -> float:
     command = line.split(";", 1)[0].split(maxsplit=1)
     if command and command[0].upper() in SLOW_COMMANDS:
         return SLOW_REPLY_DEADLINE_S
+    if command and command[0].upper() in QUICK_COMMANDS:
+        return QUICK_REPLY_DEADLINE_S
     return REPLY_DEADLINE_S
 
 
@@ -650,26 +656,23 @@ class SerialManager:
                 try:
                     await self.send("M105", log=False)
                 except SerialTimeout:
-                    logger.warning("M105 temperature poll timed out")
+                    # Some builds (no temperature sensors) never answer M105;
+                    # polling on would stall every command behind each poll.
+                    logger.warning("Printer doesn't answer M105; temperature polling stopped")
+                    return
         except SerialError as exc:
             logger.info("Temperature monitoring stopped: %s", exc)
 
 
 def _open_port(port: str, baud_rate: int) -> serial.Serial:
-    """Open `port` without asserting DTR or RTS, where the OS allows it.
+    """Open `port` with DTR and RTS asserted.
 
-    Many printer boards (Arduino-style auto-reset: FTDI/CH340 USB-serial, or
-    the ATmega16U2 on a Mega2560) reset when DTR goes active, and pyserial
-    asserts DTR and RTS on open by default. A reset loses the position and
-    the G92 zero, which on this printer (no homing) means the next print
-    starts from the wrong place. Setting dtr/rts on the unopened Serial makes
-    pyserial apply them as part of open().
-
-    This is best effort: the OS driver may still pulse DTR while opening
-    (Linux does, via HUPCL) before pyserial gets to clear it. Calibration is
-    therefore reset after every (re)connect regardless. Boards with native
-    USB (STM32, SAMD, LPC) don't reset on DTR at all; if one of those stops
-    answering, check whether its firmware waits for DTR before sending.
+    The printer's STM32 board (native USB CDC) doesn't send anything until
+    the host asserts DTR, so a port opened with DTR cleared never answers.
+    Native-USB boards don't reset on DTR, so asserting it keeps the position
+    and the G92 zero. (An Arduino-style board with auto-reset would reset
+    here; calibration is reset after every (re)connect regardless.) Setting
+    dtr/rts on the unopened Serial makes pyserial apply them as part of open().
     """
     from backend import virtual_printer
 
@@ -679,8 +682,8 @@ def _open_port(port: str, baud_rate: int) -> serial.Serial:
     ser.port = port
     ser.baudrate = baud_rate
     ser.timeout = SERIAL_TIMEOUT_S
-    ser.dtr = False
-    ser.rts = False
+    ser.dtr = True
+    ser.rts = True
     ser.open()
     return ser
 

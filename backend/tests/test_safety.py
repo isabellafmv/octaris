@@ -116,7 +116,7 @@ async def upload_sample(client, mode: str = "left", raw: str = RAW_SAMPLE):
 # --- 1. no automatic reconnect during a print --------------------------------
 
 
-def test_port_opened_with_dtr_and_rts_cleared_before_open():
+def test_port_opened_with_dtr_and_rts_asserted_before_open():
     calls: list[tuple[str, object]] = []
 
     class RecordingSerial:
@@ -131,8 +131,8 @@ def test_port_opened_with_dtr_and_rts_cleared_before_open():
         _open_port("/dev/fake", 115200)
 
     opened = calls.index(("open", None))
-    assert ("dtr", False) in calls[:opened]
-    assert ("rts", False) in calls[:opened]
+    assert ("dtr", True) in calls[:opened]
+    assert ("rts", True) in calls[:opened]
 
 
 async def test_serial_error_while_reconnect_forbidden_does_not_reopen():
@@ -471,7 +471,8 @@ async def test_low_travel_warning_emitted_once():
 
 @pytest.mark.parametrize("mode", ["right", "both"])
 async def test_right_and_dual_prints_refused_until_offset_measured(client, printer, mode):
-    app.state.config.bed.x.max = 60  # the right nozzle's +31 mm shift
+    app.state.config.nozzle_offset_measured = False
+    app.state.config.bed.x.max = 60  # the right nozzle's +30 mm shift
     assert (await upload_sample(client, mode=mode)).status_code == 200
 
     resp = await client.post("/print/start")
@@ -485,14 +486,14 @@ async def test_right_and_dual_prints_refused_until_offset_measured(client, print
 
 async def test_right_print_allowed_once_offset_measured(client, printer):
     app.state.config.nozzle_offset_measured = True
-    app.state.config.bed.x.max = 60  # the right nozzle's +31 mm shift
+    app.state.config.bed.x.max = 60  # the right nozzle's +30 mm shift
     assert (await upload_sample(client, mode="right")).status_code == 200
 
     assert (await client.post("/print/start")).status_code == 200
 
 
 async def test_left_print_unaffected_by_offset_flag(client, printer):
-    assert app.state.config.nozzle_offset_measured is False
+    app.state.config.nozzle_offset_measured = False
     assert (await upload_sample(client)).status_code == 200
 
     assert (await client.post("/print/start")).status_code == 200
