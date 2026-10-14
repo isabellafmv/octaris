@@ -40,8 +40,8 @@ async def rig():
     events: list[dict] = []
     managers: list[SerialManager] = []
 
-    def make() -> SerialManager:
-        manager = SerialManager(on_event=events.append)
+    def make(**options) -> SerialManager:
+        manager = SerialManager(on_event=events.append, **options)
         managers.append(manager)
         return manager
 
@@ -158,7 +158,7 @@ async def test_unsolicited_temperature_reports_while_printing(rig):
     make, events = rig
     # Reports every 20 ms, while each move takes ~20 ms and the planner holds 2.
     printer = fast_printer(speed=5, planner_depth=2)
-    manager = make()
+    manager = make(temperature_enabled=True)
     with patch("backend.serial_manager.serial.Serial", return_value=printer):
         await manager.connect("/dev/virtual", 115200)
     await wait_for(lambda: any(e["type"] == "temperature" for e in events))
@@ -188,7 +188,7 @@ async def test_polls_m105_without_auto_report(rig, monkeypatch):
     monkeypatch.setattr(serial_module, "TEMPERATURE_POLL_S", 0.05)
     make, events = rig
     printer = fast_printer(autoreport=False)
-    manager = make()
+    manager = make(temperature_enabled=True)
     with patch("backend.serial_manager.serial.Serial", return_value=printer):
         await manager.connect("/dev/virtual", 115200)
 
@@ -200,27 +200,6 @@ async def test_polls_m105_without_auto_report(rig, monkeypatch):
     worker = await run_print(manager, PRINT)
     assert worker.status == PrintStatus.COMPLETED
     assert [c for c in printer.executed if c.startswith("G1")] == PRINT
-
-
-async def test_stops_polling_when_m105_is_never_answered(rig, monkeypatch):
-    """A build without temperature sensors never answers M105: one poll
-    times out, then polling stops so commands aren't stuck behind polls."""
-    monkeypatch.setattr(serial_module, "AUTOREPORT_WAIT_S", 0.1)
-    monkeypatch.setattr(serial_module, "TEMPERATURE_POLL_S", 0.05)
-    monkeypatch.setattr(serial_module, "QUICK_REPLY_DEADLINE_S", 0.2)
-    make, events = rig
-    printer = fast_printer(autoreport=False, answers_m105=False)
-    manager = make()
-    with patch("backend.serial_manager.serial.Serial", return_value=printer):
-        await manager.connect("/dev/virtual", 115200)
-
-    await wait_for(lambda: "M105" in printer.executed)
-    await asyncio.sleep(0.6)  # the poll's deadline, plus a few poll intervals
-
-    assert printer.executed.count("M105") == 1
-    assert not any(e["type"] == "temperature" for e in events)
-    worker = await run_print(manager, PRINT)
-    assert worker.status == PrintStatus.COMPLETED
 
 
 def test_queries_get_a_short_reply_deadline():

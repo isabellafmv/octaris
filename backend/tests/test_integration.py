@@ -77,6 +77,8 @@ def dev_mode(monkeypatch):
 async def test_full_print_lifecycle(client, dev_mode, data_dir):
     worker = app.state.queue_worker
     sub_id, event_queue = app.state.event_bus.subscribe()
+    # This printer has temperature sensors
+    assert (await client.put("/settings", json={"temperature_sensors": True})).status_code == 200
 
     # 1. connect to the virtual printer, as dev mode offers it
     resp = await client.get("/ports")

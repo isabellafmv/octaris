@@ -141,9 +141,9 @@ class VirtualPrinter:
         ok_delay_s: float = 0.0,
         busy_interval_s: float | None = 2.0,
         autoreport: bool = True,
-        answers_m105: bool = True,
         report_scale: float = 1.0,
         sensors: dict[str, float] | None = None,
+        answers_m105: bool = True,
     ):
         self.is_open = True
         # How many moves the planner buffers; a G0/G1 arriving when it's full
@@ -158,10 +158,10 @@ class VirtualPrinter:
         self.busy_interval_s = busy_interval_s
         # M155 is accepted either way; without autoreport nothing is reported.
         self.autoreport = autoreport
-        # False: M105 gets no reply at all, like a build without temperature sensors.
-        self.answers_m105 = answers_m105
         # M155 S<n> reports every n * report_scale seconds.
         self.report_scale = report_scale
+        # False: M105 gets no reply at all, not even "ok"
+        self.answers_m105 = answers_m105
 
         self.received: list[str] = []  # raw lines as they arrived
         self.executed: list[str] = []  # commands accepted and run, in order

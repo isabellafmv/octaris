@@ -12,6 +12,9 @@ deserves a WarningEvent: a sensor far from its target for too long during a
 print, temperature reports that stopped coming, and implausible readings.
 None of this replaces the firmware's thermal runaway protection, which
 must stay enabled.
+
+All of it is off while the temperature_sensors setting is: reports (from a
+manual M105) are ignored, and the state is "off".
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from backend.schemas import (
     HeaterStatus,
     SensorInfo,
     SensorReading,
+    TemperatureMonitor,
     TemperatureSeries,
     TemperatureState,
     TemperatureStatus,
@@ -107,6 +111,8 @@ class TemperatureStore:
         session_id: Callable[[], int | None] = lambda: None,
         is_connected: Callable[[], bool] = lambda: False,
         is_printing: Callable[[], bool] = lambda: False,
+        enabled: Callable[[], bool] = lambda: True,
+        monitor: Callable[[], TemperatureMonitor] = lambda: "autoreport",
         publish: Callable[[dict[str, Any]], None] | None = None,
         clock: Callable[[], float] = time.time,
     ):
@@ -117,6 +123,10 @@ class TemperatureStore:
         self._is_connected = is_connected
         # A print is running and not just waiting for its temperatures
         self._is_printing = is_printing
+        # The temperature_sensors setting
+        self._enabled = enabled
+        # How the serial manager gets reports (SerialManager.temperature_monitor)
+        self._monitor = monitor
         self._publish = publish
         self._clock = clock
         self._latest: dict[str, Reading] = {}
@@ -195,10 +205,14 @@ class TemperatureStore:
         return "heating" if reading.actual < reading.target else "cooling"
 
     def state(self) -> TemperatureState:
+        if not self._enabled():
+            return "off"
         if not self._is_connected():
             return "disconnected"
         if self._latest:
             return "ok"
+        if self._monitor() == "paused":
+            return "no_sensors"
         connected_at = self._connected_at
         if connected_at is not None and self._clock() - connected_at >= self.config.report_timeout_s:
             return "no_sensors"
@@ -219,7 +233,7 @@ class TemperatureStore:
                     timestamp=reading.timestamp,
                 )
             )
-        return TemperatureStatus(state=state, sensors=sensors)
+        return TemperatureStatus(state=state, monitor=self._monitor(), sensors=sensors)
 
     def _publish_status(self) -> None:
         status = self.status()
@@ -262,21 +276,38 @@ class TemperatureStore:
             self.record(event["temperatures"])
         elif event["type"] == "printer":
             # Readings from before don't describe the printer now
-            self._latest.clear()
-            self._settled.clear()
-            self._deviating.clear()
-            self._warned.clear()
-            self._last_report = None
-            self._connected_at = self._clock() if event["connected"] else None
-            self.flush()
-            self._publish_status()
+            self._reset(connected=event["connected"])
             if event["connected"]:
                 self._start_watchdog()
             else:
                 self._stop_watchdog()
 
+    def enabled_changed(self) -> None:
+        """The temperature_sensors setting changed: start afresh, as on a connect."""
+        self._reset(connected=self._is_connected())
+
+    def monitor_changed(self) -> None:
+        """The serial manager's monitor changed state. A (re)start gives the
+        printer report_timeout_s again before it counts as having no sensors."""
+        if self._monitor() == "starting" and self._is_connected():
+            self._connected_at = self._clock()
+        self._publish_status()
+
+    def _reset(self, connected: bool) -> None:
+        self._latest.clear()
+        self._settled.clear()
+        self._deviating.clear()
+        self._warned.clear()
+        self._last_report = None
+        self._connected_at = self._clock() if connected else None
+        self.flush()
+        self._publish_status()
+
     def record(self, temperatures: Mapping[str, Mapping[str, float | None]]) -> None:
-        """Take one temperature report: {"T0": {"actual": 21.3, "target": 0.0}, ...}."""
+        """Take one temperature report: {"T0": {"actual": 21.3, "target": 0.0}, ...}.
+        Ignored while temperature control is off."""
+        if not self._enabled():
+            return
         now = self._clock()
         session_id = self._session_id()
         tools = any(_TOOL.match(key) for key in temperatures)
@@ -352,7 +383,7 @@ class TemperatureStore:
         """The watchdog's periodic check: warnings, a state that changed
         without a report (no sensors), and readings due to be written."""
         now = self._clock()
-        if self._is_connected():
+        if self._is_connected() and self._enabled():
             self._check_reports(now)
             self._check_deviation(now)
         if self.state() != self._published_state:
@@ -362,10 +393,13 @@ class TemperatureStore:
 
     def _check_reports(self, now: float) -> None:
         """Reports stopped coming. (A printer that never sent one has no
-        sensors, which GET /temperature says instead.)"""
+        sensors, which GET /temperature says instead, as it does when
+        polling paused.)"""
         timeout = self.config.report_timeout_s
         last = self._last_report
         if last is None or now - last < timeout or ("report", "") in self._warned:
+            return
+        if self._monitor() == "paused":
             return
         self._warned.add(("report", ""))
         self._warn(f"No temperature report from the printer for {timeout:g} s.")

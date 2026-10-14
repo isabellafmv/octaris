@@ -6,6 +6,11 @@ Commands are sent one at a time — a line goes out, and the next may only follo
 once the reader has seen its "ok" (or its deadline has passed). Print lines
 carry line numbers and checksums, so the printer can ask for a corrupted line
 to be sent again.
+
+When the printer has temperature sensors (a setting, off by default), a
+monitor task asks it for temperature auto-reports, or polls with M105. Its
+commands never hold up anyone else's: a poll is skipped while another command
+is queued, and a poll in flight gives way to one that arrives.
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ import serial.tools.list_ports
 
 from backend.checkpoint import parse_m114
 from backend.gcode_processor import AXES, MachineState, step
-from backend.schemas import Event, PrinterEvent, SerialLogEvent, TemperatureEvent
+from backend.schemas import Event, PrinterEvent, SerialLogEvent, TemperatureEvent, TemperatureMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,13 @@ RESEND_HISTORY = 100
 AUTOREPORT_INTERVAL_S = 2
 AUTOREPORT_WAIT_S = 5.0
 TEMPERATURE_POLL_S = 2.0
+# Reply deadline for the monitor's M155/M105 and for a sensor test
+POLL_DEADLINE_S = 5.0
+# A monitor command in flight for this long gives way to a command that is
+# waiting (a healthy printer answers M105 within milliseconds)
+POLL_PREEMPT_S = 0.5
+# Polling pauses after this many M105s in a row without a usable reply
+POLL_FAILURES_TO_PAUSE = 2
 
 _RESEND = re.compile(r"^(?:resend:?|rs)\s*N?:?\s*(\d+)", re.IGNORECASE)
 # A temperature report starts with a sensor key, optionally after "ok":
@@ -98,6 +110,11 @@ class ResendUnavailable(SerialError):
 
 class _PortLost(SerialError):
     """Reading from or writing to the port failed; worth a reconnect."""
+
+
+class _PollSkipped(SerialError):
+    """A monitor command didn't go out because another command was queued,
+    or was given up on because one arrived."""
 
 
 def reply_deadline_s(line: str) -> float:
@@ -149,6 +166,9 @@ class _Pending:
     future: asyncio.Future
     lines: list[str] = field(default_factory=list)
     wants_temperatures: bool = False
+    # Sent by the temperature monitor: gives way to a command that arrives
+    poll: bool = False
+    sent_at: float = field(default_factory=time.monotonic)
     resend_from: int | None = None
     # Numbered lines still to re-send before the command's own "ok" counts.
     resend_queue: deque[tuple[int, str]] = field(default_factory=deque)
@@ -169,6 +189,8 @@ class SerialManager:
         on_event: Callable[[dict[str, Any]], None] | None = None,
         can_reconnect: Callable[[], bool] | None = None,
         on_traffic: Callable[[SerialLogEntry], None] | None = None,
+        temperature_enabled: bool = False,
+        on_monitor: Callable[[], None] | None = None,
     ):
         self._serial: serial.Serial | None = None
         self._port: str | None = None
@@ -199,6 +221,14 @@ class SerialManager:
         self._reader_stop: threading.Event | None = None
         self._monitor: asyncio.Task | None = None
         self._autoreport_seen: asyncio.Event | None = None
+        # The printer has temperature sensors (the temperature_sensors setting).
+        # Off: the monitor never runs, so no M155/M105 goes out by itself.
+        self._temperature_enabled = temperature_enabled
+        self._monitor_state: TemperatureMonitor = "idle" if temperature_enabled else "off"
+        # Called on the event loop whenever temperature_monitor changes
+        self._on_monitor = on_monitor
+        # Keeps a fire-and-forget task (M155 S0) referenced until it's done
+        self._background: set[asyncio.Task] = set()
         # Receives, always on the event loop: "serial_log" and "temperature"
         # events, and "printer" events when the port is lost or reopened
         # *automatically*. A manual connect()/disconnect() is reported by the
@@ -234,6 +264,11 @@ class SerialManager:
     def position(self) -> dict[str, float | None]:
         """Tracked logical position per axis; None where unknown."""
         return dict(self._state.pos)
+
+    @property
+    def temperature_monitor(self) -> TemperatureMonitor:
+        """How temperature reports are being got; see schemas.TemperatureMonitor."""
+        return self._monitor_state
 
     @property
     def relative(self) -> bool:
@@ -278,7 +313,8 @@ class SerialManager:
             except Exception as exc:
                 raise SerialError(f"Could not connect to {port}: {exc}") from exc
             self._attach(ser, port, baud_rate)
-            self._monitor = asyncio.create_task(self._monitor_temperature())
+            if self._temperature_enabled:
+                self._start_monitor()
             logger.info("Connected to %s at %d baud", port, baud_rate)
 
     def _attach(self, ser: Any, port: str, baud_rate: int | None = None) -> None:
@@ -314,9 +350,8 @@ class SerialManager:
 
     def _close(self, reason: SerialError) -> None:
         """Stop the reader and monitor, close the port, fail the command in flight."""
-        if self._monitor is not None:
-            self._monitor.cancel()
-            self._monitor = None
+        self._stop_monitor()
+        self._set_monitor("idle" if self._temperature_enabled else "off")
         self._stop_reader()
         ser, self._serial = self._serial, None
         self._state = _unknown_position()
@@ -359,20 +394,34 @@ class SerialManager:
 
     # --- sending ------------------------------------------------------------------
 
-    async def send(self, line: str, numbered: bool = False, *, log: bool = True) -> str:
+    async def send(
+        self, line: str, numbered: bool = False, *, log: bool = True, timeout_s: float | None = None
+    ) -> str:
         """Send one line and return the printer's reply once it's "ok"/"error".
 
         `numbered` lines go out as "N<n> <line>*<checksum>" (comment removed),
         so a corrupted one is re-sent when the printer asks for it. Send
-        "M110 N0" first to start numbering from 1.
+        "M110 N0" first to start numbering from 1. `timeout_s` overrides the
+        reply deadline (see reply_deadline_s).
         """
+        self._preempt_poll()
         async with self._send_lock:
-            return await self._exchange(line.strip(), numbered, log)
+            return await self._exchange(line.strip(), numbered, log, timeout_s)
 
     async def send_lines(self, lines: list[str]) -> list[str]:
         """Send several unnumbered lines as one atomic exchange."""
+        self._preempt_poll()
         async with self._send_lock:
             return [await self._exchange(line.strip(), False, True) for line in lines]
+
+    def _preempt_poll(self) -> None:
+        """A command wants to go out: a monitor command in flight gives way
+        once it has had POLL_PREEMPT_S to be answered."""
+        pending = self._pending
+        if pending is None or not pending.poll:
+            return
+        delay = max(0.0, pending.sent_at + POLL_PREEMPT_S - time.monotonic())
+        pending.loop.call_later(delay, self._finish, pending, None, _PollSkipped("Gave way to a command"))
 
     async def emergency_write(self, line: str) -> None:
         """Write a line immediately, without waiting for "ok" or for a command in flight.
@@ -402,7 +451,9 @@ class SerialManager:
             ser.write((wire + "\n").encode())
             ser.flush()
 
-    async def _exchange(self, line: str, numbered: bool, log: bool) -> str:
+    async def _exchange(
+        self, line: str, numbered: bool, log: bool, timeout_s: float | None = None, poll: bool = False
+    ) -> str:
         """Send a line and wait for its reply. Caller must hold _send_lock.
 
         A serial error closes the connection and raises. If `can_reconnect`
@@ -413,7 +464,7 @@ class SerialManager:
         if not self.is_connected and not await self.reconnect():
             raise SerialError("Not connected")
         try:
-            return await self._transact(line, numbered, log)
+            return await self._transact(line, numbered, log, timeout_s, poll)
         except _PortLost as exc:
             logger.error("Serial error sending line: %s", exc)
             # Decided before the disconnect event, whose listeners stop a
@@ -428,7 +479,9 @@ class SerialManager:
                     ) from exc
             raise SerialError(f"Connection lost: {exc}") from exc
 
-    async def _transact(self, line: str, numbered: bool, log: bool) -> str:
+    async def _transact(
+        self, line: str, numbered: bool, log: bool, timeout_s: float | None = None, poll: bool = False
+    ) -> str:
         if numbered:
             if self._resync:
                 await self._transact(f"M110 N{self._next_line_number - 1}", False, log)
@@ -448,7 +501,8 @@ class SerialManager:
 
         ser = self._serial
         loop = asyncio.get_running_loop()
-        timeout_s = reply_deadline_s(command)
+        if timeout_s is None:
+            timeout_s = reply_deadline_s(command)
         words = command.split(maxsplit=1)
         pending = _Pending(
             command=command,
@@ -458,6 +512,7 @@ class SerialManager:
             loop=loop,
             future=loop.create_future(),
             wants_temperatures=bool(words) and words[0].upper() == "M105",
+            poll=poll,
         )
         with self._state_lock:
             if number is not None:
@@ -474,8 +529,9 @@ class SerialManager:
             self._state = step(self._state, command)
             reply = await pending.future
         except BaseException as exc:
-            if isinstance(exc, SerialTimeout):
-                # Unknown whether (or when) the printer acts on it
+            if isinstance(exc, SerialTimeout) and not poll:
+                # Unknown whether (or when) the printer acts on it (a poll
+                # moves nothing)
                 self._state = _unknown_position(self._state.relative)
             if number is not None:
                 # The printer may or may not have taken this line. Re-use its
@@ -573,6 +629,10 @@ class SerialManager:
                 self._log("received", line)
             if self._is_emergency_ok(pending):
                 return
+            if temperatures is not None and pending is not None and not pending.wants_temperatures:
+                # Only M105 is acked with "ok T:...": the late reply to a
+                # poll that was given up on, not this command's
+                return
             if pending is not None:
                 self._on_ok(ser, pending, line)
             return
@@ -639,29 +699,126 @@ class SerialManager:
 
     # --- temperature ---------------------------------------------------------------
 
+    def set_temperature_enabled(self, enabled: bool) -> None:
+        """Turn the temperature monitor on or off, at once, connected or not.
+
+        Turning it off while the printer auto-reports sends M155 S0, so the
+        reports stop too.
+        """
+        if enabled == self._temperature_enabled:
+            return
+        self._temperature_enabled = enabled
+        if enabled:
+            if self.is_connected:
+                self._start_monitor()
+            else:
+                self._set_monitor("idle")
+            return
+        reporting = self._monitor_state in ("starting", "autoreport")
+        self._stop_monitor()
+        self._set_monitor("off")
+        if reporting and self.is_connected:
+            task = asyncio.create_task(self._stop_autoreport())
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
+
+    def retry_temperature(self) -> None:
+        """Start the monitor again after polling paused (or at any time it's on)."""
+        if self._temperature_enabled and self.is_connected:
+            self._start_monitor()
+
+    async def test_sensors(self) -> str | None:
+        """Send one M105 and return its reply, or None if none came within
+        POLL_DEADLINE_S. Works whether or not the monitor is on."""
+        try:
+            return await self.send("M105", timeout_s=POLL_DEADLINE_S)
+        except SerialTimeout:
+            return None
+
+    def _start_monitor(self) -> None:
+        self._stop_monitor()
+        self._monitor = asyncio.create_task(self._monitor_temperature())
+
+    def _stop_monitor(self) -> None:
+        if self._monitor is not None:
+            self._monitor.cancel()
+            self._monitor = None
+
+    def _set_monitor(self, state: TemperatureMonitor) -> None:
+        if state == self._monitor_state:
+            return
+        self._monitor_state = state
+        if self._on_monitor is not None:
+            self._on_monitor()
+
+    async def _stop_autoreport(self) -> None:
+        try:
+            await self._poll("M155 S0", skip_if_busy=False)
+        except SerialError as exc:
+            logger.info("Couldn't turn temperature auto-reports off: %s", exc)
+
+    async def _poll(self, command: str, *, skip_if_busy: bool) -> str:
+        """Send a monitor command: POLL_DEADLINE_S to answer, and it gives
+        way to a command that arrives meanwhile (raising _PollSkipped). With
+        `skip_if_busy`, it isn't sent at all while another command is queued.
+
+        Shielded: cancelling the monitor (setting turned off) lets a command
+        already in flight finish, so its "ok" isn't taken for the next one's.
+        """
+        task = asyncio.ensure_future(self._poll_exchange(command, skip_if_busy))
+        # Retrieved here, so a shielded task left behind doesn't log its error
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return await asyncio.shield(task)
+
+    async def _poll_exchange(self, command: str, skip_if_busy: bool) -> str:
+        if skip_if_busy and self._send_lock.locked():
+            raise _PollSkipped("Another command is queued")
+        async with self._send_lock:
+            if not self.is_connected:
+                raise SerialError("Not connected")
+            return await self._exchange(command, False, command != "M105", POLL_DEADLINE_S, poll=True)
+
     async def _monitor_temperature(self) -> None:
         """Ask for temperature auto-reports; poll with M105 if they don't come."""
         self._autoreport_seen = asyncio.Event()
         try:
-            await self.send(f"M155 S{AUTOREPORT_INTERVAL_S}")
+            self._set_monitor("starting")
+            try:
+                await self._poll(f"M155 S{AUTOREPORT_INTERVAL_S}", skip_if_busy=False)
+            except (SerialTimeout, _PollSkipped) as exc:
+                logger.info("M155 got no reply (%s); waiting for reports anyway", exc)
             try:
                 await asyncio.wait_for(self._autoreport_seen.wait(), AUTOREPORT_WAIT_S)
+                self._set_monitor("autoreport")
                 return
             except asyncio.TimeoutError:
                 logger.info("No temperature auto-report; polling with M105")
-            while True:
-                await asyncio.sleep(TEMPERATURE_POLL_S)
-                # Waits its turn behind the command in flight, so it goes out
-                # between commands.
-                try:
-                    await self.send("M105", log=False)
-                except SerialTimeout:
-                    # Some builds (no temperature sensors) never answer M105;
-                    # polling on would stall every command behind each poll.
-                    logger.warning("Printer doesn't answer M105; temperature polling stopped")
-                    return
+            await self._poll_temperatures()
         except SerialError as exc:
             logger.info("Temperature monitoring stopped: %s", exc)
+
+    async def _poll_temperatures(self) -> None:
+        """Poll with M105 between other commands, until POLL_FAILURES_TO_PAUSE
+        polls in a row get no usable reply."""
+        self._set_monitor("polling")
+        failures = 0
+        while True:
+            await asyncio.sleep(TEMPERATURE_POLL_S)
+            try:
+                reply: str | None = await self._poll("M105", skip_if_busy=True)
+            except _PollSkipped:
+                continue
+            except SerialTimeout:
+                reply = None
+            if reply is not None and any(parse_temperatures(line) for line in reply.splitlines()):
+                failures = 0
+                continue
+            failures += 1
+            logger.warning("M105 temperature poll got no usable reply: %r", reply)
+            if failures >= POLL_FAILURES_TO_PAUSE:
+                logger.warning("The printer doesn't report temperatures; temperature polling paused")
+                self._set_monitor("paused")
+                return
 
 
 def _open_port(port: str, baud_rate: int) -> serial.Serial:

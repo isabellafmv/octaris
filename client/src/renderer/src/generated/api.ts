@@ -475,6 +475,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/temperature/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Sensors
+         * @description Send M105 once (5 s to answer) and return the raw reply, or null if
+         *     none came, with the sensors found in it. Works with temperature control
+         *     on or off: this is how to check the printer's sensor setup.
+         */
+        post: operations["test_sensors_temperature_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/temperature/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Temperature
+         * @description Start temperature monitoring again after M105 polling paused.
+         */
+        post: operations["retry_temperature_temperature_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_settings_get"];
+        /**
+         * Put Settings
+         * @description Save the settings; they apply at once and are kept across restarts.
+         *     Turning temperature_sensors on or off starts or stops temperature
+         *     monitoring right away, connected or not.
+         */
+        put: operations["put_settings_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -847,6 +912,27 @@ export interface components {
             /** Timestamp */
             timestamp: number;
         };
+        /** SensorTestReading */
+        SensorTestReading: {
+            /** Sensor */
+            sensor: string;
+            /** Name */
+            name: string;
+            /** Actual */
+            actual: number;
+            /** Target */
+            target: number | null;
+        };
+        /**
+         * SensorTestResponse
+         * @description One M105's raw reply (None: no reply in time) and the sensors in it.
+         */
+        SensorTestResponse: {
+            /** Reply */
+            reply: string | null;
+            /** Sensors */
+            sensors: components["schemas"]["SensorTestReading"][];
+        };
         /** SerialLogEntry */
         SerialLogEntry: {
             /** Timestamp */
@@ -868,6 +954,17 @@ export interface components {
         SerialLogResponse: {
             /** Entries */
             entries: components["schemas"]["SerialLogEntry"][];
+        };
+        /**
+         * Settings
+         * @description Settings changed in the app (Setup screen), kept across restarts.
+         */
+        Settings: {
+            /**
+             * Temperature Sensors
+             * @default false
+             */
+            temperature_sensors?: boolean;
         };
         /**
          * Snapshot
@@ -898,6 +995,7 @@ export interface components {
             stop_reason: string | null;
             /** Time Estimate S */
             time_estimate_s: number | null;
+            settings: components["schemas"]["Settings"];
         };
         /** StopResponse */
         StopResponse: {
@@ -947,7 +1045,12 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "disconnected" | "waiting" | "no_sensors" | "ok";
+            state: "off" | "disconnected" | "waiting" | "no_sensors" | "ok";
+            /**
+             * Monitor
+             * @enum {string}
+             */
+            monitor: "off" | "idle" | "starting" | "autoreport" | "polling" | "paused";
             /** Sensors */
             sensors: components["schemas"]["SensorReading"][];
         };
@@ -1118,6 +1221,22 @@ export interface components {
             entry: components["schemas"]["SerialLogEntry"];
         };
         /**
+         * SettingsEvent
+         * @description The settings changed (PUT /settings).
+         */
+        SettingsEvent: {
+            /**
+             * Temperature Sensors
+             * @default false
+             */
+            temperature_sensors?: boolean;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "settings";
+        };
+        /**
          * SnapshotEvent
          * @description Sent once, right after a WebSocket connects.
          */
@@ -1146,6 +1265,7 @@ export interface components {
             stop_reason: string | null;
             /** Time Estimate S */
             time_estimate_s: number | null;
+            settings: components["schemas"]["Settings"];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -1213,7 +1333,12 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "disconnected" | "waiting" | "no_sensors" | "ok";
+            state: "off" | "disconnected" | "waiting" | "no_sensors" | "ok";
+            /**
+             * Monitor
+             * @enum {string}
+             */
+            monitor: "off" | "idle" | "starting" | "autoreport" | "polling" | "paused";
             /** Sensors */
             sensors: components["schemas"]["SensorReading"][];
             /**
@@ -1266,7 +1391,7 @@ export interface components {
             /** Message */
             message: string;
         };
-        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["TemperatureWaitEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
+        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["TemperatureWaitEvent"] | components["schemas"]["SettingsEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
         /**
          * ErrorResponse
          * @description The body of every 4xx/5xx response.
@@ -2021,6 +2146,99 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TemperatureTargetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_sensors_temperature_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SensorTestResponse"];
+                };
+            };
+        };
+    };
+    retry_temperature_temperature_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemperatureStatus"];
+                };
+            };
+        };
+    };
+    get_settings_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+        };
+    };
+    put_settings_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Settings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
                 };
             };
             /** @description Validation Error */

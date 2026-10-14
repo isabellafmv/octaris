@@ -16,9 +16,16 @@ SyringeMode = Literal["left", "right", "both"]
 PrintStatus = Literal["idle", "slicing", "ready", "printing", "paused", "stopped", "completed"]
 # "estop" only appears in history recorded before /print/estop merged into /print/stop
 EndReason = Literal["completed", "stopped", "estop", "error"]
-# "waiting": connected, no temperature report yet. "no_sensors": connected,
-# and none came in the time one should have.
-TemperatureState = Literal["disconnected", "waiting", "no_sensors", "ok"]
+# "off": temperature control is off in the settings (the printer has no
+# sensors). "waiting": connected, no temperature report yet. "no_sensors":
+# connected, and none came in the time one should have.
+TemperatureState = Literal["off", "disconnected", "waiting", "no_sensors", "ok"]
+# How the backend gets temperature reports. "off": temperature control is off.
+# "idle": on, not connected. "starting": M155 sent, waiting for the first
+# auto-report. "autoreport": the printer reports by itself. "polling": M105
+# every couple of seconds. "paused": M105 got no usable reply twice in a row;
+# polling stopped until a retry.
+TemperatureMonitor = Literal["off", "idle", "starting", "autoreport", "polling", "paused"]
 HeaterStatus = Literal["heating", "cooling", "at_target", "off"]
 
 
@@ -82,7 +89,17 @@ class TemperatureStatus(BaseModel):
     """The latest reading of every sensor the printer reports."""
 
     state: TemperatureState
+    monitor: TemperatureMonitor
     sensors: list[SensorReading]
+
+
+class Settings(BaseModel):
+    """Settings changed in the app (Setup screen), kept across restarts."""
+
+    # The printer has temperature sensors: poll or auto-report temperatures,
+    # show and log them, and warn about them. Off: no M155/M105 is ever sent
+    # by itself, and every temperature feature is off.
+    temperature_sensors: bool = False
 
 
 class NozzleCalibration(BaseModel):
@@ -107,6 +124,7 @@ class Snapshot(BaseModel):
     resumable: bool
     stop_reason: str | None
     time_estimate_s: int | None
+    settings: Settings
 
 
 # --- events -------------------------------------------------------------------------
@@ -176,6 +194,12 @@ class TemperatureStatusEvent(Event, TemperatureStatus):
     type: Literal["temperature_status"] = "temperature_status"
 
 
+class SettingsEvent(Event, Settings):
+    """The settings changed (PUT /settings)."""
+
+    type: Literal["settings"] = "settings"
+
+
 class TemperatureWaitSensor(BaseModel):
     sensor: str
     name: str
@@ -234,6 +258,7 @@ WsEvent = Annotated[
     | TemperatureEvent
     | TemperatureStatusEvent
     | TemperatureWaitEvent
+    | SettingsEvent
     | PrinterEvent
     | CalibrationEvent
     | PrintEndEvent
@@ -423,6 +448,20 @@ class TemperatureTargetResponse(BaseModel):
     sensor: str
     target: float
     command: str
+
+
+class SensorTestReading(BaseModel):
+    sensor: str
+    name: str
+    actual: float
+    target: float | None
+
+
+class SensorTestResponse(BaseModel):
+    """One M105's raw reply (None: no reply in time) and the sensors in it."""
+
+    reply: str | None
+    sensors: list[SensorTestReading]
 
 
 class ErrorResponse(BaseModel):

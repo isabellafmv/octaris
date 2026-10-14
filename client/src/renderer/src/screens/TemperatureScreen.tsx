@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { SensorCard } from '../components/SensorCard'
+import { SensorsNotReporting, TEMPERATURE_OFF_HINT } from '../components/SensorsNotReporting'
 import { TemperatureChart, type ChartSeries } from '../components/TemperatureChart'
 import { compareSensors, sensorColorVar } from '../components/temperatureColors'
 import { RANGES_MIN, useTemperature } from '../stores/temperature'
@@ -125,8 +126,12 @@ export function TemperatureScreen({
       )}
 
       <div className="flex flex-col gap-5 px-8 pb-6">
+        <SensorsNotReporting onError={setError} />
+
         {/* Current readings */}
-        {state === 'no_sensors' ? (
+        {state === 'off' ? (
+          <EmptyState title="Temperature control is off" hint={TEMPERATURE_OFF_HINT} />
+        ) : state === 'no_sensors' ? (
           <EmptyState
             title="No temperature sensor reported"
             hint="The printer is connected but hasn't reported any temperature. Check that its firmware has temperature sensors configured."
@@ -155,7 +160,7 @@ export function TemperatureScreen({
         )}
 
         {/* Chart; no point in an empty one when the printer has no sensors */}
-        {state !== 'no_sensors' && (
+        {state !== 'no_sensors' && state !== 'off' && (
           <div className="rounded-2xl p-4 bg-surface-card">
             <div className="flex items-center justify-between gap-3 mb-3">
               <span className="text-[10px] font-semibold tracking-widest uppercase text-text-muted">

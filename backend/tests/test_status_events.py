@@ -47,6 +47,7 @@ def test_ws_sends_snapshot_right_after_connect():
         "resumable": False,
         "stop_reason": None,
         "time_estimate_s": None,
+        "settings": {"temperature_sensors": False},
     }
 
 
@@ -69,6 +70,7 @@ def test_status_endpoint_matches_snapshot_shape():
         "resumable": False,
         "stop_reason": None,
         "time_estimate_s": None,
+        "settings": {"temperature_sensors": False},
     }
 
 

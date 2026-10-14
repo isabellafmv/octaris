@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from backend.routers import get_session
-from backend.schemas import TemperatureHistoryResponse, TemperatureStatus, TemperatureTargetResponse
+from backend.schemas import (
+    SensorTestResponse,
+    TemperatureHistoryResponse,
+    TemperatureStatus,
+    TemperatureTargetResponse,
+)
 from backend.session import PrinterSession
 from backend.temperature import HISTORY_S
 
@@ -86,3 +91,18 @@ async def set_temperature_target(
     Allowed while printing."""
     command = await session.set_temperature_target(body.sensor, body.target)
     return {"status": "ok", "sensor": body.sensor, "target": body.target, "command": command}
+
+
+@router.post("/test", response_model=SensorTestResponse)
+async def test_sensors(session: PrinterSession = Depends(get_session)):
+    """Send M105 once (5 s to answer) and return the raw reply, or null if
+    none came, with the sensors found in it. Works with temperature control
+    on or off: this is how to check the printer's sensor setup."""
+    return await session.test_sensors()
+
+
+@router.post("/retry", response_model=TemperatureStatus)
+async def retry_temperature(session: PrinterSession = Depends(get_session)):
+    """Start temperature monitoring again after M105 polling paused."""
+    session.retry_temperature()
+    return session.temperature.status()

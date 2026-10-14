@@ -27,6 +27,8 @@ interface PrintState {
   port: string | null
   // Which nozzles are zeroed; whether that's enough depends on the syringe mode
   calibratedNozzles: NozzleCalibration
+  // The printer has temperature sensors (Setup); off, every temperature feature is
+  temperatureSensors: boolean
   // id changes on every error event, so a repeated message is shown again
   lastError: { id: number; message: string } | null
   stopInfo: StopInfo
@@ -43,6 +45,7 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
     printerConnected: false,
     port: null,
     calibratedNozzles: NO_NOZZLES,
+    temperatureSensors: false,
     lastError: null,
     stopInfo: null
   })
@@ -117,6 +120,7 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
               linesSent: data.lines_sent,
               linesTotal: data.lines_total,
               calibratedNozzles: data.calibrated_nozzles,
+              temperatureSensors: data.settings.temperature_sensors ?? false,
               extrusionRate: data.flow_rate,
               stopInfo:
                 data.print_status === 'stopped'
@@ -127,6 +131,8 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
           }
           case 'calibration':
             return { ...prev, calibratedNozzles: data.nozzles }
+          case 'settings':
+            return { ...prev, temperatureSensors: data.temperature_sensors ?? false }
           default:
             return prev
         }

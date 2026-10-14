@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { SetupScreen } from './screens/SetupScreen'
 import { PrintScreen } from './screens/PrintScreen'
 import { TakeOverScreen } from './screens/TakeOverScreen'
@@ -6,6 +6,7 @@ import { TemperatureScreen } from './screens/TemperatureScreen'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useScreenNavigation, type Screen } from './hooks/useScreenNavigation'
 import { Sidebar } from './components/Sidebar'
+import { TEMPERATURE_OFF_HINT } from './components/SensorsNotReporting'
 import { api } from './api'
 
 const screenTitles: Record<Screen, string> = {
@@ -82,6 +83,11 @@ function App(): React.JSX.Element {
 
   const handleClearStartError = useCallback(() => setStartError(null), [])
 
+  // Temperature control turned off (here or in another window) while its screen is open
+  useEffect(() => {
+    if (!ws.temperatureSensors && screen === 'temperature') navigate('setup')
+  }, [ws.temperatureSensors, screen, navigate])
+
   return (
     <div className="dot-grid h-screen flex flex-col select-none">
       {/* ── Title bar ── */}
@@ -104,7 +110,11 @@ function App(): React.JSX.Element {
 
       {/* ── Content row ── */}
       <div className="flex flex-1 gap-3 px-4 pb-4 min-h-0">
-        <Sidebar screen={screen} onNavigate={handleNavigate} />
+        <Sidebar
+          screen={screen}
+          onNavigate={handleNavigate}
+          disabled={ws.temperatureSensors ? {} : { temperature: TEMPERATURE_OFF_HINT }}
+        />
 
         {/* Main content card */}
         <div className="flex-1 rounded-2xl overflow-hidden min-h-0 flex flex-col bg-surface">
@@ -114,6 +124,7 @@ function App(): React.JSX.Element {
               port={ws.port}
               calibratedNozzles={ws.calibratedNozzles}
               printStatus={ws.status}
+              temperatureSensors={ws.temperatureSensors}
               onStartPrint={handleStartPrint}
               externalError={startError}
               onClearExternalError={handleClearStartError}

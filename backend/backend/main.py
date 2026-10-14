@@ -26,25 +26,30 @@ from backend.routers.history import router as history_router
 from backend.routers.jog import router as jog_router
 from backend.routers.print_control import router as print_router
 from backend.routers.serial import router as serial_router
+from backend.routers.settings import router as settings_router
 from backend.routers.temperature import router as temperature_router
 from backend.routers.upload import router as upload_router
 from backend.routers.ws import router as ws_router
 from backend.schemas import ErrorResponse, HealthResponse, WsEvent
 from backend.serial_manager import SerialError, SerialManager, SerialTimeout
 from backend.session import Conflict, NotReady, PrinterSession
+from backend.settings import SettingsStore
 from backend.temperature import TemperatureStore
 
 logger = logging.getLogger(__name__)
 
 
-def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
+def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: SettingsStore | None = None) -> None:
     """Build the app's components on app.state. Also used by the tests."""
+    settings = settings or SettingsStore()
     event_bus = EventBus()
     history = PrintHistory(db)
     serial_manager = SerialManager(
         on_event=event_bus.publish,
         can_reconnect=lambda: session.can_reconnect(),
         on_traffic=history.log_traffic,
+        temperature_enabled=settings.current.temperature_sensors,
+        on_monitor=lambda: temperature.monitor_changed(),
     )
     temperature = TemperatureStore(
         db,
@@ -52,6 +57,8 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
         session_id=lambda: history.session_id,
         is_connected=lambda: serial_manager.is_connected,
         is_printing=lambda: queue_worker.print_active and not queue_worker.waiting_for_temperature,
+        enabled=lambda: settings.current.temperature_sensors,
+        monitor=lambda: serial_manager.temperature_monitor,
         publish=event_bus.publish,
     )
     temperature.purge_expired()
@@ -62,7 +69,9 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
         syringe_travel_mm=config.syringe_travel_mm,
         temperature=temperature,
     )
-    session = PrinterSession(config, serial_manager, queue_worker, history, event_bus.publish, temperature)
+    session = PrinterSession(
+        config, serial_manager, queue_worker, history, event_bus.publish, temperature, settings
+    )
     event_bus.listen(session.on_event)
     event_bus.listen(history.on_event)
     event_bus.listen(temperature.on_event)
@@ -75,6 +84,7 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection) -> None:
     app.state.queue_worker = queue_worker
     app.state.session = session
     app.state.temperature = temperature
+    app.state.settings = settings
 
 
 @asynccontextmanager
@@ -105,6 +115,7 @@ app.include_router(jog_router)
 app.include_router(gcode_router)
 app.include_router(history_router)
 app.include_router(temperature_router)
+app.include_router(settings_router)
 app.include_router(ws_router)
 
 # HTTP status for each error the session and the printer raise. A route

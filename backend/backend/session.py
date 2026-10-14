@@ -52,10 +52,15 @@ from backend.schemas import (
     ExtrusionRateEvent,
     NozzleCalibration,
     PrinterEvent,
+    SensorTestReading,
+    SensorTestResponse,
+    Settings,
+    SettingsEvent,
     Snapshot,
     StatusEvent,
 )
-from backend.serial_manager import SerialError, SerialManager
+from backend.serial_manager import SerialError, SerialManager, parse_temperatures
+from backend.settings import SettingsStore
 from backend.slicer import PrintSettings, slice_model
 from backend.temperature import TargetError, TemperatureStore
 
@@ -94,6 +99,8 @@ NOZZLE_OFFSET_UNMEASURED = (
     f"backend/backend/gcode_processor.py to it, then set "
     f'"nozzle_offset_measured": true in config.json and restart.'
 )
+
+TEMPERATURE_OFF = "Temperature control is off — enable it in Setup"
 
 
 class NotReady(Exception):
@@ -142,8 +149,10 @@ class PrinterSession:
         history: PrintHistory,
         publish: Callable[[dict[str, Any]], None],
         temperature: TemperatureStore,
+        settings: SettingsStore,
     ):
         self.config = config
+        self.settings = settings
         self.serial = serial
         self.worker = worker
         self.history = history
@@ -195,6 +204,7 @@ class PrinterSession:
             resumable=worker.resumable,
             stop_reason=worker.stop_reason,
             time_estimate_s=self.loaded.gcode.time_estimate_s if self.loaded else None,
+            settings=self.settings.current,
         )
 
     # --- connection -----------------------------------------------------------
@@ -396,6 +406,45 @@ class PrinterSession:
         await self.serial.send(command)
         return command
 
+    async def test_sensors(self) -> SensorTestResponse:
+        """Send one M105 (whether or not temperature control is on) and
+        return its raw reply, None if none came, with the sensors it lists."""
+        self._require_connection()
+        reply = await self.serial.test_sensors()
+        found: dict[str, dict[str, float | None]] = {}
+        for line in (reply or "").splitlines():
+            found.update(parse_temperatures(line) or {})
+        if any(key.startswith("T") and key != "T" for key in found):
+            found.pop("T", None)  # with several tools, "T:" repeats the active one
+        sensors = [
+            SensorTestReading(
+                sensor=key, name=self.temperature.sensor(key).name, actual=actual, target=value["target"]
+            )
+            for key, value in found.items()
+            if (actual := value["actual"]) is not None
+        ]
+        return SensorTestResponse(reply=reply, sensors=sensors)
+
+    def retry_temperature(self) -> None:
+        """Start temperature monitoring again after polling paused."""
+        if not self.settings.current.temperature_sensors:
+            raise NotReady(TEMPERATURE_OFF)
+        self._require_connection()
+        self.serial.retry_temperature()
+
+    # --- settings -----------------------------------------------------------------
+
+    def update_settings(self, settings: Settings) -> Settings:
+        """Save `settings` and apply them at once (no reconnect needed).
+        Raises OSError if they can't be saved."""
+        old = self.settings.current
+        self.settings.save(settings)
+        if settings.temperature_sensors != old.temperature_sensors:
+            self.serial.set_temperature_enabled(settings.temperature_sensors)
+            self.temperature.enabled_changed()
+        self._publish(SettingsEvent(**settings.model_dump()))
+        return settings
+
     def serial_log(self, limit: int) -> list[dict[str, Any]]:
         entries = self.serial.log_buffer
         return entries[-limit:] if limit > 0 else entries
@@ -554,6 +603,8 @@ class PrinterSession:
             raise NotReady("No G-code loaded. Upload an STL first.")
         if worker.print_active:
             raise Conflict("A print is already running")
+        if wait_for_temperature and not self.settings.current.temperature_sensors:
+            raise NotReady("Can't wait for temperatures: temperature control is off — enable it in Setup")
         await worker.wait_until_sent()
         self._require_connection()
         if not self.calibrated_for(loaded.mode):

@@ -83,19 +83,27 @@ const NAV_ITEMS: { id: Screen; icon: React.JSX.Element; label: string }[] = [
 interface SidebarProps {
   screen: Screen
   onNavigate: (to: Screen) => void
+  // Screens that can't be opened right now, with the reason (shown as the tooltip)
+  disabled?: Partial<Record<Screen, string>>
 }
 
-export function Sidebar({ screen, onNavigate }: SidebarProps): React.JSX.Element {
+export function Sidebar({ screen, onNavigate, disabled = {} }: SidebarProps): React.JSX.Element {
   return (
     <nav className="flex flex-col items-center gap-1 py-2 w-14 shrink-0">
       {NAV_ITEMS.map((item) => (
-        <div key={item.id} className="flex flex-col items-center gap-0.5 w-full">
+        <div
+          key={item.id}
+          className={`flex flex-col items-center gap-0.5 w-full ${disabled[item.id] ? 'opacity-40' : ''}`}
+          // On the wrapper: a disabled button doesn't get hover events for its own tooltip
+          title={disabled[item.id] ?? item.label}
+        >
           <button
             onClick={() => onNavigate(item.id)}
-            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90 no-drag ${
+            disabled={disabled[item.id] !== undefined}
+            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all no-drag enabled:active:scale-90 ${
               screen === item.id ? 'bg-primary text-white' : 'text-chrome-icon'
             }`}
-            title={item.label}
+            aria-label={item.label}
             aria-current={screen === item.id ? 'page' : undefined}
           >
             {item.icon}
