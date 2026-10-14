@@ -326,3 +326,84 @@ async def test_m410_ack_with_nothing_in_flight(rig):
 
     assert (await asyncio.wait_for(manager.send("M114"), 2)).startswith("X:")
     assert (await asyncio.wait_for(manager.send("M105"), 2)).startswith("ok T:")
+
+
+# --- a temperature poll given up on ---------------------------------------------------
+# The printer here has no sensors, so its M105 reply is a plain "ok": once the
+# host has stopped waiting for it, nothing in it says whose reply it is.
+
+
+async def poll_in_flight(manager: SerialManager) -> asyncio.Task:
+    """An M105 from the temperature monitor, sent and not yet answered."""
+    poll = asyncio.create_task(manager._poll("M105", skip_if_busy=True))
+    await wait_for(lambda: manager._pending is not None and manager._pending.poll)
+    return poll
+
+
+async def test_late_ok_of_a_poll_that_gave_way_is_not_the_next_reply(rig):
+    make, _ = rig
+    printer = fast_printer(sensors={}, autoreport=False, m105_delay_s=0.6)
+    manager = make()
+    attach(manager, printer)
+    poll = await poll_in_flight(manager)
+
+    # The poll gives way after 0.5 s; its "ok" comes 0.1 s later
+    reply = await asyncio.wait_for(manager.send("M115"), 2)
+
+    assert "FIRMWARE_NAME:Marlin" in reply
+    with pytest.raises(serial_module._PollSkipped):
+        await poll
+    assert printer.executed == ["M105", "M114", "M115"]
+    # And the replies stay paired from then on
+    assert (await asyncio.wait_for(manager.send("M114"), 2)).startswith("X:")
+    assert await asyncio.wait_for(manager.send("G1 X1 F6000"), 2) == "ok"
+    assert printer.executed[3:] == ["M114", "G1 X1 F6000"]  # synced once, not again
+
+
+async def test_late_ok_of_a_poll_that_timed_out_is_not_the_next_reply(rig, monkeypatch):
+    monkeypatch.setattr(serial_module, "POLL_DEADLINE_S", 0.2)
+    make, _ = rig
+    printer = fast_printer(sensors={}, autoreport=False, m105_delay_s=0.4)
+    manager = make()
+    attach(manager, printer)
+    poll = await poll_in_flight(manager)
+    with pytest.raises(SerialTimeout):
+        await poll
+
+    reply = await asyncio.wait_for(manager.send("M115"), 2)
+
+    assert "FIRMWARE_NAME:Marlin" in reply
+
+
+async def test_late_ok_of_a_poll_and_an_m410_ack(rig):
+    # Stop pressed while the poll is in flight: two "ok"s are owed, the
+    # poll's and then M410's, before the next command's
+    make, _ = rig
+    printer = fast_printer(sensors={}, autoreport=False, m105_delay_s=0.6)
+    manager = make()
+    attach(manager, printer)
+    poll = await poll_in_flight(manager)
+    await manager.emergency_write("M410")
+
+    reply = await asyncio.wait_for(manager.send("M115"), 2)
+
+    assert "FIRMWARE_NAME:Marlin" in reply
+    await asyncio.gather(poll, return_exceptions=True)
+    assert (await asyncio.wait_for(manager.send("M114"), 2)).startswith("X:")
+    assert await asyncio.wait_for(manager.send("G1 X1 F6000"), 2) == "ok"
+
+
+async def test_a_printer_that_never_answers_m105_gets_no_extra_wait(rig):
+    # Nothing is owed: the sync is answered at once, and the command with it
+    make, _ = rig
+    printer = fast_printer(sensors={}, autoreport=False, answers_m105=False)
+    manager = make()
+    attach(manager, printer)
+    poll = await poll_in_flight(manager)
+
+    started = time.monotonic()
+    reply = await asyncio.wait_for(manager.send("M115"), 2)
+
+    assert "FIRMWARE_NAME:Marlin" in reply
+    assert time.monotonic() - started < serial_module.POLL_PREEMPT_S + 0.4
+    await asyncio.gather(poll, return_exceptions=True)

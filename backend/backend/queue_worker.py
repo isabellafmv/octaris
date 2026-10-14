@@ -346,6 +346,14 @@ class QueueWorker:
             )
         )
 
+    async def close(self) -> None:
+        """Stop the worker (at shutdown). A print still running ends with
+        "error", as when the connection drops."""
+        tasks = [task for task in (self._task, self._pause_reading) if task is not None and not task.done()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     def pause(self) -> None:
         self._transition(PAUSED)
         # Read where the printer is, in the background: the M114 queues

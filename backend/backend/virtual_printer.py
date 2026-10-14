@@ -14,7 +14,8 @@ from M104/M109, M140/M190 and M141 and move towards them over time.
 M410 is handled like Marlin's EMERGENCY_PARSER does: motion stops the moment
 it arrives, the planned moves are dropped, and the position is wherever the
 axes stopped. The line is then also queued like any other, so it gets its own
-"ok" after the command that was in flight.
+"ok" after the command that was in flight. With `emergency_parser=False` (as
+the Printess build is), it acts only when its turn in the queue comes.
 
 For tests, faults can be injected (a line corrupted or lost on the wire, any
 unsolicited line), and motion can be held at a chosen point of a chosen move,
@@ -144,6 +145,8 @@ class VirtualPrinter:
         report_scale: float = 1.0,
         sensors: dict[str, float] | None = None,
         answers_m105: bool = True,
+        m105_delay_s: float = 0.0,
+        emergency_parser: bool = True,
     ):
         self.is_open = True
         # How many moves the planner buffers; a G0/G1 arriving when it's full
@@ -162,6 +165,11 @@ class VirtualPrinter:
         self.report_scale = report_scale
         # False: M105 gets no reply at all, not even "ok"
         self.answers_m105 = answers_m105
+        # Real seconds M105 takes to be answered, holding up what follows it
+        # (a printer slow to answer it)
+        self.m105_delay_s = m105_delay_s
+        # M410 stops motion on arrival; False: once the commands ahead have run
+        self.emergency_parser = emergency_parser
 
         self.received: list[str] = []  # raw lines as they arrived
         self.executed: list[str] = []  # commands accepted and run, in order
@@ -323,7 +331,7 @@ class VirtualPrinter:
                 raw = raw[:-1] + chr(ord(raw[-1]) ^ 1)  # garbles the checksum
                 break
         self.received.append(raw)
-        if raw.split("*", 1)[0].split()[-1:] == ["M410"]:
+        if self.emergency_parser and raw.split("*", 1)[0].split()[-1:] == ["M410"]:
             self._quickstop()  # the emergency parser acts on arrival...
         self._in.put(raw)  # ...and the line is still queued, and acked, in order
 
@@ -439,6 +447,10 @@ class VirtualPrinter:
                 if code in ("M109", "M190") and target:
                     self._wait(lambda: abs(self.temperatures[key][0] - target) < 1)
         elif code == "M105":
+            end = time.monotonic() + self.m105_delay_s
+            while time.monotonic() < end and not self._stop.is_set():
+                self._tick()
+                time.sleep(0.002)
             if not self.answers_m105:
                 return []
             return [f"ok {self.temperature_report()}".rstrip()]
@@ -459,7 +471,7 @@ class VirtualPrinter:
                 f"Cap:AUTOREPORT_TEMP:{int(self.autoreport)}",
                 "Cap:AUTOREPORT_POS:0",
                 "Cap:HOST_ACTION_COMMANDS:1",
-                "Cap:EMERGENCY_PARSER:1",
+                f"Cap:EMERGENCY_PARSER:{int(self.emergency_parser)}",
                 "Cap:EXTENDED_M20:0",
                 "ok",
             ]
@@ -471,7 +483,7 @@ class VirtualPrinter:
         elif code == "M400":
             self._drain()
         elif code == "M410":
-            self._quickstop()  # already stopped on arrival; this is its turn in the queue
+            self._quickstop()  # with the emergency parser, already stopped on arrival
         return ["ok"]
 
     def _m114(self) -> str:

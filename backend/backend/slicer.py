@@ -324,6 +324,10 @@ async def slice_model(
         stdout, stderr = await proc.communicate()
     finally:
         _running.discard(proc)
+        if proc.returncode is None:
+            # Cancelled (a shutdown that didn't wait for the slice): out of
+            # _running, stop_slicing() no longer would stop it
+            proc.kill()
 
     if proc.returncode != 0:
         err = stderr.decode("utf-8", errors="replace").strip()

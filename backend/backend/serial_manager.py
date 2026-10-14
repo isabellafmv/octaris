@@ -10,7 +10,10 @@ to be sent again.
 When the printer has temperature sensors (a setting, off by default), a
 monitor task asks it for temperature auto-reports, or polls with M105. Its
 commands never hold up anyone else's: a poll is skipped while another command
-is queued, and a poll in flight gives way to one that arrives.
+is queued, and a poll in flight gives way to one that arrives. The "ok" of a
+poll given up on may still come, and can't be told from the next command's by
+itself, so the next exchange starts with an M114 that only counts as answered
+once its position report is in: any "ok" before that is the poll's.
 """
 
 from __future__ import annotations
@@ -168,6 +171,9 @@ class _Pending:
     wants_temperatures: bool = False
     # Sent by the temperature monitor: gives way to a command that arrives
     poll: bool = False
+    # The M114 sent after a poll was given up on: an "ok" before its position
+    # report is the poll's, not its own
+    sync: bool = False
     sent_at: float = field(default_factory=time.monotonic)
     resend_from: int | None = None
     # Numbered lines still to re-send before the command's own "ok" counts.
@@ -212,6 +218,11 @@ class SerialManager:
         # Marlin acks an M410 once its turn in the command queue comes, so
         # that "ok" follows the in-flight command's and belongs to neither.
         self._emergency_oks: deque[_Pending | None] = deque()
+        # A poll was given up on (gave way, or timed out) and its "ok" may
+        # still come: the next exchange starts with a sync (see _sync).
+        self._stale_ok = False
+        # Commands waiting for _send_lock; a poll doesn't go out ahead of them
+        self._commands_waiting = 0
         self._next_line_number = 1
         # Set when the printer's idea of the last line number may differ from
         # ours (fresh port, or a numbered line that failed); the next numbered
@@ -326,6 +337,7 @@ class SerialManager:
         if baud_rate is not None:
             self._baud_rate = baud_rate
         self._resync = True
+        self._stale_ok = False
         self._state = _unknown_position()
         with self._state_lock:
             self._emergency_oks.clear()
@@ -404,15 +416,29 @@ class SerialManager:
         "M110 N0" first to start numbering from 1. `timeout_s` overrides the
         reply deadline (see reply_deadline_s).
         """
-        self._preempt_poll()
-        async with self._send_lock:
+        await self._acquire_for_command()
+        try:
             return await self._exchange(line.strip(), numbered, log, timeout_s)
+        finally:
+            self._send_lock.release()
 
     async def send_lines(self, lines: list[str]) -> list[str]:
         """Send several unnumbered lines as one atomic exchange."""
-        self._preempt_poll()
-        async with self._send_lock:
+        await self._acquire_for_command()
+        try:
             return [await self._exchange(line.strip(), False, True) for line in lines]
+        finally:
+            self._send_lock.release()
+
+    async def _acquire_for_command(self) -> None:
+        """Take _send_lock for a command (not a poll): a poll in flight gives
+        way to it, and none goes out while it waits."""
+        self._preempt_poll()
+        self._commands_waiting += 1
+        try:
+            await self._send_lock.acquire()
+        finally:
+            self._commands_waiting -= 1
 
     def _preempt_poll(self) -> None:
         """A command wants to go out: a monitor command in flight gives way
@@ -452,9 +478,17 @@ class SerialManager:
             ser.flush()
 
     async def _exchange(
-        self, line: str, numbered: bool, log: bool, timeout_s: float | None = None, poll: bool = False
+        self,
+        line: str,
+        numbered: bool,
+        log: bool,
+        timeout_s: float | None = None,
+        poll: bool = False,
+        skip_if_busy: bool = False,
     ) -> str:
         """Send a line and wait for its reply. Caller must hold _send_lock.
+        A monitor command (`poll`) with `skip_if_busy` is skipped, raising
+        _PollSkipped, if a command is waiting by the time it would go out.
 
         A serial error closes the connection and raises. If `can_reconnect`
         allows it (never during a print), the port is reopened first, but the
@@ -464,6 +498,10 @@ class SerialManager:
         if not self.is_connected and not await self.reconnect():
             raise SerialError("Not connected")
         try:
+            if self._stale_ok:
+                await self._sync()
+            if skip_if_busy and self._commands_waiting:
+                raise _PollSkipped("Another command is queued")
             return await self._transact(line, numbered, log, timeout_s, poll)
         except _PortLost as exc:
             logger.error("Serial error sending line: %s", exc)
@@ -479,8 +517,25 @@ class SerialManager:
                     ) from exc
             raise SerialError(f"Connection lost: {exc}") from exc
 
+    async def _sync(self) -> None:
+        """A poll was given up on, and its "ok" may still come: send M114,
+        whose reply counts only once its position report is in. Marlin
+        answers in order, so an "ok" before the report is the poll's.
+
+        (Counting one "ok" as owed to the poll instead would take the next
+        command's reply when the printer never answers the M105 at all.)
+        """
+        await self._transact("M114", False, True, QUICK_REPLY_DEADLINE_S, sync=True)
+        self._stale_ok = False
+
     async def _transact(
-        self, line: str, numbered: bool, log: bool, timeout_s: float | None = None, poll: bool = False
+        self,
+        line: str,
+        numbered: bool,
+        log: bool,
+        timeout_s: float | None = None,
+        poll: bool = False,
+        sync: bool = False,
     ) -> str:
         if numbered:
             if self._resync:
@@ -513,6 +568,7 @@ class SerialManager:
             future=loop.create_future(),
             wants_temperatures=bool(words) and words[0].upper() == "M105",
             poll=poll,
+            sync=sync,
         )
         with self._state_lock:
             if number is not None:
@@ -529,6 +585,9 @@ class SerialManager:
             self._state = step(self._state, command)
             reply = await pending.future
         except BaseException as exc:
+            if poll and isinstance(exc, (SerialTimeout, _PollSkipped)):
+                # Went out, but its reply wasn't waited for
+                self._stale_ok = True
             if isinstance(exc, SerialTimeout) and not poll:
                 # Unknown whether (or when) the printer acts on it (a poll
                 # moves nothing)
@@ -629,6 +688,8 @@ class SerialManager:
                 self._log("received", line)
             if self._is_emergency_ok(pending):
                 return
+            if pending is not None and pending.sync and not any(map(parse_m114, pending.lines)):
+                return  # the late reply to a poll that was given up on
             if temperatures is not None and pending is not None and not pending.wants_temperatures:
                 # Only M105 is acked with "ok T:...": the late reply to a
                 # poll that was given up on, not this command's
@@ -776,7 +837,9 @@ class SerialManager:
         async with self._send_lock:
             if not self.is_connected:
                 raise SerialError("Not connected")
-            return await self._exchange(command, False, command != "M105", POLL_DEADLINE_S, poll=True)
+            return await self._exchange(
+                command, False, command != "M105", POLL_DEADLINE_S, poll=True, skip_if_busy=skip_if_busy
+            )
 
     async def _monitor_temperature(self) -> None:
         """Ask for temperature auto-reports; poll with M105 if they don't come."""

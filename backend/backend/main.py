@@ -38,6 +38,11 @@ from backend.temperature import TemperatureStore
 
 logger = logging.getLogger(__name__)
 
+# How long uvicorn waits at shutdown for open requests and WebSockets before
+# it cancels them and runs the lifespan cleanup. Requests normally finish in
+# milliseconds; a slice or a G28 can take minutes.
+GRACEFUL_SHUTDOWN_S = 1
+
 
 def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: SettingsStore | None = None) -> None:
     """Build the app's components on app.state. Also used by the tests."""
@@ -96,12 +101,31 @@ async def lifespan(app: FastAPI):
     if not get_token():
         logger.warning("OCTARIS_TOKEN is not set — request authentication is disabled (dev mode)")
     wire(app, load_config(), init_db())
+    _limit_graceful_shutdown()
     yield
     await slicer.stop_slicing()
-    if app.state.serial_manager.is_connected:
-        await app.state.serial_manager.disconnect()
+    # Fails the command in flight: a print still running stops (see
+    # QueueWorker.close), and the temperature monitor stops too
+    await app.state.serial_manager.disconnect()
+    await app.state.queue_worker.close()
     await app.state.temperature.close()
     app.state.db.close()
+
+
+def _limit_graceful_shutdown() -> None:
+    """Give uvicorn's wait for open requests a limit, when it has none.
+
+    uvicorn runs the lifespan cleanup only once every request and WebSocket
+    handler has returned. Started by its CLI (dev, --reload), it waits for
+    them without limit, so one slow request would hold up a reload or Ctrl+C
+    indefinitely. uvicorn's signal handler is the running Server's own
+    method, which is how it is found here; if it isn't (no signal handler
+    installed, another server), nothing changes.
+    """
+    server = getattr(signal.getsignal(signal.SIGINT), "__self__", None)
+    config = getattr(server, "config", None)
+    if config is not None and getattr(config, "timeout_graceful_shutdown", 0) is None:
+        config.timeout_graceful_shutdown = GRACEFUL_SHUTDOWN_S
 
 
 app = FastAPI(title="Octaris Bioprinter", version="0.1.0", lifespan=lifespan)
@@ -224,8 +248,9 @@ async def shutdown(request: Request, background: BackgroundTasks):
 if __name__ == "__main__":
     import uvicorn
 
-    # Our own Server rather than uvicorn.run(), so /shutdown can stop it. Open
-    # WebSockets get a few seconds to close before uvicorn gives up on them.
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=8000, timeout_graceful_shutdown=3))
+    # Our own Server rather than uvicorn.run(), so /shutdown can stop it
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=8000, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S)
+    )
     app.state.uvicorn_server = server
     server.run()
