@@ -21,7 +21,7 @@ async def jog(body: JogRequest, session: PrinterSession = Depends(get_session)):
 
 
 class OriginRequest(BaseModel):
-    # Also lower the nozzle(s) of the syringe mode to zero height
+    # Also lower the selected nozzles to zero height
     lower: bool = False
 
 

@@ -4,10 +4,11 @@ import type {
   GcodeLineError,
   NozzleCalibration,
   PortInfo,
+  PrinterProfile,
+  PrinterProfilesResponse,
   SensorTestResponse,
   SerialLogEntry,
   Settings,
-  SyringeMode,
   TemperatureHistoryResponse,
   TemperatureStatus,
   UploadResult
@@ -82,6 +83,13 @@ async function download(url: string, fallbackName: string): Promise<void> {
 // A time range, or one print session's readings
 export type TemperatureRange = { from: Date; to: Date } | { sessionId: number }
 
+// The nozzles to print with, by id: one `nozzles` parameter each
+function nozzleParams(nozzles: string[]): URLSearchParams {
+  const params = new URLSearchParams()
+  for (const id of nozzles) params.append('nozzles', id)
+  return params
+}
+
 function uploadFile(path: string, file: File, params: URLSearchParams): Promise<UploadResult> {
   const form = new FormData()
   form.append('file', file)
@@ -97,8 +105,8 @@ export const api = {
       body: JSON.stringify({ port })
     }),
   disconnect: () => json<{ status: string }>('/disconnect', { method: 'POST' }),
-  upload: (file: File, syringeMode: SyringeMode, opts: SliceOptions = {}) => {
-    const params = new URLSearchParams({ syringe_mode: syringeMode })
+  upload: (file: File, nozzles: string[], opts: SliceOptions = {}) => {
+    const params = nozzleParams(nozzles)
     for (const [key, name] of Object.entries(SLICE_PARAMS)) {
       const value = opts[key as keyof SliceOptions]
       if (value) params.set(name, String(value))
@@ -106,12 +114,11 @@ export const api = {
     return uploadFile('/upload', file, params)
   },
   // needsChanges: post-process it; otherwise it is sent as uploaded, with warnings
-  uploadGcode: (file: File, syringeMode: SyringeMode, needsChanges: boolean) =>
-    uploadFile(
-      '/upload/gcode',
-      file,
-      new URLSearchParams({ syringe_mode: syringeMode, needs_changes: String(needsChanges) })
-    ),
+  uploadGcode: (file: File, nozzles: string[], needsChanges: boolean) => {
+    const params = nozzleParams(nozzles)
+    params.set('needs_changes', String(needsChanges))
+    return uploadFile('/upload/gcode', file, params)
+  },
   // fromOrigin (Restart): return to the zero point before starting, also for a
   // file sent as uploaded
   printStart: (fromOrigin = false) =>
@@ -135,7 +142,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ axis, distance, feed_rate: feedRate })
     }),
-  // X0 Y0 at the current height; with lower, then the mode's nozzle(s) down to zero height
+  // X0 Y0 at the current height; with lower, then the selected nozzles down to zero height
   goToOrigin: (lower = false) =>
     json<{ status: string; lines: string[] }>('/jog/origin', {
       method: 'POST',
@@ -175,12 +182,20 @@ export const api = {
   getSerialLog: (limit = 200) => json<{ entries: SerialLogEntry[] }>(`/gcode/log?limit=${limit}`),
   calibrationStatus: () =>
     json<{ calibrated: boolean; nozzles: NozzleCalibration }>('/calibration/status'),
-  // Zero one nozzle where it is, for the selected mode (both mode: left, then right)
-  calibrationZero: (nozzle: 'left' | 'right', syringeMode: SyringeMode) =>
+  // Zero one of the selected nozzles where it is (the first sets X/Y too)
+  calibrationZero: (nozzle: string, nozzles: string[]) =>
     json<CalibrateResponse>('/calibration/zero', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nozzle, syringe_mode: syringeMode })
+      body: JSON.stringify({ nozzle, nozzles })
+    }),
+  getPrinterProfiles: () => json<PrinterProfilesResponse>('/printer/profiles'),
+  // Until the backend restarts; resets the calibration and unloads the print
+  selectPrinterProfile: (profile: string) =>
+    json<PrinterProfile>('/printer', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile })
     }),
   calibrationReset: () => json<{ status: string }>('/calibration/reset', { method: 'POST' }),
   getSettings: () => json<Settings>('/settings'),

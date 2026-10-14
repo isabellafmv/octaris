@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../../api'
 import { JogPanel } from '../../components/JogPanel'
-import { usePrintSettings } from '../../stores/printSettings'
-import type { NozzleCalibration, PrintStatus, SyringeMode } from '../../types'
-import { isCalibratedFor, MODE_NOZZLES, type Nozzle } from './calibration'
+import { useSelectedNozzles } from '../../stores/printer'
+import type { NozzleCalibration, PrintStatus } from '../../types'
+import { calibrationSteps, isCalibratedFor } from './calibration'
 
 interface CalibrationSectionProps {
   printerConnected: boolean
@@ -16,39 +16,6 @@ interface CalibrationSectionProps {
   onError: (msg: string) => void
 }
 
-// What to do before each zero, per mode. X/Y are set at the printing nozzle's
-// position over the start point (the right nozzle in right mode, else the
-// left); each nozzle's height (Z left, A right) with that nozzle lowered onto
-// the bed.
-const STEPS: Record<SyringeMode, { nozzle: Nozzle; instruction: string; label: string }[]> = {
-  left: [
-    {
-      nozzle: 'left',
-      instruction: 'Jog the left nozzle over the start point and lower it onto the bed (Z)',
-      label: 'Zero left'
-    }
-  ],
-  right: [
-    {
-      nozzle: 'right',
-      instruction: 'Jog the right nozzle over the start point and lower it onto the bed (A)',
-      label: 'Zero right'
-    }
-  ],
-  both: [
-    {
-      nozzle: 'left',
-      instruction: 'Lower the left nozzle onto the bed (Z) over the start point',
-      label: 'Zero left'
-    },
-    {
-      nozzle: 'right',
-      instruction: 'Now lower the right nozzle onto the bed (A)',
-      label: 'Zero right'
-    }
-  ]
-}
-
 export function CalibrationSection({
   printerConnected,
   printStatus,
@@ -57,15 +24,18 @@ export function CalibrationSection({
   onCalibrated,
   onError
 }: CalibrationSectionProps): React.JSX.Element {
-  const syringeMode = usePrintSettings((s) => s.syringeMode)
+  const selected = useSelectedNozzles()
   const isPrinting = printStatus === 'printing'
   const isPausedOrPrinting = isPrinting || printStatus === 'paused'
-  const calibrated = isCalibratedFor(syringeMode, nozzles)
-  const steps = STEPS[syringeMode]
+  const calibrated = isCalibratedFor(selected, nozzles)
+  const steps = calibrationSteps(selected)
 
-  const handleZero = async (nozzle: Nozzle): Promise<void> => {
+  const handleZero = async (nozzle: string): Promise<void> => {
     try {
-      const result = await api.calibrationZero(nozzle, syringeMode)
+      const result = await api.calibrationZero(
+        nozzle,
+        selected.map((n) => n.id)
+      )
       onCalibrated(result.nozzles)
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Calibration failed')
@@ -162,8 +132,8 @@ export function CalibrationSection({
       <ol className="flex flex-col gap-2 mb-3">
         {steps.map((step, i) => {
           const done = nozzles[step.nozzle]
-          // In both mode the right nozzle is zeroed after the left one has set the start point
-          const waiting = MODE_NOZZLES[syringeMode].slice(0, i).some((n) => !nozzles[n])
+          // Each further nozzle is zeroed after the first has set the start point
+          const waiting = steps.slice(0, i).some((s) => !nozzles[s.nozzle])
           return (
             <li key={step.nozzle} className="flex items-center justify-between gap-3">
               <p className={`text-xs ${waiting ? 'text-text-subtle' : 'text-text'}`}>
@@ -189,9 +159,7 @@ export function CalibrationSection({
           Print running — use Monitor to pause or stop
         </p>
       )}
-      {!hasUpload && (
-        <JogPanel syringeMode={syringeMode} disabled={!printerConnected || isPrinting} />
-      )}
+      {!hasUpload && <JogPanel disabled={!printerConnected || isPrinting} />}
     </div>
   )
 }

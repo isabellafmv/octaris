@@ -15,7 +15,7 @@ AWAY = m114(X=5.0, Y=-3.0, Z=2.0, A=0.0, B=-0.2, C=0.0)
 async def upload_as_is(client):
     resp = await client.post(
         "/upload/gcode",
-        params={"syringe_mode": "left", "needs_changes": False},
+        params={"nozzles": list(("left",)), "needs_changes": False},
         files={"file": ("lab.gcode", LAB_FILE.encode(), "text/plain")},
     )
     assert resp.status_code == 200, resp.text
@@ -25,7 +25,7 @@ def setup_printer(position: str = AWAY) -> FakePrinter:
     fake = FakePrinter(position=position)
     attach(app.state.serial_manager, fake)
     app.state.session.zeroed = {"X", "Y", "Z", "B"}
-    app.state.session._calibration_mode = "left"
+    app.state.session._calibration_nozzles = ("left",)
     return fake
 
 
@@ -59,7 +59,6 @@ async def test_plain_start_of_an_uploaded_file_starts_where_the_nozzle_is(client
 async def test_restart_needs_the_zero_point(client):
     setup_printer()
     app.state.session.zeroed = set()
-    app.state.session._calibration_mode = None
     await upload_as_is(client)
 
     resp = await client.post("/print/start", json={"from_origin": True})

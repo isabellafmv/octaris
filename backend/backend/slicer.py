@@ -12,13 +12,12 @@ from pathlib import Path
 from typing import TypedDict
 
 from backend.config import PROJECT_ROOT, load_config
-from backend.gcode_processor import MAX_FEED, PRESSURIZE_MM, ProcessedGcode, SyringeMode, process_gcode
+from backend.gcode_processor import MAX_FEED, PRESSURIZE_MM, Nozzles, ProcessedGcode, process_gcode
+from backend.printer import BuildVolume
 
 logger = logging.getLogger(__name__)
 
 PROFILE_PATH = PROJECT_ROOT / "context" / "octaris_settings.json"
-
-PRINT_BED_MM = (60.0, 60.0, 60.0)  # X, Y, Z limits (must match octaris_settings.json)
 
 # Layer height as a fraction of nozzle diameter
 DEFAULT_LAYER_HEIGHT_RATIO = 0.8
@@ -59,8 +58,8 @@ class SlicingError(Exception):
     pass
 
 
-def _check_stl_dimensions(stl_path: Path) -> None:
-    """Raise SlicingError if the STL bounding box exceeds the print bed."""
+def _check_stl_dimensions(stl_path: Path, volume: BuildVolume) -> None:
+    """Raise SlicingError if the STL bounding box exceeds the build volume."""
     data = stl_path.read_bytes()
 
     vertices: list[tuple[float, float, float]] = []
@@ -101,12 +100,13 @@ def _check_stl_dimensions(stl_path: Path) -> None:
     xs, ys, zs = zip(*vertices, strict=True)
     dims = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
     labels = ("X", "Y", "Z")
-    for dim, limit, label in zip(dims, PRINT_BED_MM, labels, strict=True):
+    limits = (volume.x, volume.y, volume.z)
+    for dim, limit, label in zip(dims, limits, labels, strict=True):
         if dim > limit:
             raise SlicingError(
                 f"Model is too large for the print bed: "
                 f"{label} dimension is {dim:.1f} mm (limit {limit:.0f} mm). "
-                f"Print bed is {PRINT_BED_MM[0]:.0f} × {PRINT_BED_MM[1]:.0f} × {PRINT_BED_MM[2]:.0f} mm."
+                f"Print bed is {limits[0]:.0f} × {limits[1]:.0f} × {limits[2]:.0f} mm."
             )
 
 
@@ -208,7 +208,7 @@ class PrintSettings(TypedDict, total=False):
 
 async def slice_model(
     model_path: Path,
-    syringe_mode: SyringeMode,
+    nozzles: Nozzles,
     nozzle_diameter: float | None = None,
     syringe_diameter: float | None = None,
     layer_height: float | None = None,
@@ -218,12 +218,17 @@ async def slice_model(
     print_speed: float | None = None,
     max_feed: float = MAX_FEED,
     profile_path: Path | None = None,
+    build_volume: BuildVolume | None = None,
 ) -> ProcessedGcode:
-    """Slice an STL or 3MF file and return processed G-code.
+    """Slice an STL or 3MF file for `nozzles` (a profile's selection) and
+    return processed G-code.
 
     Accepts both .stl and .3mf inputs.  For 3MF files the extruder-to-mesh
     mapping embedded in the archive is used by CuraEngine, so multi-material
-    prints are supported when syringe_mode is "both".
+    prints are supported with two nozzles selected.
+
+    `build_volume` is the printer profile's: Cura's machine size, and the
+    largest model accepted.
 
     `print_speed` (mm/s) sets Cura's speed_print and speed_travel (see
     PRINT_SPEED_SETTINGS); `max_feed` (mm/min) is the cap every feed rate
@@ -231,6 +236,7 @@ async def slice_model(
     """
     if profile_path is None:
         profile_path = PROFILE_PATH
+    volume = build_volume or BuildVolume()
 
     if not model_path.exists():  # noqa: ASYNC240 - a quick metadata call
         raise SlicingError(f"Model file not found: {model_path}")
@@ -243,7 +249,7 @@ async def slice_model(
     if is_3mf:
         _check_3mf(model_path)
     else:
-        _check_stl_dimensions(model_path)
+        _check_stl_dimensions(model_path, volume)
 
     cura_bin = _find_cura_engine()
 
@@ -255,9 +261,10 @@ async def slice_model(
         layer_height = round(nozzle_diameter * DEFAULT_LAYER_HEIGHT_RATIO, 3)
 
     # Only use dual-extruder slicing for 3MF files (which carry material
-    # assignments).  Single STL in "both" mode is sliced as single-extruder;
-    # gcode_processor mirrors the extrusion to both axes in post-processing.
-    dual = is_3mf and syringe_mode == "both"
+    # assignments), with two nozzles.  A single STL for several nozzles is
+    # sliced as single-extruder; gcode_processor mirrors the extrusion to
+    # every nozzle's plunger in post-processing.
+    dual = is_3mf and len(nozzles) == 2
     extruder_count = 2 if dual else 1
 
     extruder_left_path = profile_path.parent / "octaris_extruder_left.def.json"
@@ -270,6 +277,12 @@ async def slice_model(
         str(profile_path),
         "-s",
         f"machine_extruder_count={extruder_count}",
+        "-s",
+        f"machine_width={volume.x:g}",
+        "-s",
+        f"machine_depth={volume.y:g}",
+        "-s",
+        f"machine_height={volume.z:g}",
     ]
 
     # Extruder 0 settings
@@ -352,7 +365,7 @@ async def slice_model(
 
     return process_gcode(
         raw_gcode,
-        syringe_mode,
+        nozzles,
         pressurize_mm=pressurize_mm or PRESSURIZE_MM,
         flow_multiplier=flow_multiplier or 1.0,
         travel_retract_multiplier=travel_retract_multiplier or 3.0,

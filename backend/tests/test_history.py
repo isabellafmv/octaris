@@ -53,7 +53,7 @@ async def printer(client):
     attach(app.state.serial_manager, fake)
     app.state.session.zeroed = {"X", "Y", "Z", "A"}
     # The synthetic prints below use both syringes
-    app.state.config.nozzle_offset_measured = True
+    app.state.session.profile.nozzle_offset_measured = True
     return fake
 
 
@@ -65,7 +65,7 @@ async def upload_stl(client, tmp_path, n_lines: int, **params):
     ):
         resp = await client.post(
             "/upload",
-            params={"syringe_mode": "both", **params},
+            params={"nozzles": list(("left", "right")), **params},
             files={"file": ("cube.stl", b"solid cube", "application/octet-stream")},
         )
     assert resp.status_code == 200, resp.text
@@ -117,7 +117,7 @@ async def test_start_change_flow_stop_records_history(client, printer, tmp_path)
 
     [session] = await get_sessions(client)
     assert session["filename"] == "cube.stl"
-    assert session["syringe_config"] == "both"
+    assert session["syringe_config"] == "left,right"
     assert session["total_lines"] == 400
     assert session["source"] == "stl"
     assert session["nozzle_diameter"] == 0.41
@@ -168,7 +168,7 @@ async def test_gcode_upload_is_recorded_as_gcode_source(client, printer):
     raw = (FIXTURES / "raw_sample.gcode").read_bytes()
     resp = await client.post(
         "/upload/gcode",
-        params={"syringe_mode": "left"},
+        params={"nozzles": list(("left",))},
         files={"file": ("sample.gcode", raw, "text/plain")},
     )
     assert resp.status_code == 200, resp.text

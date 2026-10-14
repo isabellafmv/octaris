@@ -17,6 +17,7 @@ from backend.main import app
 from backend.queue_worker import PrintStatus
 from backend.session import LoadedPrint
 from backend.virtual_printer import Match, VirtualPrinter
+from tests.nozzles import LEFT
 from tests.serial_fakes import attach
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -76,10 +77,10 @@ def events(client) -> list[dict]:
     return recorded
 
 
-async def upload_sample(client, mode: str = "left"):
+async def upload_sample(client, nozzles: tuple[str, ...] = ("left",)):
     resp = await client.post(
         "/upload/gcode",
-        params={"syringe_mode": mode},
+        params={"nozzles": list(nozzles)},
         files={"file": ("sample.gcode", RAW_SAMPLE.encode(), "text/plain")},
     )
     assert resp.status_code == 200, resp.text
@@ -111,7 +112,7 @@ def worker_index(text: str, occurrence: int = 0) -> int:
 
 
 def test_state_simulation_on_fixture():
-    result = process_gcode(RAW_SAMPLE, "left")
+    result = process_gcode(RAW_SAMPLE, LEFT)
     lines = result.lines
     assert len(result.state_before) == len(result.state_after) == len(lines)
     assert result.extrusion_axes == ("B",)
@@ -505,7 +506,7 @@ RETURN_AFTER_JOG = {
     "X": ["G91", "G1 Z5 F300", "G1 X-2 F300", "G1 Z-5 F300"],
     "Y": ["G91", "G1 Z5 F300", "G1 Y-2 F300", "G1 Z-5 F300"],
     "Z": ["G91", "G1 Z5 F300", "G1 Z-7 F300"],
-    # The right nozzle's height doesn't print in left mode: left where it is
+    # The right nozzle's height doesn't print with the left nozzle alone: left where it is
     "A": ["G91", "G1 B-0.2 F400"],
 }
 

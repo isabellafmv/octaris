@@ -25,6 +25,7 @@ from backend.routers.gcode import router as gcode_router
 from backend.routers.history import router as history_router
 from backend.routers.jog import router as jog_router
 from backend.routers.print_control import router as print_router
+from backend.routers.printer import router as printer_router
 from backend.routers.serial import router as serial_router
 from backend.routers.settings import router as settings_router
 from backend.routers.temperature import router as temperature_router
@@ -140,6 +141,7 @@ app.include_router(gcode_router)
 app.include_router(history_router)
 app.include_router(temperature_router)
 app.include_router(settings_router)
+app.include_router(printer_router)
 app.include_router(ws_router)
 
 # HTTP status for each error the session and the printer raise. A route

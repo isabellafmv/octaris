@@ -1,6 +1,6 @@
 # Octaris
 
-Control software for the Printess bioprinter. Upload an STL or a pre-sliced G-code file, configure your syringe mode, and manage the full print workflow: slicing, a 3D preview, calibration, printing with pause, stop and resume, and temperature monitoring.
+Control software for the Printess bioprinter. Upload an STL or a pre-sliced G-code file, choose the syringes to print with, and manage the full print workflow: slicing, a 3D preview, calibration, printing with pause, stop and resume, and temperature monitoring.
 
 
 ## Download
@@ -58,14 +58,15 @@ The printer shows up as a COM port. Octaris lists only ports that belong to the 
 
 1. **Connect the printer**: use the port selector in the top-right corner. Click *Connect*.
 
-2. **Select syringe mode**: choose *Left*, *Right*, or *Both* (both mode is not fully functional yet) syringes. This controls which axes receive extrusion commands.
+2. **Select the syringes**: the *Printer* dropdown shows the printer profile (only *Printess 1.0* for now; see [Printer profiles](#printer-profiles)), and the card draws its syringes, left to right. Tap a syringe to select it, tap it again to deselect it: any combination, at least one. Every selected syringe prints the same path, each in place; with two selected, a two-material `.3mf` prints one material from each instead. The selection decides which plunger and height axes receive the print's moves.
 
-3. **Calibrate (zero the nozzles)** with the jog panel. X/Y are set with the printing nozzle over the print's start point (the *left* nozzle in left and both mode, the *right* nozzle in right mode); each nozzle's height (Z for the left, A for the right) is set with that nozzle lowered onto the bed.
-   - *Left*: jog the left nozzle over the start point, lower it onto the bed, click **Zero left**.
-   - *Right*: jog the right nozzle over the start point, lower it onto the bed (A), click **Zero right**.
-   - *Both*, in two steps: first lower the left nozzle onto the bed over the start point and click **Zero left**, then lower the right nozzle onto the bed and click **Zero right**.
+3. **Calibrate (zero the nozzles)** with the jog panel, which has X/Y and one height control per nozzle (Z for the left, A for the right on the Printess 1.0). X/Y are set at the first (leftmost) selected nozzle over the print's start point; each nozzle's height is set with that nozzle lowered onto the bed. One step per selected nozzle, left to right:
+   - The first: jog it over the start point, lower it onto the bed, click **Zero <nozzle>** (`G92 X0 Y0 <height>0 <plunger>0`).
+   - Each further one: lower it onto the bed and click **Zero <nozzle>** (`G92 <height>0 <plunger>0`): its height only, the start point stays where the first set it.
 
-   Connecting, disconnecting or losing the USB link resets the calibration.
+   On the Printess 1.0: *Left* alone sends `G92 X0 Y0 Z0 B0`; *Right* alone `G92 X0 Y0 A0 C0` (the right nozzle over the start point); *Left + Right* `G92 X0 Y0 Z0 B0`, then `G92 A0 C0`. Prints aren't shifted by the nozzle offsets.
+
+   Connecting, disconnecting, losing the USB link or switching the printer profile resets the calibration.
 
 4. **Upload a file** (two modes are available via the toggle below the syringe selector):
    - **STL File**: upload a `.stl` model, then click *Click to Slice*. The backend runs CuraEngine and post-processes the G-code (extrusion substitution, feed-rate clamping, travel retraction). Requires UltiMaker Cura to be installed.
@@ -180,7 +181,7 @@ Accessible from the sidebar during a print or when idle:
 - **G-code input** — type any G-code command and send it directly.
 - **Quick commands** — buttons for common operations (Home, position query, settings, etc.).
 - **Jog panel** — move individual axes by fixed increments (0.1, 1, or 5 mm).
-- **Go to Origin** — returns the stage to X0 Y0.
+- **Go to Origin** — returns the stage to X0 Y0. *Lower to zero height* (Setup) then lowers the selected nozzles to height 0.
 - **Stop** — sends `M410` and flushes the queue immediately. This is not an emergency stop; use the printer's hardware emergency stop for that.
 
 ---
@@ -325,9 +326,9 @@ The build bundles CuraEngine from `resources/bin/<target>/` and stops with an er
 |-----|--------|-------------|
 | `target` | `macos` / `windows` / `rpi` | Platform, affects where CuraEngine is looked up. Defaults to the OS it runs on (Linux → `rpi`); set it only to override that. |
 | `baud_rate` | integer | Serial baud rate (default `115200`) |
-| `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the left nozzle may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60). Jogs (once zeroed) and prints that would leave it are refused. |
+| `printer_profile` | profile id | The printer, from `profiles` (default `printess-1`). The *Printer* dropdown on Setup switches it until the backend restarts. |
+| `profiles` | `{"<id>": {…}}` | Overrides of the built-in profiles and added ones, see [Printer profiles](#printer-profiles). |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
-| `nozzle_offset_measured` | `true` / `false` | Set to `true` once `NOZZLE_OFFSET_X` in `backend/backend/gcode_processor.py` has been measured. Dual (both-mode) prints are refused until then. |
 | `temperature.protocol` | `marlin` / `printess` | How heaters are set: Marlin's `M104`/`M140`/`M141` (default), or the lab firmware's channels, `M104 I<n> T<°C> H\|C` (see *Lab firmware* above) |
 | `temperature.channels` | `[{"index", "name", "reply_key", "min", "max"}, …]` | `printess` only: each heater channel `I<index>`, its name, the `M105` reply key it reads from (**unconfirmed**), and the targets it accepts (besides 0 for off). Default: `I0`–`I3` reading `T0`–`T3`, 0–120 °C |
 | `temperature.off_command` | string | `printess` only: the command that switches channel `{n}` off. Default `M104 I{n} T0` (**unconfirmed**) |
@@ -338,4 +339,29 @@ The build bundles CuraEngine from `resources/bin/<target>/` and stops with an er
 | `temperature.deviation_c`, `temperature.deviation_s` | numbers | Warn during a print when a sensor is further than `deviation_c` from its target for longer than `deviation_s` (defaults `3` °C, `60` s) |
 | `temperature.report_timeout_s` | number | Warn when no temperature report came for this long while connected (default `15`) |
 
-Slicer settings live in `context/octaris_settings.json` (CuraEngine profile). Printer geometry is in `context/fdmprinter.def.json`.
+Slicer settings live in `context/octaris_settings.json` (CuraEngine profile). Cura's machine size (`machine_width`, `machine_depth`, `machine_height`) comes from the printer profile's `build_volume`.
+
+### Printer profiles
+
+A profile describes the printer: its nozzles left to right, where they may move and the slicer's build volume. The built-in *Printess 1.0* (`printess-1`, in `backend/backend/printer.py`) has two nozzles: *left* (height Z, plunger B) and *right* (height A, plunger C, 30 mm in +X from the left). `GET /printer` returns the selected profile, `GET /printer/profiles` all of them, and `PUT /printer {"profile": "<id>"}` switches (which resets the calibration and any resume checkpoint, and unloads the loaded print). The client also gets the profile in the snapshot on connect.
+
+| Key | Values | Description |
+|-----|--------|-------------|
+| `name` | text | Shown in the *Printer* dropdown |
+| `nozzles` | list of `{"id", "name", "height_axis", "plunger_axis", "offset_x", "offset_y"}` | Left to right. `offset_x`/`offset_y`: mm from the first nozzle. Height axes are Z or A, plungers B or C (the axis letters the G-code processor knows; a printer with others needs them added to `printer.py`). |
+| `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the nozzles may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60; every nozzle's height has the `z` range). Jogs (once zeroed) and prints that would leave it are refused. |
+| `build_volume` | `{"x", "y", "z"}` | Cura's machine size in mm (default 60 × 60 × 60). Larger models are refused before slicing. |
+| `nozzle_offset_measured` | `true` / `false` | Set to `true` once the nozzles' `offset_x`/`offset_y` have been measured. Prints with more than one nozzle are refused until then. |
+
+Under `profiles`, a built-in profile's id overrides only the keys given (nested objects key by key; `nozzles` is replaced as a whole), and any other id adds a profile, which needs `name` and `nozzles`. For example, a 90 mm dish on the Printess 1.0:
+
+```json
+"profiles": {
+  "printess-1": {
+    "bed": { "x": { "min": -45, "max": 45 }, "y": { "min": -45, "max": 45 } },
+    "nozzle_offset_measured": true
+  }
+}
+```
+
+A `config.json` that still has the old top-level `bed` and `nozzle_offset_measured` keys applies them to the selected profile.

@@ -11,7 +11,8 @@ from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SyringeMode = Literal["left", "right", "both"]
+from backend.printer import PrinterProfile
+
 # The worker's print status, plus the upload states the client also shows
 PrintStatus = Literal["idle", "slicing", "ready", "printing", "paused", "stopped", "completed"]
 # "estop" only appears in history recorded before /print/estop merged into /print/stop
@@ -123,11 +124,9 @@ class Settings(BaseModel):
     temperature_sensors: bool = False
 
 
-class NozzleCalibration(BaseModel):
-    """Which nozzles are zeroed: X/Y and the nozzle's own height (Z left, A right)."""
-
-    left: bool
-    right: bool
+# Which of the profile's nozzles are zeroed (X/Y and the nozzle's own
+# height axis), by nozzle id
+NozzleCalibration = dict[str, bool]
 
 
 class Snapshot(BaseModel):
@@ -138,9 +137,13 @@ class Snapshot(BaseModel):
     print_status: PrintStatus
     lines_sent: int
     lines_total: int
-    # Every nozzle of the current syringe mode is zeroed
+    # Every selected nozzle is zeroed
     calibrated: bool
     calibrated_nozzles: NozzleCalibration
+    # The printer profile, and the ids of the nozzles the loaded print (or,
+    # with none loaded, the last calibration) uses, left to right
+    printer: PrinterProfile
+    nozzles: list[str]
     flow_rate: float
     resumable: bool
     stop_reason: str | None
@@ -246,11 +249,19 @@ class PrinterEvent(Event):
 
 
 class CalibrationEvent(Event):
-    """value: every nozzle of the current syringe mode is zeroed."""
+    """value: every selected nozzle is zeroed. nozzles: which of the
+    profile's nozzles are zeroed."""
 
     type: Literal["calibration"] = "calibration"
     value: Literal["calibrated", "uncalibrated"]
     nozzles: NozzleCalibration
+
+
+class PrinterProfileEvent(Event):
+    """Another printer profile was selected (PUT /printer)."""
+
+    type: Literal["printer_profile"] = "printer_profile"
+    printer: PrinterProfile
 
 
 class PrintEndEvent(Event):
@@ -282,6 +293,7 @@ WsEvent = Annotated[
     | SettingsEvent
     | PrinterEvent
     | CalibrationEvent
+    | PrinterProfileEvent
     | PrintEndEvent
     | PrintResumedEvent,
     Field(discriminator="type"),
@@ -319,8 +331,8 @@ class CalibrationStatusResponse(BaseModel):
 
 
 class CalibrateResponse(BaseModel):
-    # The G92 sent, and the calibration after it: in both mode, calibrated
-    # only once the second (right nozzle) step is done too.
+    # The G92 sent, and the calibration after it: with several nozzles
+    # selected, calibrated only once each of them is zeroed.
     command: str
     calibrated: bool
     nozzles: NozzleCalibration
@@ -328,6 +340,17 @@ class CalibrateResponse(BaseModel):
 
 class CalibrationResetResponse(BaseModel):
     status: Literal["uncalibrated"]
+
+
+class PrinterProfilesResponse(BaseModel):
+    """Every printer profile (built in or from config.json), and the selected one's id."""
+
+    selected: str
+    profiles: list[PrinterProfile]
+
+
+class SelectProfileRequest(BaseModel):
+    profile: str
 
 
 class UploadResult(BaseModel):
@@ -434,6 +457,8 @@ class PrintSession(BaseModel):
     started_at: str
     ended_at: str | None
     filename: str
+    # The nozzle ids it printed with, comma-joined ("left,right"); before
+    # printer profiles, the syringe mode ("left", "right", "both")
     syringe_config: str
     total_lines: int
     completed: bool

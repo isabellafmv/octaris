@@ -1,5 +1,3 @@
-from typing import Literal
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
@@ -11,17 +9,18 @@ router = APIRouter(prefix="/calibration")
 
 
 class CalibrateRequest(BaseModel):
-    """Which nozzle to zero, for which syringe mode (default: the loaded
-    print's, or the last calibration's)."""
+    """Which nozzle to zero (default: the first selected), for which
+    selection of nozzles, by id (default: the loaded print's, or the last
+    calibration's)."""
 
-    nozzle: Literal["left", "right"] | None = None
-    syringe_mode: Literal["left", "right", "both"] | None = None
+    nozzle: str | None = None
+    nozzles: list[str] | None = None
 
 
 @router.get("/status", response_model=CalibrationStatusResponse)
 async def calibration_status(session: PrinterSession = Depends(get_session)):
-    """Whether the printer is calibrated for the current syringe mode, and
-    which nozzles are zeroed."""
+    """Whether every selected nozzle is zeroed, and which of the profile's
+    nozzles are."""
     return {"calibrated": session.calibrated, "nozzles": session.nozzles_calibrated()}
 
 
@@ -30,22 +29,24 @@ async def calibrate_zero(
     body: CalibrateRequest | None = None, session: PrinterSession = Depends(get_session)
 ):
     """
-    Zero a nozzle where it is. X/Y are set at the printing nozzle's position
-    over the print's start point (the left nozzle in left and both mode, the
-    right nozzle in right mode); each nozzle's height with that nozzle lowered
-    onto the bed (about 0.2 mm above the surface).
+    Zero one of the selected nozzles where it is. X/Y are set at the first
+    (leftmost) selected nozzle, over the print's start point; each nozzle's
+    height with that nozzle lowered onto the bed (about 0.2 mm above the
+    surface). Printess 1.0:
 
-    - left mode: `nozzle: "left"` → G92 X0 Y0 Z0 B0
-    - right mode: `nozzle: "right"` → G92 X0 Y0 A0 C0 (right nozzle over the
-      start point and on the bed)
-    - both mode, two steps: `nozzle: "left"` → G92 X0 Y0 Z0 B0, then lower the
-      right nozzle onto the bed and `nozzle: "right"` → G92 A0 C0
+    - `nozzles: ["left"]`, `nozzle: "left"` → G92 X0 Y0 Z0 B0
+    - `nozzles: ["right"]`, `nozzle: "right"` → G92 X0 Y0 A0 C0 (right nozzle
+      over the start point and on the bed)
+    - `nozzles: ["left", "right"]`, two steps: `nozzle: "left"` → G92 X0 Y0
+      Z0 B0, then lower the right nozzle onto the bed and `nozzle: "right"`
+      → G92 A0 C0
 
-    Right-mode prints aren't shifted. Only the right nozzle's sections of a
-    two-material 3MF in both mode are shifted by NOZZLE_OFFSET_X.
+    Prints aren't shifted by the nozzle offsets: each nozzle prints in place.
+    Only the second nozzle's sections of a two-material 3MF printed with two
+    nozzles are shifted by its offset.
     """
     body = body or CalibrateRequest()
-    command = await session.calibrate(body.nozzle, body.syringe_mode)
+    command = await session.calibrate(body.nozzle, body.nozzles)
     return {
         "command": command,
         "calibrated": session.calibrated,

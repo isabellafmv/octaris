@@ -8,7 +8,7 @@ import asyncio
 import re
 import secrets
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -16,17 +16,15 @@ from typing import Any, Literal
 from backend.checkpoint import moved, parse_m114, travel_moves
 from backend.config import Config
 from backend.gcode_processor import (
-    NOZZLE_OFFSET_X,
     TRAVEL_FEED,
     Command,
     GcodeValidationError,
     MachineState,
     ProcessedGcode,
-    SyringeMode,
     as_uploaded,
     check_as_uploaded,
     is_relative_program,
-    mirror_to_both,
+    mirror_to_nozzles,
     parse,
     parse_words,
     process_gcode,
@@ -48,6 +46,7 @@ from backend.limits import (
     plunger_travel_needed,
     start_state,
 )
+from backend.printer import HEIGHT_AXES, NozzleSpec, PrinterProfile
 from backend.queue_worker import InvalidTransition, PrintStatus, QueueWorker
 from backend.schemas import (
     CalibrationEvent,
@@ -55,6 +54,7 @@ from backend.schemas import (
     ExtrusionRateEvent,
     NozzleCalibration,
     PrinterEvent,
+    PrinterProfileEvent,
     SensorTestResponse,
     Settings,
     SettingsEvent,
@@ -69,38 +69,31 @@ from backend.temperature import TargetError, TemperatureStore
 # Where uploaded models are written for the slicer
 DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
 
-JOG_AXES = ("X", "Y", "Z", "A", "B", "C")
-
-Nozzle = Literal["left", "right"]
-
-# The axes a nozzle's zero sets: X/Y (the start point, always referenced to
-# the left nozzle) and the nozzle's own height motor, Z left or A right. A
-# nozzle is calibrated once all of them are zeroed.
-NOZZLE_ZERO_AXES: dict[Nozzle, frozenset[str]] = {
-    "left": frozenset("XYZ"),
-    "right": frozenset("XYA"),
-}
-# The nozzles each syringe mode prints with
-MODE_NOZZLES: dict[SyringeMode, tuple[Nozzle, ...]] = {
-    "left": ("left",),
-    "right": ("right",),
-    "both": ("left", "right"),
-}
-
-# The height motor of each nozzle: Z left, A right
-NOZZLE_HEIGHT_AXIS: dict[Nozzle, str] = {"left": "Z", "right": "A"}
-
 # Steps/mm, sent on every connect: EEPROM is disabled on this board
 STEPS_PER_MM = "M92 X800 Y800 Z800 A800 B800 C800"
 
-NOZZLE_OFFSET_UNMEASURED = (
-    f"Dual prints are disabled: the nozzle offset "
-    f"(NOZZLE_OFFSET_X = {NOZZLE_OFFSET_X:g} mm) is a placeholder that hasn't been "
-    f"measured. Zero at the left nozzle, jog until the right nozzle is over the "
-    f"same point, and read the X distance. Set NOZZLE_OFFSET_X in "
-    f"backend/backend/gcode_processor.py to it, then set "
-    f'"nozzle_offset_measured": true in config.json and restart.'
-)
+
+def zero_axes(nozzle: NozzleSpec) -> frozenset[str]:
+    """The axes a nozzle's zero sets: X/Y (the start point, set at the first
+    selected nozzle) and the nozzle's own height motor. A nozzle is
+    calibrated once all of them are zeroed."""
+    return frozenset(("X", "Y", nozzle.height_axis))
+
+
+def offset_unmeasured(profile: PrinterProfile) -> str:
+    offsets = ", ".join(
+        f"{n.name.lower()} {n.offset_x:g} mm in X" + (f", {n.offset_y:g} mm in Y" if n.offset_y else "")
+        for n in profile.nozzles[1:]
+    )
+    first, second = profile.nozzles[0].name.lower(), profile.nozzles[-1].name.lower()
+    return (
+        f"Prints with several nozzles are disabled: the {profile.name}'s nozzle offsets "
+        f"({offsets}) are placeholders that haven't been measured. Zero at the {first} "
+        f"nozzle, jog until the {second} nozzle is over the same point, and read the X "
+        f'distance. Set that nozzle\'s offset_x under "profiles" → "{profile.id}" in '
+        f'config.json, set "nozzle_offset_measured": true there, and restart.'
+    )
+
 
 TEMPERATURE_OFF = "Temperature control is off — enable it in Setup"
 
@@ -131,7 +124,8 @@ class GcodeEditError(Exception):
 class LoadedPrint:
     gcode: ProcessedGcode
     filename: str = "unknown"
-    mode: SyringeMode = "left"
+    # The ids of the nozzles it prints with, left to right
+    nozzles: tuple[str, ...] = ()
     source: Literal["stl", "gcode"] | None = None
     # The upload settings it was made with, recorded in the print history
     settings: PrintSettings = field(default_factory=lambda: PrintSettings())
@@ -154,6 +148,8 @@ class PrinterSession:
         settings: SettingsStore,
     ):
         self.config = config
+        # The printer: its nozzles, bed limits and build volume
+        self.profile = config.profile
         self.settings = settings
         self.serial = serial
         self.worker = worker
@@ -163,8 +159,8 @@ class PrinterSession:
         self.loaded: LoadedPrint | None = None
         # The axes zeroed with G92 since the printer was last (re)connected
         self.zeroed: set[str] = set()
-        # The syringe mode the last zero was set for, while no print is loaded
-        self._calibration_mode: SyringeMode = "left"
+        # The nozzles the last zero was set for, while no print is loaded
+        self._calibration_nozzles: tuple[str, ...] = (self.profile.nozzles[0].id,)
         # Counts loads and edits, for program_id. The prefix tells this run's
         # ids from those of an earlier run of the backend.
         self._loads = 0
@@ -174,22 +170,30 @@ class PrinterSession:
         self._bus_publish(event.dump())
 
     @property
-    def syringe_mode(self) -> SyringeMode:
-        return self.loaded.mode if self.loaded else self._calibration_mode
+    def selected_nozzles(self) -> tuple[str, ...]:
+        """The nozzles the loaded print uses or, with none loaded, the last
+        calibration was for: ids, left to right."""
+        return (self.loaded and self.loaded.nozzles) or self._calibration_nozzles
+
+    def select_nozzles(self, nozzle_ids: Sequence[str] | None) -> tuple[str, ...]:
+        """`nozzle_ids` checked against the profile and put left to right
+        (None or empty: the profile's first nozzle). Raises NotReady for an
+        unknown or repeated id."""
+        try:
+            return tuple(n.id for n in self.profile.select(nozzle_ids or self.profile.nozzle_ids[:1]))
+        except ValueError as exc:
+            raise NotReady(str(exc)) from exc
 
     def nozzles_calibrated(self) -> NozzleCalibration:
-        return NozzleCalibration(
-            left=NOZZLE_ZERO_AXES["left"] <= self.zeroed,
-            right=NOZZLE_ZERO_AXES["right"] <= self.zeroed,
-        )
+        return {n.id: zero_axes(n) <= self.zeroed for n in self.profile.nozzles}
 
-    def calibrated_for(self, mode: SyringeMode) -> bool:
-        """Every nozzle the mode prints with is zeroed (both: in two steps)."""
-        return all(NOZZLE_ZERO_AXES[nozzle] <= self.zeroed for nozzle in MODE_NOZZLES[mode])
+    def calibrated_for(self, nozzle_ids: Sequence[str]) -> bool:
+        """Every nozzle in `nozzle_ids` is zeroed (several: one step each)."""
+        return all(zero_axes(n) <= self.zeroed for n in self.profile.select(nozzle_ids))
 
     @property
     def calibrated(self) -> bool:
-        return self.calibrated_for(self.syringe_mode)
+        return self.calibrated_for(self.selected_nozzles)
 
     def snapshot(self) -> Snapshot:
         """Current connection/print state, for GET /status and the ws snapshot."""
@@ -207,7 +211,36 @@ class PrinterSession:
             stop_reason=worker.stop_reason,
             time_estimate_s=self.loaded.gcode.time_estimate_s if self.loaded else None,
             settings=self.settings.current,
+            printer=self.profile,
+            nozzles=list(self.selected_nozzles),
         )
+
+    # --- printer profile --------------------------------------------------------
+
+    def select_profile(self, profile_id: str) -> PrinterProfile:
+        """Switch to another printer profile (until the backend restarts;
+        config.json's printer_profile is the one it starts with). The
+        calibration, any resume checkpoint and the loaded print are dropped:
+        they were made for the old profile's nozzles.
+
+        Raises NotReady for an unknown id and Conflict during a print."""
+        profile = self.config.profiles.get(profile_id)
+        if profile is None:
+            raise NotReady(
+                f"Unknown printer profile {profile_id!r} (there are {', '.join(self.config.profiles)})"
+            )
+        self._refuse_during_print()
+        if profile is self.profile:
+            return profile
+        self.profile = profile
+        self._calibration_nozzles = (profile.nozzles[0].id,)
+        self.worker.invalidate_checkpoint("The printer profile was changed")
+        if self.loaded is not None:
+            self.loaded = None
+            self._publish(StatusEvent(value="idle"))
+        self.reset_calibration()
+        self._publish(PrinterProfileEvent(printer=profile))
+        return profile
 
     # --- connection -----------------------------------------------------------
 
@@ -261,19 +294,19 @@ class PrinterSession:
 
     # --- calibration ------------------------------------------------------------
 
-    async def calibrate(self, nozzle: Nozzle | None = None, mode: SyringeMode | None = None) -> str:
-        """Zero one nozzle where it is; returns the G92 sent.
+    async def calibrate(self, nozzle: str | None = None, nozzles: Sequence[str] | None = None) -> str:
+        """Zero one of the selected nozzles where it is; returns the G92 sent.
 
-        X/Y are set at the printing nozzle's position over the print's start
-        point: the left nozzle in left and both mode, the right nozzle in
-        right mode. Each nozzle's height is zeroed with that nozzle lowered
-        onto the bed:
-          left:          G92 X0 Y0 Z0 B0
-          right, right mode: G92 X0 Y0 A0 C0
-          right, both mode:  G92 A0 C0 — the second step, after the left
-                             nozzle has set the start point.
-        `mode` defaults to the loaded print's (or the last calibration's),
-        and `nozzle` to the mode's first.
+        X/Y are set at the first (leftmost) selected nozzle, over the
+        print's start point. Each nozzle's height is zeroed with that nozzle
+        lowered onto the bed:
+          the first selected nozzle:  G92 X0 Y0 <height>0 <plunger>0
+          each further one:           G92 <height>0 <plunger>0, after the
+                                      first has set the start point.
+        On the Printess 1.0: ["left"] G92 X0 Y0 Z0 B0; ["right"] G92 X0 Y0
+        A0 C0; ["left", "right"] G92 X0 Y0 Z0 B0, then G92 A0 C0.
+        `nozzles` defaults to the loaded print's (or the last calibration's),
+        and `nozzle` to their first.
         """
         if self.worker.status == PrintStatus.PRINTING:
             raise Conflict("Pause the print first")
@@ -281,20 +314,19 @@ class PrinterSession:
             raise Conflict("Can't re-zero during a print")
         self._require_connection()
 
-        mode = mode or self.syringe_mode
-        nozzle = nozzle or MODE_NOZZLES[mode][0]
-        if nozzle == "left":
-            axes = ["X", "Y", "Z", "B"]
-        elif mode == "both":
-            axes = ["A", "C"]
-        else:
-            axes = ["X", "Y", "A", "C"]
+        ids = self.select_nozzles(nozzles) if nozzles is not None else self.selected_nozzles
+        selected = self.profile.select(ids)
+        spec = next((n for n in selected if n.id == (nozzle or ids[0])), None)
+        if spec is None:
+            raise NotReady(f"Nozzle {nozzle!r} isn't selected (selected: {', '.join(ids)})")
+        axes = ["X", "Y"] if spec is selected[0] else []
+        axes += [spec.height_axis, spec.plunger_axis]
         command = "G92 " + " ".join(f"{axis}0" for axis in axes)
 
         self.worker.invalidate_checkpoint("The printer was re-zeroed")
         await self.serial.send(command)
         self.zeroed.update(axes)
-        self._calibration_mode = mode
+        self._calibration_nozzles = ids
         self._publish_calibration()
         return command
 
@@ -313,14 +345,15 @@ class PrinterSession:
         """Move one axis by `distance`; returns the axis, upper-cased.
         Raises LimitError if the move would leave the bed."""
         axis = axis.upper()
-        if axis not in JOG_AXES:
+        plungers = [n.plunger_axis for n in self.profile.nozzles]
+        if axis not in ("X", "Y", *self._height_axes(), *plungers):
             raise NotReady(f"Invalid axis: {axis}")
         if self.worker.status == PrintStatus.PRINTING:
             raise Conflict("Pause the print first")
         self._require_connection()
         await self._check_jog_limits(axis, distance)
 
-        if axis in ("B", "C"):
+        if axis in plungers:
             self.worker.invalidate_checkpoint(f"The {axis} plunger was jogged")
         self.worker.manual_command()
         # Leave the printer in the mode it was in, except that it never goes
@@ -330,11 +363,16 @@ class PrinterSession:
         await self.serial.send_lines(["G91", f"G1 {axis}{distance} F{feed_rate}", *restore])
         return axis
 
+    def _height_axes(self, nozzle_ids: Sequence[str] | None = None) -> list[str]:
+        """The height axes of `nozzle_ids` (default: every nozzle), left to right."""
+        nozzles = self.profile.nozzles if nozzle_ids is None else self.profile.select(nozzle_ids)
+        return [n.height_axis for n in nozzles]
+
     async def _check_jog_limits(self, axis: str, distance: float) -> None:
         """Only once that axis is zeroed: before the G92 zero the bed's
         position is unknown, and the nozzle has to be jogged freely to find
-        it. A (the right nozzle's height) has the same limits as Z."""
-        if axis not in ("X", "Y", "Z", "A") or axis not in self.zeroed:
+        it. Every nozzle's height has the bed's z limits."""
+        if axis not in ("X", "Y", *self._height_axes()) or axis not in self.zeroed:
             return
         current = self.serial.position[axis]
         if current is None:
@@ -342,12 +380,12 @@ class PrinterSession:
             current = self.serial.position[axis]
         if current is None:
             raise SerialError(f"Couldn't read the printer's {axis} position to check the bed limits")
-        check_jog(self.config.bed, axis, current, distance)
+        check_jog(self.profile.bed, axis, current, distance)
 
     async def go_to_origin(self, lower: bool = False) -> list[str]:
         """Travel to X0 Y0 at the current height and, with `lower`, then
-        lower the height axes of the syringe mode's nozzle(s) to 0 — onto
-        the bed. Returns the lines sent, as one sequence.
+        lower the height axes of the selected nozzles to 0 — onto the bed.
+        Returns the lines sent, as one sequence.
 
         Raises Conflict while printing, NotReady if `lower` and those
         height axes aren't zeroed (their 0 would be wherever the printer
@@ -356,13 +394,13 @@ class PrinterSession:
         if self.worker.status == PrintStatus.PRINTING:
             raise Conflict("Pause the print first")
         self._require_connection()
-        heights = [NOZZLE_HEIGHT_AXIS[nozzle] for nozzle in MODE_NOZZLES[self.syringe_mode]]
+        heights = self._height_axes(self.selected_nozzles)
         if lower and not set(heights) <= self.zeroed:
             raise NotReady("Zero the nozzle height first: lowering to an unset zero could crash the nozzle")
         # As for jogs, the bed limits only apply once an axis is zeroed
         for axis in ["X", "Y", *(heights if lower else [])]:
             if axis in self.zeroed:
-                check_move_to(self.config.bed, axis, 0.0)
+                check_move_to(self.profile.bed, axis, 0.0)
 
         self.worker.manual_command()
         lines = ["G90", f"G1 X0 Y0 F{TRAVEL_FEED}"]
@@ -460,55 +498,66 @@ class PrinterSession:
     # --- loading a print --------------------------------------------------------
 
     async def load_model(
-        self, filename: str, content: bytes, mode: SyringeMode, settings: PrintSettings
+        self, filename: str, content: bytes, nozzles: Sequence[str] | None, settings: PrintSettings
     ) -> ProcessedGcode:
-        """Slice an STL/3MF model and load the result.
+        """Slice an STL/3MF model for the `nozzles` (ids) and load the result.
 
-        Raises SlicingError or GcodeValidationError if slicing fails, and
-        LimitError if the print would leave the bed.
+        Raises NotReady for an unknown nozzle, SlicingError or
+        GcodeValidationError if slicing fails, and LimitError if the print
+        would leave the bed.
         """
+        ids = self.select_nozzles(nozzles)
         self._publish(StatusEvent(value="slicing"))
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         model_path = DATA_DIR / filename
         model_path.write_bytes(content)
         try:
-            gcode = await slice_model(model_path, mode, **settings, max_feed=self.config.max_feed_mm_min)
-            check_path(self.config.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
+            gcode = await slice_model(
+                model_path,
+                self.profile.select(ids),
+                **settings,
+                max_feed=self.config.max_feed_mm_min,
+                build_volume=self.profile.build_volume,
+            )
+            check_path(self.profile.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
         except Exception:
             self._publish(StatusEvent(value="idle"))
             raise
-        self._load(LoadedPrint(gcode, filename, mode, "stl", settings))
+        self._load(LoadedPrint(gcode, filename, ids, "stl", settings))
         return gcode
 
     def load_gcode(
-        self, filename: str, raw: str, mode: SyringeMode, needs_changes: bool = True
+        self, filename: str, raw: str, nozzles: Sequence[str] | None, needs_changes: bool = True
     ) -> ProcessedGcode:
-        """Load an uploaded G-code file: post-processed if it `needs_changes`,
-        otherwise exactly as uploaded, with warnings for what may print
-        differently than intended.
+        """Load an uploaded G-code file for the `nozzles` (ids): post-processed
+        if it `needs_changes`, otherwise exactly as uploaded, with warnings
+        for what may print differently than intended.
 
-        Raises GcodeValidationError or LimitError if it can't be printed.
+        Raises NotReady for an unknown nozzle, and GcodeValidationError or
+        LimitError if it can't be printed.
         """
+        ids = self.select_nozzles(nozzles)
+        selected = self.profile.select(ids)
         max_feed = self.config.max_feed_mm_min
         cmds = parse(raw.splitlines())
         # A file kept as it is (as uploaded, or a relative lab file) and
-        # written for one nozzle prints from both in both mode
+        # written for one nozzle prints from every selected nozzle
         kept = not needs_changes or is_relative_program(cmds)
         notes: list[str] = []
-        if mode == "both" and kept:
-            cmds, note = mirror_to_both(cmds)
+        if len(selected) > 1 and kept:
+            cmds, note = mirror_to_nozzles(cmds, selected)
             if note:
                 raw = "\n".join(render(cmds))
                 notes.append(note)
         if needs_changes:
-            gcode = process_gcode(raw, mode, max_feed=max_feed)
+            gcode = process_gcode(raw, selected, max_feed=max_feed)
             gcode.warnings[:0] = notes
         else:
             gcode = as_uploaded(raw, warnings=[*notes, *check_as_uploaded(cmds, max_feed)])
         # A converted print is checked from the zero point it starts at; a
         # lab file starts wherever the head is, so only at print start.
-        check_path(self.config.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
-        self._load(LoadedPrint(gcode, filename, mode, "gcode", as_uploaded=not needs_changes))
+        check_path(self.profile.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
+        self._load(LoadedPrint(gcode, filename, ids, "gcode", as_uploaded=not needs_changes))
         return gcode
 
     def _load(self, loaded: LoadedPrint, reason: str = "A new file was loaded") -> None:
@@ -533,7 +582,7 @@ class PrinterSession:
         file sent as uploaded check_as_uploaded with its warnings recomputed;
         the bed limits from the print's start point) and the syringe travel
         check (start_print repeats it with the flow override). The print
-        keeps its filename, mode and start point, and is marked edited.
+        keeps its filename, nozzles and start point, and is marked edited.
 
         Raises Conflict while a print is printing or paused, NotReady if
         nothing is loaded, StaleProgram if `program_id` is given and isn't
@@ -581,11 +630,11 @@ class PrinterSession:
         if old.start_position is None:
             # As process_gcode derives them for a lab file, in one pass
             moved = {w.letter for c in cmds if c.is_move for w in c.words}
-            gcode.extrusion_axes = tuple(ax for ax in "BC" if ax in moved)
-            gcode.height_axes = tuple(ax for ax in "ZA" if ax in moved) or ("Z",)
+            gcode.extrusion_axes = tuple(ax for ax in PLUNGER_AXES if ax in moved)
+            gcode.height_axes = tuple(ax for ax in HEIGHT_AXES if ax in moved) or ("Z",)
 
         try:
-            check_path(self.config.bed, lines, start_state(gcode.start_position), gcode.height_axes)
+            check_path(self.profile.bed, lines, start_state(gcode.start_position), gcode.height_axes)
         except LimitError as exc:
             raise GcodeEditError(str(exc), _line_in(str(exc))) from exc
 
@@ -618,15 +667,17 @@ class PrinterSession:
             raise NotReady("Can't wait for temperatures: temperature control is off — enable it in Setup")
         await worker.wait_until_sent()
         self._require_connection()
-        if not self.calibrated_for(loaded.mode):
-            missing = [n for n in MODE_NOZZLES[loaded.mode] if not NOZZLE_ZERO_AXES[n] <= self.zeroed]
+        ids = loaded.nozzles or self._calibration_nozzles
+        selected = self.profile.select(ids)
+        if not self.calibrated_for(ids):
+            missing = [n.name.lower() for n in selected if not zero_axes(n) <= self.zeroed]
+            steps = "with /calibration/zero" if len(missing) == 1 else f"{len(missing)} steps"
             raise NotReady(
-                f"Printer not calibrated: zero the {' and '.join(missing)} nozzle "
-                f"({'both steps' if len(missing) == 2 else 'with /calibration/zero'}) first. "
+                f"Printer not calibrated: zero the {' and '.join(missing)} nozzle ({steps}) first. "
                 f"Jog it to the start point, lower it onto the bed, and zero it."
             )
-        if loaded.mode == "both" and not self.config.nozzle_offset_measured:
-            raise NotReady(NOZZLE_OFFSET_UNMEASURED)
+        if len(selected) > 1 and not self.profile.nozzle_offset_measured:
+            raise NotReady(offset_unmeasured(self.profile))
 
         # The printer's actual position, so relative moves can be checked too.
         # Also seeds the worker's as-sent tracker (see QueueWorker.start).
@@ -652,11 +703,11 @@ class PrinterSession:
         if target is not None:
             if moved(position, target):
                 travel = travel_moves(position, target)
-                check_path(self.config.bed, travel, start_state(position), gcode.height_axes)
+                check_path(self.profile.bed, travel, start_state(position), gcode.height_axes)
             position = {**position, **target}
 
         # Checked before load_gcode, which would drop a resumable checkpoint.
-        check_path(self.config.bed, gcode.lines, start_state(position), gcode.height_axes)
+        check_path(self.profile.bed, gcode.lines, start_state(position), gcode.height_axes)
         # As it will be sent: the flow override scales every B/C value.
         lines = [scale_flow(line, worker.flow_rate / 100.0) for line in gcode.lines]
         needed = plunger_travel_needed(lines, start_state(position))
@@ -679,7 +730,7 @@ class PrinterSession:
             await self.serial.send_lines(travel)
         self.history.start(
             filename=loaded.filename,
-            syringe_config=loaded.mode,
+            syringe_config=",".join(ids),
             total_lines=worker.lines_total,
             source=loaded.source,
             settings=loaded.settings,
@@ -755,6 +806,6 @@ def _invalidates_checkpoint(line: str) -> str | None:
         return None
     if words[0][1] == 92:
         return "G92 changed the coordinate system"
-    if words[0][1] in (0, 1) and any(letter in ("B", "C") for letter, _ in words[1:]):
+    if words[0][1] in (0, 1) and any(letter in PLUNGER_AXES for letter, _ in words[1:]):
         return "A plunger was moved manually"
     return None

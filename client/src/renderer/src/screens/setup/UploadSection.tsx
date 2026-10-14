@@ -25,7 +25,8 @@ export function UploadSection({
   upload: Upload
   onError: (msg: string) => void
 }): React.JSX.Element {
-  const dualMode = usePrintSettings((s) => s.syringeMode === 'both')
+  // Two syringes: a two-material 3MF prints one material from each
+  const dualMode = usePrintSettings((s) => s.selectedNozzles.length === 2)
 
   return (
     <>

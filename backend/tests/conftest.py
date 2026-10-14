@@ -1,9 +1,10 @@
+import json
 from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from backend.config import Config, load_config
+from backend.config import PROJECT_ROOT, Config
 from backend.database import init_db
 from backend.main import app, wire
 
@@ -17,14 +18,13 @@ def data_dir(tmp_path, monkeypatch) -> Path:
 
 
 def make_config() -> Config:
-    """The repo's config.json, with the machine-specific values (bed limits,
-    measured nozzle offset) at their defaults, so the tests don't depend on
-    the printer this checkout is set up for."""
-    config = load_config()
-    defaults = Config()
-    config.bed = defaults.bed
-    config.nozzle_offset_measured = defaults.nozzle_offset_measured
-    return config
+    """The repo's config.json, with the built-in printer profiles as they
+    ship (bed limits, nozzle offsets, unmeasured offset), so the tests don't
+    depend on the printer this checkout is set up for."""
+    data = json.loads((PROJECT_ROOT / "config.json").read_text())
+    for key in ("printer_profile", "profiles", "bed", "nozzle_offset_measured"):
+        data.pop(key, None)
+    return Config(**data)
 
 
 @pytest.fixture

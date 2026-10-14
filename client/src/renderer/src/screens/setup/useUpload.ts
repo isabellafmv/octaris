@@ -1,5 +1,6 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api'
+import { usePrinter } from '../../stores/printer'
 import { sliceOptions, usePrintSettings } from '../../stores/printSettings'
 import type { UploadResult } from '../../types'
 
@@ -33,6 +34,12 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
   const [result, setResult] = useState<UploadResult | null>(null)
   const [needsChanges, setNeedsChangesState] = useState(false)
 
+  // Switching the printer profile unloads the print on the backend
+  const profileId = usePrinter((s) => s.profile?.id)
+  useEffect(() => {
+    setResult(null)
+  }, [profileId])
+
   const changeMode = (next: UploadMode): void => {
     setMode(next)
     setResult(null)
@@ -53,7 +60,7 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
     setError(null)
     try {
       const settings = usePrintSettings.getState()
-      setResult(await api.upload(stlFile, settings.syringeMode, sliceOptions(settings)))
+      setResult(await api.upload(stlFile, settings.selectedNozzles, sliceOptions(settings)))
     } catch (e) {
       setError(
         e instanceof Error ? e.message : 'Slicing failed. Check that CuraEngine is installed.'
@@ -70,7 +77,8 @@ export function useUpload(setError: (msg: string | null) => void): Upload {
       setError(null)
       setSlicing(true)
       try {
-        setResult(await api.uploadGcode(file, usePrintSettings.getState().syringeMode, changes))
+        const nozzles = usePrintSettings.getState().selectedNozzles
+        setResult(await api.uploadGcode(file, nozzles, changes))
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Processing failed.')
       } finally {

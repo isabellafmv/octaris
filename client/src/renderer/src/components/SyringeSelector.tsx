@@ -1,29 +1,24 @@
-import type { SyringeMode } from '../types'
+import type { NozzleSpec } from '../types'
 
-interface SyringeModuleVizProps {
-  selected: SyringeMode
-  onSelect: (mode: SyringeMode) => void
-  compact?: boolean
-}
+// Decorative fill levels, so the syringes don't all look the same
+const FILL_LEVELS = [0.75, 0.35, 0.55, 0.9]
 
 function SyringeModule({
   label,
-  mode,
-  selected,
+  isActive,
   fillLevel,
-  onSelect
+  onToggle
 }: {
   label: string
-  mode: SyringeMode
-  selected: SyringeMode
+  isActive: boolean
   fillLevel: number
-  onSelect: (m: SyringeMode) => void
+  onToggle: () => void
 }): React.JSX.Element {
-  const isActive = selected === mode || selected === 'both'
-
   return (
     <button
-      onClick={() => onSelect(selected === mode ? 'both' : mode)}
+      onClick={onToggle}
+      aria-pressed={isActive}
+      aria-label={`${label} syringe`}
       className="flex flex-col items-center gap-2 transition-all active:scale-95 group"
     >
       {/* Syringe SVG */}
@@ -103,71 +98,63 @@ function SyringeModule({
   )
 }
 
-export function SyringeModuleViz({
+interface SyringeSelectorProps {
+  // The printer profile's nozzles, left to right
+  nozzles: NozzleSpec[]
+  selected: string[]
+  onToggle: (id: string) => void
+  compact?: boolean
+}
+
+// The printer's syringes, left to right: tap one to select or deselect it.
+// Any combination, at least one (the store keeps the last one selected).
+export function SyringeSelector({
+  nozzles,
   selected,
-  onSelect,
+  onToggle,
   compact = false
-}: SyringeModuleVizProps): React.JSX.Element {
-  return (
-    <div className="flex flex-col items-center gap-4 w-full">
-      {!compact && (
-        <>
-          {/* Modules row */}
-          <div className="flex items-end justify-center gap-12">
-            <SyringeModule
-              label="Left"
-              mode="left"
-              selected={selected}
-              fillLevel={0.75}
-              onSelect={onSelect}
-            />
-            <SyringeModule
-              label="Right"
-              mode="right"
-              selected={selected}
-              fillLevel={0.35}
-              onSelect={onSelect}
-            />
-          </div>
-
-          {/* Platform rail */}
-          <div className="flex items-center gap-3 mt-1">
-            <div className="h-0.5 w-32 rounded-full bg-border-strong" />
-          </div>
-        </>
-      )}
-
-      {/* Mode indicator pills + hint — always visible */}
-      <div className="flex flex-col items-center gap-2">
-        <div className="flex gap-2">
-          {(['left', 'right', 'both'] as SyringeMode[]).map((m) => (
+}: SyringeSelectorProps): React.JSX.Element {
+  if (compact) {
+    // Too short for the drawing: one chip per syringe
+    return (
+      <div className="flex gap-2 justify-center">
+        {nozzles.map((n) => {
+          const active = selected.includes(n.id)
+          return (
             <button
-              key={m}
-              onClick={() => onSelect(m)}
+              key={n.id}
+              onClick={() => onToggle(n.id)}
+              aria-pressed={active}
               className={`px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide uppercase transition-all ${
-                selected === m ? 'bg-primary text-white' : 'bg-border text-text-muted'
+                active ? 'bg-primary text-white' : 'bg-border text-text-muted'
               }`}
             >
-              {m}
+              {n.name}
             </button>
-          ))}
-        </div>
-        <p className="text-center text-xs leading-relaxed text-text-muted">
-          Tap to toggle <span className="font-semibold text-text">dual-ink mode</span> or single
-          extrusion.
-        </p>
+          )
+        })}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-4 w-full">
+      <div className="flex items-end justify-center gap-12">
+        {nozzles.map((n, i) => (
+          <SyringeModule
+            key={n.id}
+            label={n.name}
+            isActive={selected.includes(n.id)}
+            fillLevel={FILL_LEVELS[i % FILL_LEVELS.length]}
+            onToggle={() => onToggle(n.id)}
+          />
+        ))}
+      </div>
+
+      {/* Platform rail */}
+      <div className="flex items-center gap-3 mt-1">
+        <div className="h-0.5 w-32 rounded-full bg-border-strong" />
       </div>
     </div>
   )
-}
-
-// Keep backward-compatible export
-export function SyringeSelector({
-  selected,
-  onSelect
-}: {
-  selected: SyringeMode
-  onSelect: (m: SyringeMode) => void
-}): React.JSX.Element {
-  return <SyringeModuleViz selected={selected} onSelect={onSelect} />
 }

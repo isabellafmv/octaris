@@ -28,6 +28,7 @@ from backend.gcode_processor import (
 )
 from backend.main import app
 from backend.queue_worker import PrintStatus
+from tests.nozzles import BOTH, LEFT
 from tests.test_relative_printing import (
     LAB_FILE,
     RAW_SAMPLE,
@@ -46,7 +47,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 async def upload_gcode(client, raw: str, filename: str = "print.gcode", **params):
     return await client.post(
         "/upload/gcode",
-        params={"syringe_mode": "left", **params},
+        params={"nozzles": list(("left",)), **params},
         files={"file": (filename, raw.encode(), "text/plain")},
     )
 
@@ -79,13 +80,13 @@ async def test_other_extensions_are_refused(client):
 async def test_needs_changes_post_processes_as_before(client):
     resp = await upload_gcode(client, RAW_SAMPLE, needs_changes=True)
     assert resp.status_code == 200
-    assert app.state.session.loaded.gcode.lines == process_gcode(RAW_SAMPLE, "left").lines
+    assert app.state.session.loaded.gcode.lines == process_gcode(RAW_SAMPLE, LEFT).lines
     assert resp.json()["warnings"] == []
 
 
 async def test_needs_changes_is_the_api_default(client):
     assert (await upload_gcode(client, RAW_SAMPLE)).status_code == 200
-    assert app.state.session.loaded.gcode.lines == process_gcode(RAW_SAMPLE, "left").lines
+    assert app.state.session.loaded.gcode.lines == process_gcode(RAW_SAMPLE, LEFT).lines
 
 
 async def test_unchanged_file_is_sent_as_uploaded_with_warnings(client):
@@ -155,7 +156,7 @@ def test_check_as_uploaded_warnings():
 
 
 def test_unchanged_lab_file_state_simulation(client):
-    gcode = app.state.session.load_gcode("lab.gcode", LAB_FILE, "left", needs_changes=False)
+    gcode = app.state.session.load_gcode("lab.gcode", LAB_FILE, ["left"], needs_changes=False)
     assert len(gcode.state_before) == len(gcode.state_after) == len(gcode.lines)
     assert gcode.extrusion_axes == ("B",) and gcode.height_axes == ("Z",)
     # Starts wherever the head is: nothing known until the printer is read
@@ -245,11 +246,11 @@ async def test_upload_clamps_to_the_configured_cap(client):
 
 
 async def upload_stl(client, tmp_path, **params):
-    sliced = AsyncMock(return_value=process_gcode(RAW_SAMPLE, "left"))
+    sliced = AsyncMock(return_value=process_gcode(RAW_SAMPLE, LEFT))
     with patch("backend.session.slice_model", sliced), patch("backend.session.DATA_DIR", tmp_path):
         resp = await client.post(
             "/upload",
-            params={"syringe_mode": "left", **params},
+            params={"nozzles": list(("left",)), **params},
             files={"file": ("cube.stl", b"solid cube", "application/octet-stream")},
         )
     return resp, sliced
@@ -292,7 +293,7 @@ async def test_print_speed_must_be_positive(client, tmp_path):
 async def test_slicer_sets_cura_speeds(tmp_path, monkeypatch, suffix, dual):
     model = tmp_path / f"cube{suffix}"
     model.write_bytes(b"")
-    monkeypatch.setattr(slicer, "_check_stl_dimensions", lambda path: None)
+    monkeypatch.setattr(slicer, "_check_stl_dimensions", lambda path, volume: None)
     monkeypatch.setattr(slicer, "_check_3mf", lambda path: None)
     monkeypatch.setattr(slicer, "_find_cura_engine", lambda: "CuraEngine")
 
@@ -305,7 +306,7 @@ async def test_slicer_sets_cura_speeds(tmp_path, monkeypatch, suffix, dual):
 
     calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", fake_exec)
-    await slicer.slice_model(model, "both" if dual else "left", print_speed=3.5, max_feed=300)
+    await slicer.slice_model(model, BOTH if dual else LEFT, print_speed=3.5, max_feed=300)
 
     [cmd] = calls
     settings = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-s"]
@@ -313,7 +314,7 @@ async def test_slicer_sets_cura_speeds(tmp_path, monkeypatch, suffix, dual):
         assert settings.count(f"{name}=3.5") == (2 if dual else 1)
 
     calls.clear()
-    await slicer.slice_model(model, "left")
+    await slicer.slice_model(model, LEFT)
     assert not any(arg.startswith("speed_") for arg in calls[0])
 
 

@@ -81,8 +81,8 @@ export interface paths {
         };
         /**
          * Calibration Status
-         * @description Whether the printer is calibrated for the current syringe mode, and
-         *     which nozzles are zeroed.
+         * @description Whether every selected nozzle is zeroed, and which of the profile's
+         *     nozzles are.
          */
         get: operations["calibration_status_calibration_status_get"];
         put?: never;
@@ -104,19 +104,21 @@ export interface paths {
         put?: never;
         /**
          * Calibrate Zero
-         * @description Zero a nozzle where it is. X/Y are set at the printing nozzle's position
-         *     over the print's start point (the left nozzle in left and both mode, the
-         *     right nozzle in right mode); each nozzle's height with that nozzle lowered
-         *     onto the bed (about 0.2 mm above the surface).
+         * @description Zero one of the selected nozzles where it is. X/Y are set at the first
+         *     (leftmost) selected nozzle, over the print's start point; each nozzle's
+         *     height with that nozzle lowered onto the bed (about 0.2 mm above the
+         *     surface). Printess 1.0:
          *
-         *     - left mode: `nozzle: "left"` → G92 X0 Y0 Z0 B0
-         *     - right mode: `nozzle: "right"` → G92 X0 Y0 A0 C0 (right nozzle over the
-         *       start point and on the bed)
-         *     - both mode, two steps: `nozzle: "left"` → G92 X0 Y0 Z0 B0, then lower the
-         *       right nozzle onto the bed and `nozzle: "right"` → G92 A0 C0
+         *     - `nozzles: ["left"]`, `nozzle: "left"` → G92 X0 Y0 Z0 B0
+         *     - `nozzles: ["right"]`, `nozzle: "right"` → G92 X0 Y0 A0 C0 (right nozzle
+         *       over the start point and on the bed)
+         *     - `nozzles: ["left", "right"]`, two steps: `nozzle: "left"` → G92 X0 Y0
+         *       Z0 B0, then lower the right nozzle onto the bed and `nozzle: "right"`
+         *       → G92 A0 C0
          *
-         *     Right-mode prints aren't shifted. Only the right nozzle's sections of a
-         *     two-material 3MF in both mode are shifted by NOZZLE_OFFSET_X.
+         *     Prints aren't shifted by the nozzle offsets: each nozzle prints in place.
+         *     Only the second nozzle's sections of a two-material 3MF printed with two
+         *     nozzles are shifted by its offset.
          */
         post: operations["calibrate_zero_calibration_zero_post"];
         delete?: never;
@@ -544,6 +546,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/printer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Printer
+         * @description The selected printer profile: its nozzles left to right, bed limits
+         *     and build volume.
+         */
+        get: operations["get_printer_printer_get"];
+        /**
+         * Select Printer
+         * @description Select another printer profile, until the backend restarts
+         *     (config.json's printer_profile is the one it starts with). Resets the
+         *     calibration and any resume checkpoint, and unloads the loaded print.
+         *     Refused during a print.
+         */
+        put: operations["select_printer_printer_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/printer/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Profiles
+         * @description Every printer profile: built in, or added in config.json.
+         */
+        get: operations["list_profiles_printer_profiles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/": {
         parameters: {
             query?: never;
@@ -565,6 +615,46 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AxisRange */
+        AxisRange: {
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
+        };
+        /**
+         * BedLimits
+         * @description Where the nozzles may go, in mm relative to the G92 zero point. Every
+         *     nozzle's height axis has the z range.
+         *
+         *     The printer has no homing or endstops, so these are enforced by the host
+         *     only. The defaults match the 60 × 60 × 60 mm Cura machine definition with
+         *     the zero in the middle of the bed and Z0 at the print surface. Given as
+         *     min/max rather than a size so an off-centre zero can be described.
+         */
+        BedLimits: {
+            /**
+             * @default {
+             *       "min": -30,
+             *       "max": 30
+             *     }
+             */
+            x?: components["schemas"]["AxisRange"];
+            /**
+             * @default {
+             *       "min": -30,
+             *       "max": 30
+             *     }
+             */
+            y?: components["schemas"]["AxisRange"];
+            /**
+             * @default {
+             *       "min": 0,
+             *       "max": 60
+             *     }
+             */
+            z?: components["schemas"]["AxisRange"];
+        };
         /** Body_upload_gcode_upload_gcode_post */
         Body_upload_gcode_upload_gcode_post: {
             /** File */
@@ -576,15 +666,38 @@ export interface components {
             file: string;
         };
         /**
+         * BuildVolume
+         * @description The slicer's machine size in mm (Cura's machine_width, machine_depth
+         *     and machine_height). A model larger than this is refused before slicing.
+         */
+        BuildVolume: {
+            /**
+             * X
+             * @default 60
+             */
+            x?: number;
+            /**
+             * Y
+             * @default 60
+             */
+            y?: number;
+            /**
+             * Z
+             * @default 60
+             */
+            z?: number;
+        };
+        /**
          * CalibrateRequest
-         * @description Which nozzle to zero, for which syringe mode (default: the loaded
-         *     print's, or the last calibration's).
+         * @description Which nozzle to zero (default: the first selected), for which
+         *     selection of nozzles, by id (default: the loaded print's, or the last
+         *     calibration's).
          */
         CalibrateRequest: {
             /** Nozzle */
-            nozzle?: ("left" | "right") | null;
-            /** Syringe Mode */
-            syringe_mode?: ("left" | "right" | "both") | null;
+            nozzle?: string | null;
+            /** Nozzles */
+            nozzles?: string[] | null;
         };
         /** CalibrateResponse */
         CalibrateResponse: {
@@ -592,7 +705,10 @@ export interface components {
             command: string;
             /** Calibrated */
             calibrated: boolean;
-            nozzles: components["schemas"]["NozzleCalibration"];
+            /** Nozzles */
+            nozzles: {
+                [key: string]: boolean;
+            };
         };
         /** CalibrationResetResponse */
         CalibrationResetResponse: {
@@ -606,7 +722,10 @@ export interface components {
         CalibrationStatusResponse: {
             /** Calibrated */
             calibrated: boolean;
-            nozzles: components["schemas"]["NozzleCalibration"];
+            /** Nozzles */
+            nozzles: {
+                [key: string]: boolean;
+            };
         };
         /**
          * ChannelInfo
@@ -788,14 +907,28 @@ export interface components {
             distance: number;
         };
         /**
-         * NozzleCalibration
-         * @description Which nozzles are zeroed: X/Y and the nozzle's own height (Z left, A right).
+         * NozzleSpec
+         * @description One nozzle: its height motor, its plunger, and where it sits.
          */
-        NozzleCalibration: {
-            /** Left */
-            left: boolean;
-            /** Right */
-            right: boolean;
+        NozzleSpec: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Height Axis */
+            height_axis: string;
+            /** Plunger Axis */
+            plunger_axis: string;
+            /**
+             * Offset X
+             * @default 0
+             */
+            offset_x?: number;
+            /**
+             * Offset Y
+             * @default 0
+             */
+            offset_y?: number;
         };
         /** OriginRequest */
         OriginRequest: {
@@ -907,6 +1040,55 @@ export interface components {
             /** Lines Total */
             lines_total: number;
         };
+        /** PrinterProfile */
+        PrinterProfile: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Nozzles */
+            nozzles: components["schemas"]["NozzleSpec"][];
+            /**
+             * @default {
+             *       "x": {
+             *         "max": 30,
+             *         "min": -30
+             *       },
+             *       "y": {
+             *         "max": 30,
+             *         "min": -30
+             *       },
+             *       "z": {
+             *         "max": 60,
+             *         "min": 0
+             *       }
+             *     }
+             */
+            bed?: components["schemas"]["BedLimits"];
+            /**
+             * @default {
+             *       "x": 60,
+             *       "y": 60,
+             *       "z": 60
+             *     }
+             */
+            build_volume?: components["schemas"]["BuildVolume"];
+            /**
+             * Nozzle Offset Measured
+             * @default false
+             */
+            nozzle_offset_measured?: boolean;
+        };
+        /**
+         * PrinterProfilesResponse
+         * @description Every printer profile (built in or from config.json), and the selected one's id.
+         */
+        PrinterProfilesResponse: {
+            /** Selected */
+            selected: string;
+            /** Profiles */
+            profiles: components["schemas"]["PrinterProfile"][];
+        };
         /** ResumeResponse */
         ResumeResponse: {
             /**
@@ -914,6 +1096,11 @@ export interface components {
              * @constant
              */
             status: "printing";
+        };
+        /** SelectProfileRequest */
+        SelectProfileRequest: {
+            /** Profile */
+            profile: string;
         };
         /** SensorReading */
         SensorReading: {
@@ -1025,7 +1212,13 @@ export interface components {
             lines_total: number;
             /** Calibrated */
             calibrated: boolean;
-            calibrated_nozzles: components["schemas"]["NozzleCalibration"];
+            /** Calibrated Nozzles */
+            calibrated_nozzles: {
+                [key: string]: boolean;
+            };
+            printer: components["schemas"]["PrinterProfile"];
+            /** Nozzles */
+            nozzles: string[];
             /** Flow Rate */
             flow_rate: number;
             /** Resumable */
@@ -1168,7 +1361,8 @@ export interface components {
         };
         /**
          * CalibrationEvent
-         * @description value: every nozzle of the current syringe mode is zeroed.
+         * @description value: every selected nozzle is zeroed. nozzles: which of the
+         *     profile's nozzles are zeroed.
          */
         CalibrationEvent: {
             /**
@@ -1181,7 +1375,10 @@ export interface components {
              * @enum {string}
              */
             value: "calibrated" | "uncalibrated";
-            nozzles: components["schemas"]["NozzleCalibration"];
+            /** Nozzles */
+            nozzles: {
+                [key: string]: boolean;
+            };
         };
         /** ErrorEvent */
         ErrorEvent: {
@@ -1243,6 +1440,18 @@ export interface components {
             connected: boolean;
             /** Port */
             port: string | null;
+        };
+        /**
+         * PrinterProfileEvent
+         * @description Another printer profile was selected (PUT /printer).
+         */
+        PrinterProfileEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "printer_profile";
+            printer: components["schemas"]["PrinterProfile"];
         };
         /** ProgressEvent */
         ProgressEvent: {
@@ -1306,7 +1515,13 @@ export interface components {
             lines_total: number;
             /** Calibrated */
             calibrated: boolean;
-            calibrated_nozzles: components["schemas"]["NozzleCalibration"];
+            /** Calibrated Nozzles */
+            calibrated_nozzles: {
+                [key: string]: boolean;
+            };
+            printer: components["schemas"]["PrinterProfile"];
+            /** Nozzles */
+            nozzles: string[];
             /** Flow Rate */
             flow_rate: number;
             /** Resumable */
@@ -1452,7 +1667,7 @@ export interface components {
             /** Message */
             message: string;
         };
-        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["TemperatureWaitEvent"] | components["schemas"]["SettingsEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
+        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["TemperatureWaitEvent"] | components["schemas"]["SettingsEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrinterProfileEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
         /**
          * ErrorResponse
          * @description The body of every 4xx/5xx response.
@@ -1639,7 +1854,8 @@ export interface operations {
     upload_model_upload_post: {
         parameters: {
             query?: {
-                syringe_mode?: string;
+                /** @description Ids of the nozzles to print with; default: the profile's first */
+                nozzles?: string[] | null;
                 nozzle_diameter?: number | null;
                 syringe_diameter?: number | null;
                 layer_height?: number | null;
@@ -1681,7 +1897,8 @@ export interface operations {
     upload_gcode_upload_gcode_post: {
         parameters: {
             query?: {
-                syringe_mode?: string;
+                /** @description Ids of the nozzles to print with; default: the profile's first */
+                nozzles?: string[] | null;
                 needs_changes?: boolean;
             };
             header?: never;
@@ -2309,6 +2526,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_printer_printer_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrinterProfile"];
+                };
+            };
+        };
+    };
+    select_printer_printer_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrinterProfile"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_profiles_printer_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrinterProfilesResponse"];
                 };
             };
         };

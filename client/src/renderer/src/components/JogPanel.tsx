@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { api } from '../api'
+import { usePrinter } from '../stores/printer'
 import { usePrintSettings } from '../stores/printSettings'
-import type { SyringeMode } from '../types'
 
 interface JogPanelProps {
-  syringeMode: SyringeMode
   disabled: boolean
 }
 
@@ -42,20 +41,69 @@ function ArrowButton({
   )
 }
 
-// Each nozzle has its own height motor: Z for the left one, A for the right
-function HeightAxisLabel({ axis, nozzle }: { axis: string; nozzle: string }): React.JSX.Element {
+// Each nozzle has its own height motor (Z for the Printess 1.0's left one,
+// A for its right one): up and down buttons with the axis and nozzle name
+function HeightColumn({
+  axis,
+  nozzle,
+  step,
+  disabled
+}: {
+  axis: string
+  nozzle: string
+  step: number
+  disabled: boolean
+}): React.JSX.Element {
   return (
-    <div className="w-16 h-16 rounded-full flex flex-col items-center justify-center text-text-muted">
-      <span className="text-xs font-semibold tracking-widest">{axis}</span>
-      <span className="text-[9px]">{nozzle}</span>
+    <div className="flex flex-col items-center gap-2">
+      <ArrowButton
+        label={`${axis}+ (${nozzle})`}
+        axisLabel={`${axis}+`}
+        axis={axis}
+        direction={1}
+        step={step}
+        disabled={disabled}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className="w-6 h-6"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+        </svg>
+      </ArrowButton>
+
+      <div className="w-16 h-16 rounded-full flex flex-col items-center justify-center text-text-muted">
+        <span className="text-xs font-semibold tracking-widest">{axis}</span>
+        <span className="text-[9px] lowercase">{nozzle}</span>
+      </div>
+
+      <ArrowButton
+        label={`${axis}- (${nozzle})`}
+        axisLabel={`${axis}-`}
+        axis={axis}
+        direction={-1}
+        step={step}
+        disabled={disabled}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className="w-6 h-6"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+        </svg>
+      </ArrowButton>
     </div>
   )
 }
 
-export function JogPanel({
-  syringeMode,
-  disabled: panelDisabled
-}: JogPanelProps): React.JSX.Element {
+export function JogPanel({ disabled: panelDisabled }: JogPanelProps): React.JSX.Element {
+  const profile = usePrinter((s) => s.profile)
   const step = usePrintSettings((s) => s.jogStep)
   const setStep = usePrintSettings((s) => s.setJogStep)
   // Raw text of the custom field; pre-filled when the stored step is a custom one
@@ -221,97 +269,16 @@ export function JogPanel({
           </ArrowButton>
         </div>
 
-        {/* Z axis */}
-        <div className="flex flex-col items-center gap-2">
-          <ArrowButton
-            label="Z+"
-            axisLabel="Z+"
-            axis="Z"
-            direction={1}
+        {/* One height control per nozzle: each has its own height motor */}
+        {(profile?.nozzles ?? []).map((nozzle) => (
+          <HeightColumn
+            key={nozzle.id}
+            axis={nozzle.height_axis}
+            nozzle={nozzle.name}
             step={step}
             disabled={disabled}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              className="w-6 h-6"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-            </svg>
-          </ArrowButton>
-
-          <HeightAxisLabel axis="Z" nozzle="left" />
-
-          <ArrowButton
-            label="Z-"
-            axisLabel="Z-"
-            axis="Z"
-            direction={-1}
-            step={step}
-            disabled={disabled}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              className="w-6 h-6"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-            </svg>
-          </ArrowButton>
-        </div>
-
-        {/* A axis — the right nozzle's height, whenever it prints */}
-        {(syringeMode === 'right' || syringeMode === 'both') && (
-          <div className="flex flex-col items-center gap-2">
-            <ArrowButton
-              label="A+"
-              axisLabel="A+"
-              axis="A"
-              direction={1}
-              step={step}
-              disabled={disabled}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                className="w-6 h-6"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-              </svg>
-            </ArrowButton>
-
-            <HeightAxisLabel axis="A" nozzle="right" />
-
-            <ArrowButton
-              label="A-"
-              axisLabel="A-"
-              axis="A"
-              direction={-1}
-              step={step}
-              disabled={disabled}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                className="w-6 h-6"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19.5 8.25l-7.5 7.5-7.5-7.5"
-                />
-              </svg>
-            </ArrowButton>
-          </div>
-        )}
+          />
+        ))}
       </div>
     </div>
   )

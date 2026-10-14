@@ -1,14 +1,19 @@
 {
   "touch_mode": false,
   "baud_rate": 115200,
-  "bed": {
-    "x": { "min": -45, "max": 45 },
-    "y": { "min": -45, "max": 45 },
-    "z": { "min": 0, "max": 60 }
-  },
   "syringe_travel_mm": 40,
   "max_feed_mm_min": 400,
-  "nozzle_offset_measured": true,
+  "printer_profile": "printess-1",
+  "profiles": {
+    "printess-1": {
+      "bed": {
+        "x": { "min": -45, "max": 45 },
+        "y": { "min": -45, "max": 45 },
+        "z": { "min": 0, "max": 60 }
+      },
+      "nozzle_offset_measured": true
+    }
+  },
   "temperature": {
     "protocol": "marlin",
     "sensors": {

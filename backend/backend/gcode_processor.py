@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal
 
-SyringeMode = Literal["left", "right", "both"]
+from backend.printer import HEIGHT_AXES, PLUNGER_AXES, NozzleSpec
 
 # Pressurization distance (mm) to prime/deprime the syringe
 PRESSURIZE_MM = 0.2
@@ -21,26 +20,22 @@ TRAVEL_FEED = 300
 # max_feed_mm_min in config.json, which is what the app uses
 MAX_FEED = 400.0
 
-# Each nozzle has its own height motor and plunger:
-#   left nozzle:  height Z, plunger B
-#   right nozzle: height A, plunger C
-# Distance between left (B) and right (C) nozzle tips in mm.
-# The right nozzle is this far in the +X direction from the left nozzle.
-# Right mode zeroes X/Y at the right nozzle, so its prints aren't shifted.
-# The offset only applies to the right nozzle's sections (T1) of a two-material
-# 3MF in both mode, where X/Y are zeroed at the left nozzle.
-NOZZLE_OFFSET_X = 30.0  # measured on the printer
+# Each nozzle has its own height motor and plunger, and its own place on
+# the head: see printer.py. The processing steps take the nozzles a print
+# uses (a profile's selection, left to right): X/Y are zeroed at the first,
+# so a print isn't shifted by the nozzles' offsets, and several nozzles all
+# print the same path, each in place. The offsets only apply to the second
+# nozzle's sections (T1) of a two-material 3MF, see substitute_extrusion.
 
 
 class GcodeValidationError(Exception):
     pass
 
 
-AXES = ("X", "Y", "Z", "A", "B", "C")
-
 # Decimals each axis is written with in the relative output: Cura's own
-# resolution for X/Y/Z (3) and for E (5), which B and C come from.
-AXIS_DECIMALS = {"X": 3, "Y": 3, "Z": 3, "A": 3, "B": 5, "C": 5}
+# resolution for X/Y/Z (3) and for E (5), which the plungers come from.
+AXIS_DECIMALS = {"X": 3, "Y": 3, **dict.fromkeys(HEIGHT_AXES, 3), **dict.fromkeys(PLUNGER_AXES, 5)}
+AXES = tuple(AXIS_DECIMALS)
 
 
 @dataclass(frozen=True)
@@ -247,20 +242,24 @@ def render(cmds: Iterable[Command]) -> list[str]:
 # --- steps ----------------------------------------------------------------------
 
 
-def _extrusion_axes(mode: SyringeMode) -> list[str]:
-    """Return the extrusion axis/axes for the given mode."""
-    return {"left": ["B"], "right": ["C"], "both": ["B", "C"]}[mode]
+Nozzles = Sequence[NozzleSpec]
 
 
-def _z_axis(mode: SyringeMode) -> str:
-    """The height axis that marks a layer change: in both mode every move
-    carries Z and A together (see map_height_axes), so Z."""
-    return {"left": "Z", "right": "A", "both": "Z"}[mode]
+def _extrusion_axes(nozzles: Nozzles) -> list[str]:
+    """The plungers of the nozzles in use."""
+    return [n.plunger_axis for n in nozzles]
 
 
-def height_axes(mode: SyringeMode) -> tuple[str, ...]:
-    """The height motors of the nozzle(s) in use: Z left, A right."""
-    return {"left": ("Z",), "right": ("A",), "both": ("Z", "A")}[mode]
+def _z_axis(nozzles: Nozzles) -> str:
+    """The height axis that marks a layer change: the first nozzle's. With
+    several nozzles every move carries all their heights together (see
+    map_height_axes)."""
+    return nozzles[0].height_axis
+
+
+def height_axes(nozzles: Nozzles) -> tuple[str, ...]:
+    """The height motors of the nozzles in use."""
+    return tuple(n.height_axis for n in nozzles)
 
 
 def trim_to_print(cmds: list[Command]) -> list[Command]:
@@ -290,38 +289,50 @@ def trim_to_print(cmds: list[Command]) -> list[Command]:
     return [positioning, extrusion, *cmds[first : max(first, last) + 1]]
 
 
-def substitute_extrusion(cmds: list[Command], mode: SyringeMode) -> list[Command]:
-    """E → plunger axis (B left, C right), negated: the plungers extrude in
-    the negative direction. Right mode is zeroed at the right nozzle, so its
-    moves are not shifted.
+# The tool changes of a two-material 3MF, sliced with one extruder per nozzle
+_TOOLS = ("T0", "T1")
 
-    In "both" mode, a file with T0/T1 tool changes (multi-material 3MF) sends
-    each section to its own nozzle; X/Y are zeroed at the left nozzle there,
-    so the right nozzle's (T1) moves are shifted by NOZZLE_OFFSET_X. Without them (single STL), every E drives
-    both plungers, so both syringes print the same path.
+
+def substitute_extrusion(cmds: list[Command], nozzles: Nozzles) -> list[Command]:
+    """E → the nozzle's plunger axis, negated: the plungers extrude in the
+    negative direction. X/Y are zeroed at the first nozzle, so its moves
+    are not shifted.
+
+    With two nozzles, a file with T0/T1 tool changes (multi-material 3MF)
+    sends each section to its own nozzle; the second nozzle's (T1) moves
+    are shifted by its offset from the first. Otherwise (a single STL, or
+    any other number of nozzles), every E drives every nozzle's plunger, so
+    all the syringes print the same path.
     """
-    if mode == "both" and not any(c.code in ("T0", "T1") for c in cmds):
-        return [_mirror_e(c) for c in cmds]
+    plungers = _extrusion_axes(nozzles)
+    two_tools = len(nozzles) == 2 and any(c.code in _TOOLS for c in cmds)
+    if len(nozzles) > 1 and not two_tools:
+        return [_mirror_e(c, plungers) for c in cmds]
 
-    tool = "T1" if mode == "right" else "T0"
+    first, second = nozzles[0], nozzles[-1]
+    dx, dy = second.offset_x - first.offset_x, second.offset_y - first.offset_y
+    tool = "T0"
     result = []
     for cmd in cmds:
-        if mode == "both" and cmd.code in ("T0", "T1"):
+        if two_tools and cmd.code in _TOOLS:
             tool = cmd.code
         else:
-            cmd = _rename_e(cmd, "C" if tool == "T1" else "B")
-            if mode == "both" and tool == "T1" and cmd.is_move:
-                cmd = cmd.map_axis("X", lambda x: x + NOZZLE_OFFSET_X)
+            cmd = _rename_e(cmd, (second if tool == "T1" else first).plunger_axis)
+            if tool == "T1" and cmd.is_move:
+                cmd = cmd.map_axis("X", lambda x: x + dx)
+                if dy:
+                    cmd = cmd.map_axis("Y", lambda y: y + dy)
         result.append(cmd)
     return result
 
 
-def map_height_axes(cmds: list[Command], mode: SyringeMode) -> list[Command]:
-    """Cura writes one height axis, Z; each nozzle has its own motor. Right
-    mode: every Z becomes A (the right nozzle's height). Both mode: every Z
-    is kept and the same value added as A, so both nozzles rise together.
-    G92 is mapped the same way, so the coordinates stay consistent."""
-    if mode == "left":
+def map_height_axes(cmds: list[Command], nozzles: Nozzles) -> list[Command]:
+    """Cura writes one height axis, Z; each nozzle has its own motor. Every
+    Z becomes the nozzles' height axes, with the same value, so they all
+    rise together (a lone Z nozzle keeps the file as it is). G92 is mapped
+    the same way, so the coordinates stay consistent."""
+    heights = height_axes(nozzles)
+    if heights == ("Z",):
         return cmds
     result = []
     for cmd in cmds:
@@ -330,37 +341,33 @@ def map_height_axes(cmds: list[Command], mode: SyringeMode) -> list[Command]:
             for w in cmd.words:
                 if w.letter != "Z":
                     words.append(w)
-                elif mode == "right":
-                    words.append(Word("A", w.value, w.text))
                 else:
-                    words += [w, Word("A", w.value, w.text)]
+                    words += [w if axis == "Z" else Word(axis, w.value, w.text) for axis in heights]
             cmd = cmd.with_words(words)
         result.append(cmd)
     return result
 
 
-# Each nozzle's plunger and height axis, left and right
-_NOZZLE_AXIS_PAIRS = (("B", "C"), ("Z", "A"))
-
-
-def mirror_to_both(cmds: list[Command]) -> tuple[list[Command], str | None]:
-    """Both mode, for a file written for one nozzle (it drives B or C, not
-    both): copy that nozzle's plunger and height words to the other
-    nozzle's axes on every move and G92, so both nozzles print the same
-    path. A height axis the file already moves on both sides is left alone.
+def mirror_to_nozzles(cmds: list[Command], nozzles: Nozzles) -> tuple[list[Command], str | None]:
+    """Several nozzles, and a file written for one of them (it drives one
+    of their plungers, not several): copy that plunger's words to the other
+    nozzles' plungers on every move and G92, and the height words of the
+    one height axis it moves to the other nozzles' heights, so all the
+    nozzles print the same path. Heights the file already moves on more
+    than one nozzle are left alone.
 
     Returns the commands and a note saying what was copied, or the commands
     unchanged and None for a file that isn't for one nozzle.
     """
     used = {w.letter for c in cmds if c.is_move or c.code == "G92" for w in c.words}
-    if ("B" in used) == ("C" in used):
-        return cmds, None  # drives both plungers already, or neither
-    copies: dict[str, str] = {}
-    for left, right in _NOZZLE_AXIS_PAIRS:
-        if left in used and right not in used:
-            copies[left] = right
-        elif right in used and left not in used:
-            copies[right] = left
+    plungers, heights = _extrusion_axes(nozzles), height_axes(nozzles)
+    pushed = [ax for ax in plungers if ax in used]
+    if len(nozzles) < 2 or len(pushed) != 1:
+        return cmds, None  # drives several plungers already, or none
+    copies = {pushed[0]: [ax for ax in plungers if ax != pushed[0]]}
+    lifted = [ax for ax in heights if ax in used]
+    if len(lifted) == 1:
+        copies[lifted[0]] = [ax for ax in heights if ax != lifted[0]]
 
     result = []
     for cmd in cmds:
@@ -368,12 +375,12 @@ def mirror_to_both(cmds: list[Command]) -> tuple[list[Command], str | None]:
             words: list[Word] = []
             for w in cmd.words:
                 words.append(w)
-                if w.letter in copies:
-                    words.append(Word(copies[w.letter], w.value, w.text))
+                words += [Word(axis, w.value, w.text) for axis in copies.get(w.letter, ())]
             cmd = cmd.with_words(words)
         result.append(cmd)
-    copied = " and ".join(f"{a} to {b}" for a, b in copies.items())
-    return result, f"Both mode: copied {copied} on every line, so both nozzles print the same path"
+    copied = " and ".join(f"{a} to {', '.join(targets)}" for a, targets in copies.items())
+    every = "both nozzles" if len(nozzles) == 2 else f"all {len(nozzles)} nozzles"
+    return result, f"Copied {copied} on every line, so {every} print the same path"
 
 
 def _rename_e(cmd: Command, axis: str) -> Command:
@@ -382,31 +389,36 @@ def _rename_e(cmd: Command, axis: str) -> Command:
     return cmd.with_words(Word(axis, -w.value) if w.letter == "E" else w for w in cmd.words)
 
 
-def _mirror_e(cmd: Command) -> Command:
+def _mirror_e(cmd: Command, plungers: Sequence[str]) -> Command:
+    """E → the first plunger, in place, and the same push added for the others."""
     e = cmd.get("E")
     if e is None:
         return cmd
-    renamed = _rename_e(cmd, "B")
-    return renamed.with_words([*renamed.words, Word("C", -e)])
+    renamed = _rename_e(cmd, plungers[0])
+    return renamed.with_words([*renamed.words, *(Word(ax, -e) for ax in plungers[1:])])
+
+
+_PLUNGER_LETTERS = "".join(PLUNGER_AXES)
 
 
 def apply_flow_multiplier(cmds: list[Command], multiplier: float) -> list[Command]:
-    """Scale all B/C extrusion values by the given multiplier."""
+    """Scale all plunger extrusion values by the given multiplier."""
     if multiplier == 1.0:
         return cmds
-    return [cmd.map_axis("BC", lambda v: v * multiplier) for cmd in cmds]
+    return [cmd.map_axis(_PLUNGER_LETTERS, lambda v: v * multiplier) for cmd in cmds]
 
 
 def scale_flow(line: str, multiplier: float) -> str:
     """The runtime flow override, applied to each line as it is sent: a
-    move's B/C distance is scaled (the print is relative, so each B/C value
-    is the distance that move pushes). Other commands are left alone."""
+    move's plunger distances are scaled (the print is relative, so each
+    plunger value is the distance that move pushes). Other commands are
+    left alone."""
     if multiplier == 1.0:
         return line
     cmd = parse_line(line)
     if not cmd.is_move:
         return line
-    return render_line(cmd.map_axis("BC", lambda v: v * multiplier))
+    return render_line(cmd.map_axis(_PLUNGER_LETTERS, lambda v: v * multiplier))
 
 
 def clamp_feed_rates(cmds: list[Command], max_f: float = MAX_FEED) -> tuple[list[Command], list[str]]:
@@ -441,16 +453,16 @@ def _plunger_moves(axes: list[str], pull_back_mm: float, label: str = "") -> lis
 
 
 def insert_layer_depressurize(
-    cmds: list[Command], mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM
+    cmds: list[Command], nozzles: Nozzles, pressurize_mm: float = PRESSURIZE_MM
 ) -> list[Command]:
-    """Wrap layer-change travel moves (G0 with the mode's height axis, see
-    _z_axis) with depressurize/repressurize.
+    """Wrap layer-change travel moves (G0 with the first nozzle's height
+    axis, see _z_axis) with depressurize/repressurize.
 
     Skips the very first G0-with-Z since that's the initial positioning before
     any extrusion has happened (the preamble handles the first pressurization).
     """
-    axes = _extrusion_axes(mode)
-    z_axis = _z_axis(mode)
+    axes = _extrusion_axes(nozzles)
+    z_axis = _z_axis(nozzles)
     result: list[Command] = []
     seen_first = False
     for cmd in cmds:
@@ -470,7 +482,7 @@ def insert_layer_depressurize(
 
 
 def insert_travel_retract(
-    cmds: list[Command], mode: SyringeMode, retract_mm: float = PRESSURIZE_MM
+    cmds: list[Command], nozzles: Nozzles, retract_mm: float = PRESSURIZE_MM
 ) -> list[Command]:
     """Wrap in-layer G0 travel moves with retract/prime to prevent oozing.
 
@@ -479,8 +491,8 @@ def insert_travel_retract(
     print segments (e.g. star corners). G0 moves with Z/A are layer changes,
     handled by insert_layer_depressurize.
     """
-    axes = _extrusion_axes(mode)
-    z_axis = _z_axis(mode)
+    axes = _extrusion_axes(nozzles)
+    z_axis = _z_axis(nozzles)
     result: list[Command] = []
     retracted = False
     for cmd in cmds:
@@ -496,27 +508,27 @@ def insert_travel_retract(
     return result
 
 
-def build_preamble(mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> list[str]:
+def build_preamble(nozzles: Nozzles, pressurize_mm: float = PRESSURIZE_MM) -> list[str]:
     """G91 relative positioning + syringe pressurization.
 
     The G92 lets an absolute-extrusion (M82) file count from the pressurized
     plunger; to_relative takes it into account and drops it.
     """
     lines = ["; Octaris — preamble", "G91"]
-    for ax in _extrusion_axes(mode):
+    for ax in _extrusion_axes(nozzles):
         lines.append(f"G1 {ax}{-pressurize_mm:g} F{PRESSURIZE_FEED} ; pressurize {ax}")
         lines.append(f"G92 {ax}0 ; reset after pressurization")
     return lines
 
 
-def build_footer(mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> list[str]:
+def build_footer(nozzles: Nozzles, pressurize_mm: float = PRESSURIZE_MM) -> list[str]:
     """Depressurize syringe(s), raise nozzle, return to origin. The return
     is written as an absolute move, which to_relative turns into the
     distance back from wherever the print ended."""
     lines = ["; Octaris — footer", "G91"]
-    for ax in _extrusion_axes(mode):
+    for ax in _extrusion_axes(nozzles):
         lines.append(f"G1 {ax}{pressurize_mm:g} F{PRESSURIZE_FEED} ; depressurize {ax}")
-    raise_ = " ".join(f"{ax}{CLEARANCE_Z_MM}" for ax in height_axes(mode))
+    raise_ = " ".join(f"{ax}{CLEARANCE_Z_MM}" for ax in height_axes(nozzles))
     lines.extend(
         [
             f"G1 {raise_} F{TRAVEL_FEED} ; raise nozzle",
@@ -528,9 +540,9 @@ def build_footer(mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM) -> lis
 
 
 def add_preamble_and_footer(
-    cmds: list[Command], mode: SyringeMode, pressurize_mm: float = PRESSURIZE_MM
+    cmds: list[Command], nozzles: Nozzles, pressurize_mm: float = PRESSURIZE_MM
 ) -> list[Command]:
-    return parse(build_preamble(mode, pressurize_mm)) + cmds + parse(build_footer(mode, pressurize_mm))
+    return parse(build_preamble(nozzles, pressurize_mm)) + cmds + parse(build_footer(nozzles, pressurize_mm))
 
 
 def start_position(cmds: list[Command]) -> dict[str, float]:
@@ -542,7 +554,7 @@ def start_position(cmds: list[Command]) -> dict[str, float]:
         if cmd.code in ("G90", "G91"):
             relative = cmd.code == "G91"
         elif cmd.is_move and not relative:
-            axes.update(w.letter for w in cmd.words if w.letter in "XYZA")
+            axes.update(w.letter for w in cmd.words if w.letter in ("X", "Y", *HEIGHT_AXES))
     return {ax: 0.0 for ax in AXES if ax in axes}
 
 
@@ -561,7 +573,7 @@ def to_relative(cmds: list[Command], start: Mapping[str, float] | None = None) -
     """Write every move as a relative distance, behind a single G91.
 
     Reads the program as the printer would: G90/G91 set the positioning
-    mode, M82/M83 that of B and C (which carry the slicer's E: G91 makes
+    mode, M82/M83 that of the plungers (which carry the slicer's E: G91 makes
     them relative too, G90 leaves them as M82/M83 set them), and G92 moves
     the coordinates. All of these are taken into account and dropped, so
     nothing after the G91 switches back to absolute (or renumbers an axis).
@@ -600,7 +612,7 @@ def to_relative(cmds: list[Command], start: Mapping[str, float] | None = None) -
                 if ax not in AXES:
                     words.append(w)
                     continue
-                if relative or (e_relative and ax in "BC"):
+                if relative or (e_relative and ax in PLUNGER_AXES):
                     pos[ax] += w.value
                 else:
                     pos[ax] = w.value + shift[ax]
@@ -694,7 +706,7 @@ def is_relative_program(cmds: list[Command]) -> bool:
 
 def build_print(
     cmds: list[Command],
-    mode: SyringeMode,
+    nozzles: Nozzles,
     pressurize_mm: float = PRESSURIZE_MM,
     flow_multiplier: float = 1.0,
     travel_retract_multiplier: float = TRAVEL_RETRACT_MULTIPLIER,
@@ -704,12 +716,12 @@ def build_print(
     preamble, footer and retracts added; process_gcode makes it relative.
     Also returns the feed rate clamping log."""
     cmds = trim_to_print(cmds)
-    cmds = substitute_extrusion(cmds, mode)
-    cmds = map_height_axes(cmds, mode)
+    cmds = substitute_extrusion(cmds, nozzles)
+    cmds = map_height_axes(cmds, nozzles)
     cmds = apply_flow_multiplier(cmds, flow_multiplier)
-    cmds = insert_layer_depressurize(cmds, mode, pressurize_mm)
-    cmds = insert_travel_retract(cmds, mode, pressurize_mm * travel_retract_multiplier)
-    cmds = add_preamble_and_footer(cmds, mode, pressurize_mm)
+    cmds = insert_layer_depressurize(cmds, nozzles, pressurize_mm)
+    cmds = insert_travel_retract(cmds, nozzles, pressurize_mm * travel_retract_multiplier)
+    cmds = add_preamble_and_footer(cmds, nozzles, pressurize_mm)
     # Last, so the pressurize and retract moves added above keep to it too
     return clamp_feed_rates(cmds, max_feed)
 
@@ -728,16 +740,16 @@ def as_uploaded(
         time_estimate_s=extract_time_metadata(raw),
         state_before=state_before,
         state_after=state_after,
-        extrusion_axes=tuple(ax for ax in "BC" if any(c.is_move and c.has(ax) for c in cmds)),
+        extrusion_axes=tuple(ax for ax in PLUNGER_AXES if any(c.is_move and c.has(ax) for c in cmds)),
         pressurize_mm=pressurize_mm,
-        height_axes=tuple(ax for ax in "ZA" if any(c.is_move and c.has(ax) for c in cmds)) or ("Z",),
+        height_axes=tuple(ax for ax in HEIGHT_AXES if any(c.is_move and c.has(ax) for c in cmds)) or ("Z",),
         warnings=warnings or [],
     )
 
 
 def process_gcode(
     raw: str,
-    mode: SyringeMode,
+    nozzles: Nozzles,
     pressurize_mm: float = PRESSURIZE_MM,
     flow_multiplier: float = 1.0,
     travel_retract_multiplier: float = TRAVEL_RETRACT_MULTIPLIER,
@@ -753,14 +765,14 @@ def process_gcode(
         return as_uploaded(raw, pressurize_mm)
 
     cmds, feed_log = build_print(
-        cmds, mode, pressurize_mm, flow_multiplier, travel_retract_multiplier, max_feed
+        cmds, nozzles, pressurize_mm, flow_multiplier, travel_retract_multiplier, max_feed
     )
     start = start_position(cmds)
     cmds = to_relative(cmds, start)
     validate(cmds, max_feed)
     lines = render(cmds)
     # The plungers count from 0 at the start, like the other axes the print moves
-    planned_start = MachineState(pos={ax: start.get(ax, 0.0 if ax in "BC" else None) for ax in AXES})
+    planned_start = MachineState(pos={ax: start.get(ax, 0.0 if ax in PLUNGER_AXES else None) for ax in AXES})
     state_before, state_after = simulate_states(lines, planned_start)
     return ProcessedGcode(
         lines=lines,
@@ -768,8 +780,8 @@ def process_gcode(
         feed_log=feed_log,
         state_before=state_before,
         state_after=state_after,
-        extrusion_axes=tuple(_extrusion_axes(mode)),
+        extrusion_axes=tuple(_extrusion_axes(nozzles)),
         pressurize_mm=pressurize_mm,
-        height_axes=height_axes(mode),
+        height_axes=height_axes(nozzles),
         start_position=start,
     )

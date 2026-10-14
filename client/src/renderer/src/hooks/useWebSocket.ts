@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePrinter } from '../stores/printer'
 import { useSerialLog } from '../stores/serialLog'
 import { useTemperature } from '../stores/temperature'
 import { NO_NOZZLES } from '../screens/setup/calibration'
@@ -25,7 +26,7 @@ interface PrintState {
   // Whether the backend currently has a serial connection to the printer.
   printerConnected: boolean
   port: string | null
-  // Which nozzles are zeroed; whether that's enough depends on the syringe mode
+  // Which nozzles are zeroed; whether that's enough depends on the selection
   calibratedNozzles: NozzleCalibration
   // The printer has temperature sensors (Setup); off, every temperature feature is
   temperatureSensors: boolean
@@ -74,6 +75,12 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
       }
       if (data.type === 'temperature_status') {
         useTemperature.getState().applyStatus(data)
+        return
+      }
+      // The printer profile goes to its own store, read where it's drawn
+      if (data.type === 'snapshot') usePrinter.getState().setProfile(data.printer)
+      if (data.type === 'printer_profile') {
+        usePrinter.getState().setProfile(data.printer)
         return
       }
       setState((prev) => {

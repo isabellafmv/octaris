@@ -27,9 +27,12 @@
   --color-danger-strong: #9B4A3A;
   --color-warning: #B5614A;
 
-  /* G-code preview: one color per nozzle, and travel moves */
-  --color-nozzle-left: var(--color-primary);
-  --color-nozzle-right: var(--color-warning);
+  /* G-code preview: one color per nozzle (by its place in the printer
+     profile, left to right), and travel moves */
+  --color-nozzle-1: var(--color-primary);
+  --color-nozzle-2: var(--color-warning);
+  --color-nozzle-3: var(--color-chart-3);
+  --color-nozzle-4: var(--color-chart-4);
   --color-travel: var(--color-text-subtle);
   /* Chart series, in this fixed order (validated together on the surface
      color for color-blind separation; slot 6 is below 3:1 contrast, so it
