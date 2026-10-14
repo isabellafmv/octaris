@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from backend.serial_manager import number_line
-from backend.virtual_printer import VirtualPrinter
+from backend.serial_manager import number_line, parse_temperatures
+from backend.virtual_printer import PRINTESS_SENSORS, VirtualPrinter
 
 
 @pytest.fixture
@@ -218,3 +218,68 @@ def test_hold_freezes_motion_at_a_point(make):
     printer.release()
     send(printer, "M400")
     assert printer.machine_position()["X"] == 100
+
+
+# --- lab firmware (printess) heater channels ----------------------------------------------
+
+
+def test_printess_reports_its_channels(make):
+    printer = make(protocol="printess", sensors=PRINTESS_SENSORS)
+    reply = send(printer, "M105")
+    assert reply == ["ok T0:21.30 T1:21.10 T2:20.80 T3:21.60"]
+    # In a format Octaris reads: actual only, no target
+    assert parse_temperatures(reply[0]) == {
+        "T0": {"actual": 21.3, "target": None},
+        "T1": {"actual": 21.1, "target": None},
+        "T2": {"actual": 20.8, "target": None},
+        "T3": {"actual": 21.6, "target": None},
+    }
+
+
+def test_printess_channels_heat_and_cool(make):
+    printer = make(protocol="printess", speed=50, sensors={"T0": 21.0, "T1": 21.0})  # 100 °C/s
+    assert send(printer, "M104 I0 T37 H") == ["ok"]
+    assert send(printer, "M104 I1 T10 C") == ["ok"]
+    time.sleep(0.3)
+    assert printer.temperatures == {"T0": (37.0, 37.0), "T1": (10.0, 10.0)}
+    assert printer.modes == {"T0": "H", "T1": "C"}
+
+
+def test_printess_heat_only_heats_and_cool_only_cools(make):
+    printer = make(protocol="printess", speed=50, sensors={"T0": 30.0, "T1": 30.0})
+    send(printer, "M104 I0 T20 H")  # below: heating can't get there
+    send(printer, "M104 I1 T40 C")  # above: cooling can't get there
+    time.sleep(0.3)
+    assert printer.temperatures == {"T0": (30.0, 20.0), "T1": (30.0, 40.0)}
+
+
+def test_printess_off_returns_to_ambient(make):
+    printer = make(protocol="printess", speed=50, sensors={"T0": 21.0})
+    send(printer, "M104 I0 T37 H")
+    time.sleep(0.3)
+    assert send(printer, "M104 I0 T0") == ["ok"]
+    time.sleep(0.3)
+    assert printer.temperatures["T0"] == (21.0, 0.0)
+    assert printer.modes["T0"] is None
+
+
+@pytest.mark.parametrize(
+    ("command", "echo"),
+    [
+        ("M104 I0 T37", "echo:M104 needs T<temperature> and H or C"),
+        ("M104 I0 H", "echo:M104 needs T<temperature> and H or C"),
+        ("M104 I7 T37 H", "echo:Unknown heater channel I7"),
+        ("M104 S37", "echo:Unknown heater channel INone"),
+    ],
+)
+def test_printess_rejects_incomplete_targets(make, command, echo):
+    printer = make(protocol="printess", sensors={"T0": 21.0})
+    assert send(printer, command) == [echo, "ok"]
+    assert printer.temperatures["T0"] == (21.0, 0.0)
+
+
+def test_printess_without_m105_answers(make):
+    printer = make(protocol="printess", sensors=PRINTESS_SENSORS, answers_m105=False)
+    printer.write(b"M105\n")
+    time.sleep(0.1)
+    assert printer.readline() == b""

@@ -77,6 +77,11 @@ def test_parse_temperatures():
         "B": {"actual": 20.1, "target": 60.0},
     }
     assert parse_temperatures("ok T:21.3 /0.0") == {"T": {"actual": 21.3, "target": 0.0}}
+    # Without targets, as the lab firmware may report its channels
+    assert parse_temperatures("ok T0:21.3 T1:30 /37") == {
+        "T0": {"actual": 21.3, "target": None},
+        "T1": {"actual": 30.0, "target": 37.0},
+    }
     # M114 mentions B: and C: too, but isn't a temperature report.
     assert parse_temperatures("X:1.00 Y:2.00 Z:0.00 A:0.00 B:-1.00 C:0.00 Count X:0") is None
     assert parse_temperatures("ok") is None

@@ -12,11 +12,12 @@ import pytest
 
 from backend import serial_manager as serial_module
 from backend import virtual_printer
-from backend.config import load_config
+from backend.config import ChannelConfig, load_config
 from backend.database import init_db
 from backend.main import app, wire
 from backend.schemas import Settings
 from backend.settings import SettingsStore
+from tests.test_temperature import MARLIN
 
 # Heaters at 100 °C/s, a temperature report every 0.1 s
 FAST = {"speed": 50, "report_scale": 0.05}
@@ -114,7 +115,7 @@ async def test_off_sends_no_m155_or_m105_after_connecting(client, dev_mode, quic
     assert temperature_commands(printer) == []
     assert monitor() == "off"
     status = (await client.get("/temperature")).json()
-    assert status == {"state": "off", "monitor": "off", "sensors": []}
+    assert status == {"state": "off", "monitor": "off", "sensors": [], **MARLIN}
 
 
 async def test_off_ignores_manual_reports_and_warns_about_nothing(client, dev_mode):
@@ -312,6 +313,26 @@ async def test_test_sensors_shows_the_reply(client, dev_mode):
         ("C", "Chamber"),
     ]
     assert body["sensors"][0]["actual"] == pytest.approx(21.3, abs=0.5)
+
+
+async def test_test_sensors_shows_the_channels(client, dev_mode):
+    config = app.state.temperature.config
+    config.protocol = "printess"
+    config.channels = [
+        ChannelConfig(index=n, name=f"Heater {n}", reply_key=key)
+        for n, key in enumerate(["T1", "T0", "T3", "T2"])
+    ]
+    await connect_virtual(client, protocol="printess")
+
+    body = (await client.post("/temperature/test")).json()
+
+    assert body["reply"] == "ok T0:21.30 T1:21.10 T2:20.80 T3:21.60"
+    assert [(s["sensor"], s["name"], s["actual"], s["status"]) for s in body["sensors"]] == [
+        ("I0", "Heater 0", 21.1, "off"),
+        ("I1", "Heater 1", 21.3, "off"),
+        ("I2", "Heater 2", 21.6, "off"),
+        ("I3", "Heater 3", 20.8, "off"),
+    ]
 
 
 async def test_test_sensors_without_a_reply(client, dev_mode, monkeypatch):

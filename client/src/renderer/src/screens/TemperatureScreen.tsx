@@ -72,6 +72,10 @@ export function TemperatureScreen({
 
   const state = status?.state ?? (printerConnected ? 'waiting' : 'disconnected')
   const readings = useMemo(() => status?.sensors ?? [], [status])
+  // Lab firmware: configured channels the printer's reply doesn't include
+  const silentChannels = (status?.channels ?? []).filter(
+    (c) => !readings.some((r) => r.sensor === c.sensor)
+  )
 
   const chartSeries = useMemo<ChartSeries[]>(() => {
     const all = Object.keys(sensors)
@@ -155,6 +159,18 @@ export function TemperatureScreen({
                 colorVar={sensorColorVar(reading.sensor, allSensors)}
                 disabled={!printerConnected}
               />
+            ))}
+            {silentChannels.map((channel) => (
+              <div
+                key={channel.sensor}
+                className="rounded-2xl p-4 flex flex-col gap-1 bg-surface-card text-text-muted"
+              >
+                <span className="text-sm font-semibold text-text-secondary">{channel.name}</span>
+                <span className="text-[10px] font-mono text-text-subtle">{channel.sensor}</span>
+                <p className="text-xs mt-2">
+                  No reading: the printer&apos;s reply has no {channel.reply_key}
+                </p>
+              </div>
             ))}
           </div>
         )}

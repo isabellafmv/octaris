@@ -27,6 +27,10 @@ TemperatureState = Literal["off", "disconnected", "waiting", "no_sensors", "ok"]
 # polling stopped until a retry.
 TemperatureMonitor = Literal["off", "idle", "starting", "autoreport", "polling", "paused"]
 HeaterStatus = Literal["heating", "cooling", "at_target", "off"]
+# How the printer's heaters are addressed (config.json temperature.protocol)
+TemperatureProtocol = Literal["marlin", "printess"]
+# printess: the direction the last target was sent with (H: heat, C: cool)
+HeaterMode = Literal["heat", "cool"]
 
 
 def _type_required(schema: dict[str, Any]) -> None:
@@ -82,7 +86,21 @@ class SensorReading(SensorInfo):
     actual: float
     target: float | None
     status: HeaterStatus
+    # printess: whether the target was sent to heat or to cool (None: off,
+    # or a target Octaris didn't send)
+    mode: HeaterMode | None = None
     timestamp: float  # Unix seconds
+
+
+class ChannelInfo(BaseModel):
+    """A heater channel of the lab (printess) firmware."""
+
+    sensor: str  # the key it goes by: "I0"
+    index: int  # the I of M104 I<n>
+    name: str
+    reply_key: str  # the M105 reply key it reads from
+    min: float
+    max: float
 
 
 class TemperatureStatus(BaseModel):
@@ -91,6 +109,9 @@ class TemperatureStatus(BaseModel):
     state: TemperatureState
     monitor: TemperatureMonitor
     sensors: list[SensorReading]
+    protocol: TemperatureProtocol = "marlin"
+    # printess: every configured channel, reported or not (empty for marlin)
+    channels: list[ChannelInfo] = []
 
 
 class Settings(BaseModel):
@@ -459,6 +480,8 @@ class SensorTestReading(BaseModel):
     name: str
     actual: float
     target: float | None
+    status: HeaterStatus
+    mode: HeaterMode | None = None
 
 
 class SensorTestResponse(BaseModel):

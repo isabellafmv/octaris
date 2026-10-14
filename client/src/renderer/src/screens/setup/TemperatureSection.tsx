@@ -4,6 +4,15 @@ import { SensorsNotReporting } from '../../components/SensorsNotReporting'
 import { useTemperature } from '../../stores/temperature'
 import type { SensorTestResponse } from '../../types'
 
+type TestReading = SensorTestResponse['sensors'][number]
+
+function describe(s: TestReading): string {
+  const reading = `${s.name} ${s.actual.toFixed(1)} °C`
+  if (!s.target) return reading
+  if (s.status === 'at_target') return `${reading} (at ${s.target} °C)`
+  return `${reading} (${s.status} to ${s.target} °C)`
+}
+
 interface TemperatureSectionProps {
   printerConnected: boolean
   // The temperature_sensors setting, as the backend last reported it
@@ -20,6 +29,8 @@ export function TemperatureSection({
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<SensorTestResponse | null>(null)
+  // Lab firmware: its heater channels, listed by name in the test result
+  const channels = useTemperature((s) => s.status?.channels) ?? []
 
   // Whether polling is paused comes with the temperature status
   useEffect(() => {
@@ -99,11 +110,31 @@ export function TemperatureSection({
               <pre className="font-mono whitespace-pre-wrap break-all text-text-secondary">
                 {test.reply}
               </pre>
-              <p className="mt-1 text-text">
-                {test.sensors.length === 0
-                  ? 'No sensors found in the reply'
-                  : test.sensors.map((s) => `${s.name} ${s.actual.toFixed(1)} °C`).join(' · ')}
-              </p>
+              {channels.length > 0 ? (
+                <ul className="mt-1 text-text">
+                  {channels.map((c) => {
+                    const found = test.sensors.find((s) => s.sensor === c.sensor)
+                    return (
+                      <li key={c.sensor}>
+                        <span className="font-mono text-text-subtle">{c.sensor}</span>{' '}
+                        {found ? (
+                          describe(found)
+                        ) : (
+                          <span className="text-danger">
+                            {c.name}: not in the reply (no {c.reply_key})
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              ) : (
+                <p className="mt-1 text-text">
+                  {test.sensors.length === 0
+                    ? 'No sensors found in the reply'
+                    : test.sensors.map(describe).join(' · ')}
+                </p>
+              )}
             </>
           )}
         </div>

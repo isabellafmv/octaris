@@ -17,7 +17,7 @@ interface SensorCardProps {
 }
 
 export function SensorCard({ reading, colorVar, disabled }: SensorCardProps): React.JSX.Element {
-  const { sensor, name, actual, target, min, max, settable } = reading
+  const { sensor, name, actual, target, min, max, settable, mode } = reading
   // The target field's raw text
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -69,7 +69,12 @@ export function SensorCard({ reading, colorVar, disabled }: SensorCardProps): Re
           <span className="text-base font-medium ml-1 text-text-muted">°C</span>
         </p>
         <p className="text-xs mt-1 text-text-muted">
-          {!settable ? 'Read-only sensor' : target ? `Target ${target} °C` : 'Heater off'}
+          {!settable
+            ? 'Read-only sensor'
+            : !target
+              ? 'Heater off'
+              : // Lab firmware: a channel only heats (H) or only cools (C) towards its target
+                `Target ${target} °C${mode === 'heat' ? ' · heats only' : mode === 'cool' ? ' · cools only' : ''}`}
         </p>
       </div>
 

@@ -124,6 +124,7 @@ printer doesn't report temperatures* with a **Retry** button.
   after connecting, `state` is `no_sensors`.
 - `POST /temperature/target` `{"sensor": "T0", "target": 37}`: sets a target with
   `M104` (T, T0, T1…), `M140` (bed) or `M141` (chamber); `0` turns the heater off.
+  With the lab firmware it's a channel, `{"sensor": "I0", …}` (see below).
   Targets outside the sensor's range are refused. This works during a print,
   since it doesn't move anything. `M109`/`M190`, which block the printer until
   the temperature is reached, are never sent.
@@ -134,6 +135,42 @@ printer doesn't report temperatures* with a **Retry** button.
   line until every sensor with a target has stayed within ±1 °C of it for 30 s.
   Stopping the print cancels the wait.
   Refused while temperature control is off.
+
+#### Lab firmware: heater channels (`"protocol": "printess"`)
+
+The lab's own firmware addresses its heaters differently from Marlin. With
+`temperature.protocol` set to `"printess"` in `config.json` (default
+`"marlin"`), Octaris drives its four heater channels `I0`–`I3`:
+
+- A target goes out as `M104 I<n> T<°C> H` to heat or `M104 I<n> T<°C> C` to
+  cool. Octaris picks **H** when the new target is at or above the channel's
+  current reading and **C** when it is below. Without a reading from that
+  channel the target is refused (*No reading from … yet*), since the direction
+  can't be chosen. A channel only moves the way it was told, so the Temperature
+  screen shows *Heating* or *Cooling* (*heats only* / *cools only*) for as long
+  as it is away from its target.
+- Each channel's reading comes from a key of the `M105` reply, set per channel
+  in `temperature.channels` (`reply_key`, e.g. `T0` → `I0`). The reply is read
+  with the same parser as Marlin's, so `reply_key` has to be one of Marlin's
+  sensor keys (`T`, `T0`, `T1`…, `B`, `C`, `P`, `R`, `W`); keys no channel reads
+  from show as read-only sensors. If the reply carries no `/target`, Octaris
+  shows the target it last sent (forgotten on reconnect).
+- **Off** sends `temperature.off_command`, default `M104 I{n} T0`.
+- The Temperature screen, Setup's **Test sensors** and Take Over's **Set Temp**
+  (channel picker; H/C chosen as above) all use the channels by name, and
+  *Wait for temperature* waits for every channel with a target. A channel
+  target typed by hand in Take Over (`M104 I1 T30 C`) counts as set too.
+
+> **Not yet confirmed by the lab.** Two parts are guesses until the lab answers:
+> 1. **The `M105` reply format.** Octaris assumes Marlin-style keys, one per
+>    channel (`T0:21.3 T1:21.1 T2:20.8 T3:21.6`, with or without `/target`), and
+>    maps them with `reply_key`. If the firmware uses other keys (e.g. `I0:`),
+>    the reply parser in `serial_manager.py` has to learn them.
+> 2. **How a channel is switched off.** `off_command` (`M104 I{n} T0`) is a
+>    guess; change it in `config.json` once the lab says.
+>
+> The virtual printer's printess mode answers in the assumed format, so it
+> can't tell whether the guesses are right.
 
 ### Manual control (Take Over screen)
 
@@ -208,7 +245,7 @@ The Electron app opens automatically. The backend must be running for any printe
 
 ### Without a printer
 
-Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time.
+Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time. With `"protocol": "printess"` in `config.json` it simulates the lab firmware's four heater channels instead of Marlin's heaters: `M104 I<n> T<°C> H` only heats, `C` only cools, `M104 I<n> T0` switches off, and `M105` answers `ok T0:21.30 T1:21.10 T2:20.80 T3:21.60`.
 
 ```bash
 OCTARIS_VIRTUAL_PRINTER=1 uvicorn backend.main:app --host 127.0.0.1 --port 8000
@@ -291,6 +328,9 @@ The build bundles CuraEngine from `resources/bin/<target>/` and stops with an er
 | `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the left nozzle may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60). Jogs (once zeroed) and prints that would leave it are refused. |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
 | `nozzle_offset_measured` | `true` / `false` | Set to `true` once `NOZZLE_OFFSET_X` in `backend/backend/gcode_processor.py` has been measured. Dual (both-mode) prints are refused until then. |
+| `temperature.protocol` | `marlin` / `printess` | How heaters are set: Marlin's `M104`/`M140`/`M141` (default), or the lab firmware's channels, `M104 I<n> T<°C> H\|C` (see *Lab firmware* above) |
+| `temperature.channels` | `[{"index", "name", "reply_key", "min", "max"}, …]` | `printess` only: each heater channel `I<index>`, its name, the `M105` reply key it reads from (**unconfirmed**), and the targets it accepts (besides 0 for off). Default: `I0`–`I3` reading `T0`–`T3`, 0–120 °C |
+| `temperature.off_command` | string | `printess` only: the command that switches channel `{n}` off. Default `M104 I{n} T0` (**unconfirmed**) |
 | `temperature.sensors` | `{"T0": {"name", "min", "max"}, …}` | A readable name per sensor key the printer reports, and the targets it accepts (besides 0 for off). Unlisted sensors show under their raw key and accept 0–120 °C. |
 | `temperature.retention_days` | number | Logged readings older than this are deleted at startup (default `30`) |
 | `temperature.target_band_c` | number | A sensor counts as at its target within ± this (default `1`) |

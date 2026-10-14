@@ -1025,7 +1025,7 @@
     "/temperature/target": {
       "post": {
         "summary": "Set Temperature Target",
-        "description": "Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C).\nAllowed while printing.",
+        "description": "Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with\nthe lab firmware (protocol \"printess\"), a channel's (I<n>) with\nM104 I<n> T<\u00b0C> H to heat or C to cool, chosen from its current reading\n(refused without one). Allowed while printing.",
         "operationId": "set_temperature_target_temperature_target_post",
         "requestBody": {
           "content": {
@@ -1293,6 +1293,45 @@
           "nozzles"
         ],
         "title": "CalibrationStatusResponse"
+      },
+      "ChannelInfo": {
+        "description": "A heater channel of the lab (printess) firmware.",
+        "properties": {
+          "sensor": {
+            "title": "Sensor",
+            "type": "string"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reply_key": {
+            "title": "Reply Key",
+            "type": "string"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sensor",
+          "index",
+          "name",
+          "reply_key",
+          "min",
+          "max"
+        ],
+        "title": "ChannelInfo",
+        "type": "object"
       },
       "ConnectRequest": {
         "properties": {
@@ -2042,6 +2081,22 @@
             "title": "Status",
             "type": "string"
           },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "heat",
+                  "cool"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mode"
+          },
           "timestamp": {
             "title": "Timestamp",
             "type": "number"
@@ -2085,6 +2140,31 @@
               }
             ],
             "title": "Target"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "heating",
+              "cooling",
+              "at_target",
+              "off"
+            ],
+            "title": "Status"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "heat",
+                  "cool"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
           }
         },
         "type": "object",
@@ -2092,7 +2172,8 @@
           "sensor",
           "name",
           "actual",
-          "target"
+          "target",
+          "status"
         ],
         "title": "SensorTestReading"
       },
@@ -2432,6 +2513,23 @@
             },
             "type": "array",
             "title": "Sensors"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "marlin",
+              "printess"
+            ],
+            "title": "Protocol",
+            "default": "marlin"
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelInfo"
+            },
+            "type": "array",
+            "title": "Channels",
+            "default": []
           }
         },
         "type": "object",
@@ -3082,6 +3180,23 @@
               "$ref": "#/components/schemas/SensorReading"
             },
             "title": "Sensors",
+            "type": "array"
+          },
+          "protocol": {
+            "default": "marlin",
+            "enum": [
+              "marlin",
+              "printess"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "channels": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChannelInfo"
+            },
+            "title": "Channels",
             "type": "array"
           },
           "type": {
