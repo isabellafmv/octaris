@@ -1023,6 +1023,99 @@
         }
       }
     },
+    "/temperature/test": {
+      "post": {
+        "summary": "Test Sensors",
+        "description": "Send M105 once (5 s to answer) and return the raw reply, or null if\nnone came, with the sensors found in it. Works with temperature control\non or off: this is how to check the printer's sensor setup.",
+        "operationId": "test_sensors_temperature_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensorTestResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/retry": {
+      "post": {
+        "summary": "Retry Temperature",
+        "description": "Start temperature monitoring again after M105 polling paused.",
+        "operationId": "retry_temperature_temperature_retry_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "summary": "Get Settings",
+        "operationId": "get_settings_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Settings",
+        "description": "Save the settings; they apply at once and are kept across restarts.\nTurning temperature_sensors on or off starts or stops temperature\nmonitoring right away, connected or not.",
+        "operationId": "put_settings_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Health",
@@ -1892,6 +1985,70 @@
         "title": "SensorReading",
         "type": "object"
       },
+      "SensorTestReading": {
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "actual": {
+            "type": "number",
+            "title": "Actual"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sensor",
+          "name",
+          "actual",
+          "target"
+        ],
+        "title": "SensorTestReading"
+      },
+      "SensorTestResponse": {
+        "properties": {
+          "reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/SensorTestReading"
+            },
+            "type": "array",
+            "title": "Sensors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reply",
+          "sensors"
+        ],
+        "title": "SensorTestResponse",
+        "description": "One M105's raw reply (None: no reply in time) and the sensors in it."
+      },
       "SerialLogEntry": {
         "properties": {
           "timestamp": {
@@ -1946,6 +2103,18 @@
           "entries"
         ],
         "title": "SerialLogResponse"
+      },
+      "Settings": {
+        "description": "Settings changed in the app (Setup screen), kept across restarts.",
+        "properties": {
+          "temperature_sensors": {
+            "default": false,
+            "title": "Temperature Sensors",
+            "type": "boolean"
+          }
+        },
+        "title": "Settings",
+        "type": "object"
       },
       "Snapshot": {
         "properties": {
@@ -2021,6 +2190,9 @@
               }
             ],
             "title": "Time Estimate S"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
           }
         },
         "type": "object",
@@ -2035,7 +2207,8 @@
           "flow_rate",
           "resumable",
           "stop_reason",
-          "time_estimate_s"
+          "time_estimate_s",
+          "settings"
         ],
         "title": "Snapshot",
         "description": "Current connection and print state."
@@ -2157,12 +2330,25 @@
           "state": {
             "type": "string",
             "enum": [
+              "off",
               "disconnected",
               "waiting",
               "no_sensors",
               "ok"
             ],
             "title": "State"
+          },
+          "monitor": {
+            "type": "string",
+            "enum": [
+              "off",
+              "idle",
+              "starting",
+              "autoreport",
+              "polling",
+              "paused"
+            ],
+            "title": "Monitor"
           },
           "sensors": {
             "items": {
@@ -2175,6 +2361,7 @@
         "type": "object",
         "required": [
           "state",
+          "monitor",
           "sensors"
         ],
         "title": "TemperatureStatus",
@@ -2541,6 +2728,27 @@
         "title": "SerialLogEvent",
         "type": "object"
       },
+      "SettingsEvent": {
+        "description": "The settings changed (PUT /settings).",
+        "properties": {
+          "temperature_sensors": {
+            "default": false,
+            "title": "Temperature Sensors",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "settings",
+            "default": "settings",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "SettingsEvent",
+        "type": "object"
+      },
       "SnapshotEvent": {
         "description": "Sent once, right after a WebSocket connects.",
         "properties": {
@@ -2617,6 +2825,9 @@
             ],
             "title": "Time Estimate S"
           },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
           "type": {
             "const": "snapshot",
             "default": "snapshot",
@@ -2636,7 +2847,8 @@
           "flow_rate",
           "resumable",
           "stop_reason",
-          "time_estimate_s"
+          "time_estimate_s",
+          "settings"
         ],
         "title": "SnapshotEvent",
         "type": "object"
@@ -2768,12 +2980,25 @@
         "properties": {
           "state": {
             "enum": [
+              "off",
               "disconnected",
               "waiting",
               "no_sensors",
               "ok"
             ],
             "title": "State",
+            "type": "string"
+          },
+          "monitor": {
+            "enum": [
+              "off",
+              "idle",
+              "starting",
+              "autoreport",
+              "polling",
+              "paused"
+            ],
+            "title": "Monitor",
             "type": "string"
           },
           "sensors": {
@@ -2793,6 +3018,7 @@
         "required": [
           "type",
           "state",
+          "monitor",
           "sensors"
         ],
         "title": "TemperatureStatusEvent",
@@ -2897,6 +3123,7 @@
             "printer": "#/components/schemas/PrinterEvent",
             "progress": "#/components/schemas/ProgressEvent",
             "serial_log": "#/components/schemas/SerialLogEvent",
+            "settings": "#/components/schemas/SettingsEvent",
             "snapshot": "#/components/schemas/SnapshotEvent",
             "status": "#/components/schemas/StatusEvent",
             "stop": "#/components/schemas/StopEvent",
@@ -2940,6 +3167,9 @@
           },
           {
             "$ref": "#/components/schemas/TemperatureWaitEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SettingsEvent"
           },
           {
             "$ref": "#/components/schemas/PrinterEvent"

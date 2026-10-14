@@ -40,8 +40,8 @@ async def rig():
     events: list[dict] = []
     managers: list[SerialManager] = []
 
-    def make() -> SerialManager:
-        manager = SerialManager(on_event=events.append)
+    def make(**options) -> SerialManager:
+        manager = SerialManager(on_event=events.append, **options)
         managers.append(manager)
         return manager
 
@@ -158,7 +158,7 @@ async def test_unsolicited_temperature_reports_while_printing(rig):
     make, events = rig
     # Reports every 20 ms, while each move takes ~20 ms and the planner holds 2.
     printer = fast_printer(speed=5, planner_depth=2)
-    manager = make()
+    manager = make(temperature_enabled=True)
     with patch("backend.serial_manager.serial.Serial", return_value=printer):
         await manager.connect("/dev/virtual", 115200)
     await wait_for(lambda: any(e["type"] == "temperature" for e in events))
@@ -188,7 +188,7 @@ async def test_polls_m105_without_auto_report(rig, monkeypatch):
     monkeypatch.setattr(serial_module, "TEMPERATURE_POLL_S", 0.05)
     make, events = rig
     printer = fast_printer(autoreport=False)
-    manager = make()
+    manager = make(temperature_enabled=True)
     with patch("backend.serial_manager.serial.Serial", return_value=printer):
         await manager.connect("/dev/virtual", 115200)
 

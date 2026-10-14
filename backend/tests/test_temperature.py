@@ -210,6 +210,7 @@ def test_existing_database_gets_the_table(tmp_path):
 
 
 async def test_readings_during_a_print_carry_its_session(client, tmp_path):
+    assert (await client.put("/settings", json={"temperature_sensors": True})).status_code == 200
     attach(app.state.serial_manager, FakeSerial())
     app.state.session.zeroed = {"X", "Y", "Z", "A"}
     app.state.config.nozzle_offset_measured = True
@@ -278,7 +279,7 @@ def test_no_sensor_state(db, clock):
     store.on_event({"type": "printer", "connected": True, "port": "virtual"})
     assert store.status().state == "waiting"
     clock.advance(15)
-    assert store.status().model_dump() == {"state": "no_sensors", "sensors": []}
+    assert store.status().model_dump() == {"state": "no_sensors", "monitor": "autoreport", "sensors": []}
 
     store.record(report(T=(21.0, 0.0)))
     assert store.status().state == "ok"
@@ -469,7 +470,12 @@ def test_no_sensors_is_a_state_not_a_warning(watched, clock):
     tick(watched, clock, 14)
     assert watched.events[-1]["state"] == "waiting"
     tick(watched, clock, 2)
-    assert watched.events[-1] == {"type": "temperature_status", "state": "no_sensors", "sensors": []}
+    assert watched.events[-1] == {
+        "type": "temperature_status",
+        "state": "no_sensors",
+        "monitor": "autoreport",
+        "sensors": [],
+    }
     tick(watched, clock, 60)
     assert watched.warnings() == []
 

@@ -6,6 +6,7 @@ import { CalibrationSection } from './setup/CalibrationSection'
 import { ConnectionSection } from './setup/ConnectionSection'
 import { PrintParametersSection } from './setup/PrintParametersSection'
 import { SyringeSelectionSection } from './setup/SyringeSelectionSection'
+import { TemperatureSection } from './setup/TemperatureSection'
 import { UploadPreview, UploadSection } from './setup/UploadSection'
 import { useUpload, type Upload } from './setup/useUpload'
 
@@ -14,6 +15,7 @@ interface SetupScreenProps {
   port: string | null
   calibratedNozzles: NozzleCalibration
   printStatus: PrintStatus
+  temperatureSensors: boolean
   onStartPrint: () => void
   externalError?: string | null
   onClearExternalError?: () => void
@@ -37,6 +39,7 @@ export function SetupScreen({
   port,
   calibratedNozzles: nozzlesFromEvents,
   printStatus,
+  temperatureSensors,
   onStartPrint,
   externalError,
   onClearExternalError
@@ -101,6 +104,12 @@ export function SetupScreen({
             nozzles={nozzles}
             hasUpload={upload.result !== null}
             onCalibrated={handleCalibrated}
+            onError={setError}
+          />
+
+          <TemperatureSection
+            printerConnected={printerConnected}
+            enabled={temperatureSensors}
             onError={setError}
           />
 

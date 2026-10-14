@@ -23,6 +23,12 @@ export type SensorReading = Schemas['SensorReading']
 export type TemperatureStatus = Schemas['TemperatureStatus']
 export type TemperatureSeries = Schemas['TemperatureSeries']
 export type TemperatureHistoryResponse = Schemas['TemperatureHistoryResponse']
+// How the backend gets temperature reports; "paused": the printer doesn't answer M105
+export type TemperatureMonitor = TemperatureStatus['monitor']
+// POST /temperature/test: one M105's raw reply (null: none came) and the sensors in it
+export type SensorTestResponse = Schemas['SensorTestResponse']
+// Settings changed on the Setup screen, kept by the backend across restarts
+export type Settings = Schemas['Settings']
 
 export type ProgressEvent = Schemas['ProgressEvent']
 export type StatusEvent = Schemas['StatusEvent']
@@ -37,6 +43,7 @@ export type TemperatureEvent = Schemas['TemperatureEvent']
 // GET /temperature's body, after every report and when the state changes
 export type TemperatureStatusEvent = Schemas['TemperatureStatusEvent']
 export type PrinterEvent = Schemas['PrinterEvent']
+export type SettingsEvent = Schemas['SettingsEvent']
 export type SnapshotEvent = Schemas['SnapshotEvent']
 export type CalibrationEvent = Schemas['CalibrationEvent']
 export type PrintEndEvent = Schemas['PrintEndEvent']

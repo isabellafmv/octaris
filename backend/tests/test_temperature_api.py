@@ -25,6 +25,12 @@ async def wait_for(condition, timeout: float = 5.0) -> None:
         await asyncio.sleep(0.01)
 
 
+@pytest.fixture(autouse=True)
+async def sensors_on(client):
+    """These tests are about a printer with temperature sensors."""
+    assert (await client.put("/settings", json={"temperature_sensors": True})).status_code == 200
+
+
 @pytest.fixture
 def dev_mode(monkeypatch):
     monkeypatch.setenv("OCTARIS_VIRTUAL_PRINTER", "1")
@@ -51,7 +57,7 @@ async def get_status(client) -> dict:
 
 
 async def test_disconnected(client):
-    assert await get_status(client) == {"state": "disconnected", "sensors": []}
+    assert await get_status(client) == {"state": "disconnected", "monitor": "idle", "sensors": []}
 
 
 async def test_sensors_from_the_virtual_printer(client, dev_mode):
@@ -74,7 +80,7 @@ async def test_no_sensor_reported(client, dev_mode):
 
     assert (await get_status(client))["state"] == "waiting"
     await asyncio.sleep(0.35)
-    assert await get_status(client) == {"state": "no_sensors", "sensors": []}
+    assert await get_status(client) == {"state": "no_sensors", "monitor": "starting", "sensors": []}
 
 
 # --- POST /temperature/target -------------------------------------------------------------

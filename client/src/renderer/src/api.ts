@@ -4,7 +4,9 @@ import type {
   GcodeLineError,
   NozzleCalibration,
   PortInfo,
+  SensorTestResponse,
   SerialLogEntry,
+  Settings,
   SyringeMode,
   TemperatureHistoryResponse,
   TemperatureStatus,
@@ -167,7 +169,18 @@ export const api = {
       body: JSON.stringify({ nozzle, syringe_mode: syringeMode })
     }),
   calibrationReset: () => json<{ status: string }>('/calibration/reset', { method: 'POST' }),
+  getSettings: () => json<Settings>('/settings'),
+  saveSettings: (settings: Settings) =>
+    json<Settings>('/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    }),
   getTemperature: () => json<TemperatureStatus>('/temperature'),
+  // One M105, with or without temperature control on: the raw reply and the sensors in it
+  testSensors: () => json<SensorTestResponse>('/temperature/test', { method: 'POST' }),
+  // Start polling again after the printer didn't answer M105
+  retryTemperature: () => json<TemperatureStatus>('/temperature/retry', { method: 'POST' }),
   getTemperatureHistory: (minutes: number) =>
     json<TemperatureHistoryResponse>(`/temperature/history?minutes=${minutes}`),
   setTemperatureTarget: (sensor: string, target: number) =>

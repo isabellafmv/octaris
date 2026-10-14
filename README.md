@@ -94,11 +94,30 @@ Every print is sent fully relative: the post-processor turns the sliced program 
 
 > Temperature monitoring is new since v1.0.0; v1.0 has none.
 
+Temperature control is **off by default**, for printers without temperature
+sensors. Turn it on in Setup under *Temperature control* with **This printer
+has temperature sensors** (kept across restarts, applied at once: no reconnect
+needed). While it's off, the app never sends `M155` or `M105` by itself, the
+Temperature screen is disabled, and nothing temperature-related is shown,
+logged or warned about; the `M105`/`M104` quick commands in Take Over still
+work. **Test sensors** next to the switch sends `M105` once (5 s to answer) and
+shows the raw reply and the sensors it found, or *No reply*, whether the
+setting is on or off: use it to check the setup.
+
 The **Temperature** screen (sidebar) shows each sensor's reading, target and status, a chart of actual vs. target, and a CSV export. Warnings appear when a sensor drifts from its target during a print, stops reporting, or reads something implausible (see the safety note above).
 
 The backend reads the printer's temperatures (Marlin's `M155` auto-report, or
 `M105` polling if the firmware doesn't auto-report) and logs every reading to
-the SQLite database, tagged with the print it belongs to.
+the SQLite database, tagged with the print it belongs to. Polling never holds
+up other commands: a poll is skipped while a command is queued, has 5 s to be
+answered, and gives way after 0.5 s to a command that arrives. If two polls in
+a row get no usable reply, polling pauses, and Setup and Temperature show *The
+printer doesn't report temperatures* with a **Retry** button.
+
+- `GET /settings`, `PUT /settings` `{"temperature_sensors": true}`: the settings
+  changed in the app, saved to `settings.json` in the app data folder.
+- `POST /temperature/test`: one `M105`; `{"reply": "ok T:…" | null, "sensors": […]}`.
+- `POST /temperature/retry`: start polling again after it paused.
 
 - `GET /temperature`: the latest reading, target and status (heating, cooling,
   at target, off) of each sensor. If the printer never reports a temperature
@@ -114,6 +133,7 @@ the SQLite database, tagged with the print it belongs to.
 - `POST /print/start` `{"wait_for_temperature": true}`: the print holds its first
   line until every sensor with a target has stayed within ±1 °C of it for 30 s.
   Stopping the print cancels the wait.
+  Refused while temperature control is off.
 
 ### Manual control (Take Over screen)
 
