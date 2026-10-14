@@ -25,6 +25,7 @@ from backend.main import app
 from backend.queue_worker import CONNECTION_LOST, PrintState, PrintStatus, QueueWorker
 from backend.serial_manager import SerialError, SerialManager, _open_port
 from backend.session import LoadedPrint
+from tests.nozzles import LEFT
 from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -105,10 +106,10 @@ def events(client):
     return drain
 
 
-async def upload_sample(client, mode: str = "left", raw: str = RAW_SAMPLE):
+async def upload_sample(client, nozzles: tuple[str, ...] = ("left",), raw: str = RAW_SAMPLE):
     return await client.post(
         "/upload/gcode",
-        params={"syringe_mode": mode},
+        params={"nozzles": list(nozzles)},
         files={"file": ("sample.gcode", raw.encode(), "text/plain")},
     )
 
@@ -278,7 +279,7 @@ BED = BedLimits()  # X/Y -30..30, Z 0..60
 
 
 def test_check_path_accepts_sample():
-    check_path(BED, process_gcode(RAW_SAMPLE, "left").lines)
+    check_path(BED, process_gcode(RAW_SAMPLE, LEFT).lines)
 
 
 def test_check_path_names_the_offending_line():
@@ -421,7 +422,7 @@ def test_check_plunger_travel():
 
 
 def sample_need() -> float:
-    lines = process_gcode(RAW_SAMPLE, "left").lines
+    lines = process_gcode(RAW_SAMPLE, LEFT).lines
     return plunger_travel_needed(lines, start_state(ORIGIN))["B"]
 
 
@@ -470,28 +471,28 @@ async def test_low_travel_warning_emitted_once():
 
 
 async def test_dual_prints_refused_until_offset_measured(client, printer):
-    app.state.config.nozzle_offset_measured = False
-    assert (await upload_sample(client, mode="both")).status_code == 200
+    app.state.session.profile.nozzle_offset_measured = False
+    assert (await upload_sample(client, nozzles=("left", "right"))).status_code == 200
 
     resp = await client.post("/print/start")
 
     assert resp.status_code == 400
     detail = resp.json()["detail"]
-    assert "NOZZLE_OFFSET_X" in detail
+    assert "offset_x" in detail and '"printess-1"' in detail
     assert '"nozzle_offset_measured": true' in detail
     assert "config.json" in detail
 
 
 async def test_right_print_does_not_need_the_offset(client, printer):
-    # Right mode is zeroed at the right nozzle, so the offset isn't used.
-    app.state.config.nozzle_offset_measured = False
-    assert (await upload_sample(client, mode="right")).status_code == 200
+    # A right nozzle print is zeroed at the right nozzle, so the offset isn't used.
+    app.state.session.profile.nozzle_offset_measured = False
+    assert (await upload_sample(client, nozzles=("right",))).status_code == 200
 
     assert (await client.post("/print/start")).status_code == 200
 
 
 async def test_left_print_unaffected_by_offset_flag(client, printer):
-    app.state.config.nozzle_offset_measured = False
+    app.state.session.profile.nozzle_offset_measured = False
     assert (await upload_sample(client)).status_code == 200
 
     assert (await client.post("/print/start")).status_code == 200
@@ -499,8 +500,16 @@ async def test_left_print_unaffected_by_offset_flag(client, printer):
 
 def test_config_defaults():
     config = Config()
-    assert config.nozzle_offset_measured is False
+    assert config.profile.id == "printess-1"
+    assert config.profile.nozzle_offset_measured is False
     assert config.syringe_travel_mm > 0
-    assert (config.bed.x.min, config.bed.x.max) == (-30, 30)
+    assert (config.profile.bed.x.min, config.profile.bed.x.max) == (-30, 30)
     with pytest.raises(ValueError):
-        Config(bed={"x": {"min": 5, "max": -5}})
+        Config(profiles={"printess-1": {"bed": {"x": {"min": 5, "max": -5}}}})
+
+
+def test_legacy_top_level_bed_applies_to_the_selected_profile():
+    config = Config(bed={"x": {"min": -45, "max": 45}}, nozzle_offset_measured=True)
+    assert (config.profile.bed.x.min, config.profile.bed.x.max) == (-45, 45)
+    assert (config.profile.bed.y.min, config.profile.bed.y.max) == (-30, 30)
+    assert config.profile.nozzle_offset_measured is True

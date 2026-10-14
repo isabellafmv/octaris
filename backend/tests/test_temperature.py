@@ -213,7 +213,7 @@ async def test_readings_during_a_print_carry_its_session(client, tmp_path):
     assert (await client.put("/settings", json={"temperature_sensors": True})).status_code == 200
     attach(app.state.serial_manager, FakeSerial())
     app.state.session.zeroed = {"X", "Y", "Z", "A"}
-    app.state.config.nozzle_offset_measured = True
+    app.state.session.profile.nozzle_offset_measured = True
     bus = app.state.event_bus
     store: TemperatureStore = app.state.temperature
     worker = app.state.queue_worker

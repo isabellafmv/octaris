@@ -1,21 +1,44 @@
 import { describe, expect, it } from 'vitest'
 import { groupByCategory } from './categories'
-import { EXTRUDE, NOZZLE_RIGHT, RIGHT_NOZZLE_OFFSET_X, TRAVEL, parseGcode } from './parse'
+import { EXTRUDE, TRAVEL, parseGcode, previewNozzles, type PreviewNozzle } from './parse'
+import type { PrinterProfile } from '../types'
+
+// The Printess 1.0 profile as the backend sends it
+const PRINTESS_1: PrinterProfile = {
+  id: 'printess-1',
+  name: 'Printess 1.0',
+  nozzles: [
+    { id: 'left', name: 'Left', height_axis: 'Z', plunger_axis: 'B', offset_x: 0, offset_y: 0 },
+    { id: 'right', name: 'Right', height_axis: 'A', plunger_axis: 'C', offset_x: 30, offset_y: 0 }
+  ],
+  bed: {
+    x: { min: -30, max: 30 },
+    y: { min: -30, max: 30 },
+    z: { min: 0, max: 60 }
+  },
+  build_volume: { x: 60, y: 60, z: 60 },
+  nozzle_offset_measured: false
+}
+const NOZZLES = previewNozzles(PRINTESS_1)
+const RIGHT_OFFSET_X = 30
 
 // The parsed segments as plain objects, for readable assertions
-function segments(text: string): {
+function segments(
+  text: string,
+  nozzles: PreviewNozzle[] = NOZZLES
+): {
   from: number[]
   to: number[]
   kind: 'travel' | 'extrude'
   nozzle: 'left' | 'right'
   layer: number
 }[] {
-  const p = parseGcode(text)
+  const p = parseGcode(text, nozzles)
   return Array.from({ length: p.segmentCount }, (_, i) => ({
     from: Array.from(p.positions.subarray(i * 6, i * 6 + 3)),
     to: Array.from(p.positions.subarray(i * 6 + 3, i * 6 + 6)),
     kind: p.kinds[i] === EXTRUDE ? 'extrude' : 'travel',
-    nozzle: p.nozzles[i] === NOZZLE_RIGHT ? 'right' : 'left',
+    nozzle: p.nozzles[i] === 1 ? 'right' : 'left',
     layer: p.layers[i]
   }))
 }
@@ -81,7 +104,19 @@ describe('absolute (G90)', () => {
     expect(result.map((s) => s.nozzle)).toEqual(['left', 'right'])
     const xs = (i: number): number[] => [result[i].from[0], result[i].to[0]]
     expect(xs(0)).toEqual([0, 10])
-    expect(xs(1)).toEqual([RIGHT_NOZZLE_OFFSET_X, 10 + RIGHT_NOZZLE_OFFSET_X])
+    expect(xs(1)).toEqual([RIGHT_OFFSET_X, 10 + RIGHT_OFFSET_X])
+  })
+
+  it("takes the nozzles' offsets and axes from the profile", () => {
+    const moved: PreviewNozzle[] = [NOZZLES[0], { ...NOZZLES[1], offsetX: 25, offsetY: -4 }]
+    const result = segments(gcode('G1 X10 B-1 C-1'), moved)
+    expect(result[1]).toMatchObject({ from: [25, -4, 0], to: [35, -4, 0], nozzle: 'right' })
+    // Another profile's letters: here the right nozzle's plunger is B
+    const swapped: PreviewNozzle[] = [
+      { ...NOZZLES[0], plungerAxis: 'C' },
+      { ...NOZZLES[1], plungerAxis: 'B' }
+    ]
+    expect(segments(gcode('G1 X10 B-1'), swapped)[0].nozzle).toBe('right')
   })
 
   it('takes the right nozzle height from A once the file moves A', () => {
@@ -131,7 +166,7 @@ describe('relative (G91)', () => {
 
   it('splits a fully relative file into layers', () => {
     const layer = ['G1 X10 B-1', 'G1 Y10 B-1', 'G1 X-10 B-1', 'G1 Y-10 B-1']
-    const p = parseGcode(gcode('G91', 'G0 Z0.2', ...layer, 'G0 Z0.2', ...layer, 'G0 Z5'))
+    const p = parseGcode(gcode('G91', 'G0 Z0.2', ...layer, 'G0 Z0.2', ...layer, 'G0 Z5'), NOZZLES)
     expect(p.layerHeights).toEqual([expect.closeTo(0.2), expect.closeTo(0.4)])
     // the move up to layer 2 belongs to layer 2, the final lift to the last layer
     expect(Array.from(p.layers)).toEqual([0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1])
@@ -165,7 +200,10 @@ describe('relative (G91)', () => {
       'G1 X6 B-0.65 F150',
       'G1 Z5 F300 ; clear'
     ].join('\r\n')
-    expect(parseGcode(lab).layerHeights).toEqual([expect.closeTo(0.3), expect.closeTo(0.55)])
+    expect(parseGcode(lab, NOZZLES).layerHeights).toEqual([
+      expect.closeTo(0.3),
+      expect.closeTo(0.55)
+    ])
     expect(segments(lab).map((s) => [s.to.map((v) => +v.toFixed(3)), s.kind, s.layer])).toEqual([
       [[0, 0, 0.3], 'travel', 0],
       [[6, 0, 0.3], 'extrude', 0],
@@ -247,34 +285,32 @@ describe('G92', () => {
 describe('groupByCategory', () => {
   it('orders each category by layer', () => {
     const p = parseGcode(
-      gcode('G0 Z0.2', 'G1 X10 B-1', 'G1 X20 C-1', 'G0 Z0.4', 'G1 X10 B-2', 'G1 X0 C-2')
+      gcode('G0 Z0.2', 'G1 X10 B-1', 'G1 X20 C-1', 'G0 Z0.4', 'G1 X10 B-2', 'G1 X0 C-2'),
+      NOZZLES
     )
-    const { categories, layerHeights } = groupByCategory(p)
+    const { nozzles, travel, layerHeights } = groupByCategory(p)
     expect(layerHeights).toHaveLength(2)
-    expect(Array.from(categories.left.layerStart)).toEqual([0, 1, 2])
-    expect(Array.from(categories.right.layerStart)).toEqual([0, 1, 2])
-    expect(Array.from(categories.travel.layerStart)).toEqual([0, 1, 2])
-    expect(Array.from(categories.left.positions.subarray(3, 6))).toEqual([
-      10,
-      0,
-      expect.closeTo(0.2)
-    ])
+    expect(Array.from(nozzles[0].layerStart)).toEqual([0, 1, 2])
+    expect(Array.from(nozzles[1].layerStart)).toEqual([0, 1, 2])
+    expect(Array.from(travel.layerStart)).toEqual([0, 1, 2])
+    expect(Array.from(nozzles[0].positions.subarray(3, 6))).toEqual([10, 0, expect.closeTo(0.2)])
   })
 
   it('keeps file order within a layer when layers are revisited', () => {
-    // "both" with tool changes can go back down to an earlier height
+    // Two nozzles with tool changes can go back down to an earlier height
     const p = parseGcode(
-      gcode('G0 Z0.4', 'G1 X1 B-1', 'G0 Z0.2', 'G1 X2 B-2', 'G0 Z0.4', 'G1 X3 B-3')
+      gcode('G0 Z0.4', 'G1 X1 B-1', 'G0 Z0.2', 'G1 X2 B-2', 'G0 Z0.4', 'G1 X3 B-3'),
+      NOZZLES
     )
-    const left = groupByCategory(p).categories.left
+    const left = groupByCategory(p).nozzles[0]
     expect(Array.from(left.layerStart)).toEqual([0, 1, 3])
     expect([0, 1, 2].map((i) => left.positions[i * 6 + 3])).toEqual([2, 1, 3])
   })
 
   it('handles a file without moves', () => {
-    const { categories, layerHeights } = groupByCategory(parseGcode('G90\nM83'))
+    const { travel, layerHeights } = groupByCategory(parseGcode('G90\nM83', NOZZLES))
     expect(layerHeights).toEqual([])
-    expect(Array.from(categories.travel.layerStart)).toEqual([0, 0])
+    expect(Array.from(travel.layerStart)).toEqual([0, 0])
   })
 })
 
@@ -288,7 +324,7 @@ describe('large files', () => {
     }
     const progress: number[] = []
     const start = performance.now()
-    const p = parseGcode(lines.join('\n'), (f) => progress.push(f))
+    const p = parseGcode(lines.join('\n'), NOZZLES, (f) => progress.push(f))
     const elapsed = performance.now() - start
 
     expect(p.layerHeights).toHaveLength(500)

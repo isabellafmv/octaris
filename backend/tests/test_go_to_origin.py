@@ -1,12 +1,12 @@
 """POST /jog/origin: travel to X0 Y0 at the current height and, on request,
-lower the syringe mode's nozzle(s) to zero height — one sequence."""
+lower the selected nozzles to zero height — one sequence."""
 
 from __future__ import annotations
 
 import pytest
 
-from backend.config import AxisRange, BedLimits
 from backend.main import app
+from backend.printer import AxisRange, BedLimits
 from backend.queue_worker import PrintStatus
 from tests.serial_fakes import attach
 from tests.test_print_gate import set_status
@@ -21,8 +21,8 @@ async def printer(client):
     return fake
 
 
-def set_mode(mode: str) -> None:
-    app.state.session._calibration_mode = mode
+def select(*nozzles: str) -> None:
+    app.state.session._calibration_nozzles = nozzles
 
 
 async def origin(client, lower: bool = False):
@@ -38,11 +38,11 @@ async def test_go_to_origin_moves_xy_only(client, printer):
 
 
 @pytest.mark.parametrize(
-    "mode, lower_line",
-    [("left", "G1 Z0 F300"), ("right", "G1 A0 F300"), ("both", "G1 Z0 A0 F300")],
+    "nozzles, lower_line",
+    [(["left"], "G1 Z0 F300"), (["right"], "G1 A0 F300"), (["left", "right"], "G1 Z0 A0 F300")],
 )
-async def test_lower_moves_the_height_axes_of_the_mode(client, printer, mode, lower_line):
-    set_mode(mode)
+async def test_lower_moves_the_height_axes_of_the_selected_nozzles(client, printer, nozzles, lower_line):
+    select(*nozzles)
 
     resp = await origin(client, lower=True)
 
@@ -95,7 +95,7 @@ async def test_allowed_while_paused(client, printer):
 
 
 async def test_lower_refused_until_the_height_is_zeroed(client, printer):
-    set_mode("both")
+    select("left", "right")
     app.state.session.zeroed = {"X", "Y", "Z"}  # the right nozzle not yet
 
     resp = await origin(client, lower=True)
@@ -120,7 +120,7 @@ async def test_xy_allowed_before_calibration(client, printer):
     ],
 )
 async def test_origin_off_the_bed_is_refused(client, printer, monkeypatch, bed, lower, message):
-    monkeypatch.setattr(app.state.config, "bed", bed)
+    monkeypatch.setattr(app.state.session.profile, "bed", bed)
 
     resp = await origin(client, lower)
 
@@ -130,7 +130,7 @@ async def test_origin_off_the_bed_is_refused(client, printer, monkeypatch, bed, 
 
 
 async def test_height_limit_not_checked_without_lower(client, printer, monkeypatch):
-    monkeypatch.setattr(app.state.config, "bed", BedLimits(z=AxisRange(min=1, max=60)))
+    monkeypatch.setattr(app.state.session.profile, "bed", BedLimits(z=AxisRange(min=1, max=60)))
 
     assert (await origin(client)).status_code == 200
 

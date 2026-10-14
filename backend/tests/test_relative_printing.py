@@ -22,6 +22,7 @@ from backend.gcode_processor import build_print, parse, parse_words, process_gco
 from backend.main import app
 from backend.queue_worker import PrintStatus
 from backend.virtual_printer import VirtualPrinter
+from tests.nozzles import BOTH, LEFT, RIGHT
 from tests.serial_fakes import attach
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -75,14 +76,14 @@ def run_on_firmware(lines: list[str]) -> list[dict[str, float]]:
 # --- the converted program --------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", ["left", "right", "both"])
+@pytest.mark.parametrize("nozzles", [LEFT, RIGHT, BOTH], ids=["left", "right", "left+right"])
 @pytest.mark.parametrize("raw", [RAW_SAMPLE, cura_like()], ids=["sample", "cura_like"])
-def test_relative_program_reaches_the_same_positions_as_the_absolute_one(raw, mode):
+def test_relative_program_reaches_the_same_positions_as_the_absolute_one(raw, nozzles):
     # The absolute program is the slicer's own coordinates with the preamble,
     # footer and retracts added: what the printer used to be sent. Both start
     # at the zero point (the virtual printer starts at 0 on every axis).
-    absolute, _ = build_print(parse(raw.splitlines()), mode)
-    relative = process_gcode(raw, mode).lines
+    absolute, _ = build_print(parse(raw.splitlines()), nozzles)
+    relative = process_gcode(raw, nozzles).lines
 
     assert not any(line.startswith("G90") for line in relative)
     expected = run_on_firmware(render(absolute))
@@ -94,7 +95,7 @@ def test_relative_program_reaches_the_same_positions_as_the_absolute_one(raw, mo
 
 def test_relative_extrusion_gives_the_same_program():
     # Cura now slices with relative_extrusion: M83 and per-move E.
-    assert process_gcode(cura_like(extrusion="M83"), "left").lines == process_gcode(cura_like(), "left").lines
+    assert process_gcode(cura_like(extrusion="M83"), LEFT).lines == process_gcode(cura_like(), LEFT).lines
 
 
 MOVES = 100_000
@@ -117,7 +118,7 @@ def test_no_drift_over_a_100k_move_file():
         lines.append(f"G1 F200 X{x / 1000:.3f} Y{y / 1000:.3f} E{de / 100000:.5f}")
         targets.append((x, y, e_total))
 
-    result = process_gcode("\n".join(lines), "left")
+    result = process_gcode("\n".join(lines), LEFT)
     body = [line for line in result.lines if line.startswith("G1 F200")]
     assert len(body) == MOVES
 
@@ -173,10 +174,10 @@ async def printer(client):
     return printer
 
 
-async def upload(client, raw: str = RAW_SAMPLE, mode: str = "left") -> None:
+async def upload(client, raw: str = RAW_SAMPLE, nozzles: tuple[str, ...] = ("left",)) -> None:
     resp = await client.post(
         "/upload/gcode",
-        params={"syringe_mode": mode},
+        params={"nozzles": list(nozzles)},
         files={"file": ("print.gcode", raw.encode(), "text/plain")},
     )
     assert resp.status_code == 200, resp.text

@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import type { SliceOptions } from '../api'
-import type { SyringeMode } from '../types'
 import type { NordsonTip } from '../data/nordsonTips'
 
 // Numeric fields are kept as the raw input text; empty means "backend default".
@@ -10,19 +9,23 @@ export type PrintParameter = keyof SliceOptions
 type PrintParameters = Record<PrintParameter, string>
 
 interface PrintSettingsState extends PrintParameters {
-  syringeMode: SyringeMode
+  // Ids of the nozzles to print with (tapped on the syringe drawing); at
+  // least one. Kept to the printer profile's nozzles by stores/printer.ts.
+  selectedNozzles: string[]
   jogStep: number
   // Gauge of the picked Nordson tip; null once the nozzle diameter is typed by hand
   nordsonGauge: number | null
   selectNordsonTip: (tip: NordsonTip) => void
   setJogStep: (step: number) => void
-  setSyringeMode: (mode: SyringeMode) => void
+  setSelectedNozzles: (ids: string[]) => void
+  // Select or deselect one; the last selected one can't be deselected
+  toggleNozzle: (id: string) => void
   setParameter: (key: PrintParameter, value: string) => void
 }
 
 // Module-level, so settings survive screen navigation within a session.
 export const usePrintSettings = create<PrintSettingsState>()((set) => ({
-  syringeMode: 'left',
+  selectedNozzles: ['left'],
   nozzleDiameter: '',
   syringeDiameter: '',
   layerHeight: '',
@@ -35,7 +38,13 @@ export const usePrintSettings = create<PrintSettingsState>()((set) => ({
   selectNordsonTip: (tip) =>
     set({ nordsonGauge: tip.gauge, nozzleDiameter: String(tip.innerDiameterMm) }),
   setJogStep: (jogStep) => set({ jogStep }),
-  setSyringeMode: (syringeMode) => set({ syringeMode }),
+  setSelectedNozzles: (selectedNozzles) => set({ selectedNozzles }),
+  toggleNozzle: (id) =>
+    set(({ selectedNozzles }) => {
+      if (!selectedNozzles.includes(id)) return { selectedNozzles: [...selectedNozzles, id] }
+      if (selectedNozzles.length === 1) return {}
+      return { selectedNozzles: selectedNozzles.filter((n) => n !== id) }
+    }),
   setParameter: (key, value) =>
     set({
       [key]: value,

@@ -1,17 +1,31 @@
-import type { NozzleCalibration, SyringeMode } from '../../types'
+import type { NozzleCalibration, NozzleSpec } from '../../types'
 
-export type Nozzle = 'left' | 'right'
+export const NO_NOZZLES: NozzleCalibration = {}
 
-// The nozzles each syringe mode prints with; each must be zeroed. In both
-// mode the left nozzle comes first: it sets the start point (X/Y).
-export const MODE_NOZZLES: Record<SyringeMode, Nozzle[]> = {
-  left: ['left'],
-  right: ['right'],
-  both: ['left', 'right']
+// Every selected nozzle is zeroed
+export function isCalibratedFor(selected: NozzleSpec[], nozzles: NozzleCalibration): boolean {
+  return selected.length > 0 && selected.every((n) => nozzles[n.id])
 }
 
-export const NO_NOZZLES: NozzleCalibration = { left: false, right: false }
+export interface CalibrationStep {
+  nozzle: string
+  instruction: string
+  label: string
+}
 
-export function isCalibratedFor(mode: SyringeMode, nozzles: NozzleCalibration): boolean {
-  return MODE_NOZZLES[mode].every((nozzle) => nozzles[nozzle])
+// What to do before each zero. X/Y are set at the first (leftmost) selected
+// nozzle over the start point; each nozzle's height with that nozzle lowered
+// onto the bed, so each further nozzle only sets its height.
+export function calibrationSteps(selected: NozzleSpec[]): CalibrationStep[] {
+  const name = (n: NozzleSpec): string => n.name.toLowerCase()
+  return selected.map((n, i) => ({
+    nozzle: n.id,
+    instruction:
+      selected.length === 1
+        ? `Jog the ${name(n)} nozzle over the start point and lower it onto the bed (${n.height_axis})`
+        : i === 0
+          ? `Lower the ${name(n)} nozzle onto the bed (${n.height_axis}) over the start point`
+          : `Now lower the ${name(n)} nozzle onto the bed (${n.height_axis})`,
+    label: `Zero ${name(n)}`
+  }))
 }

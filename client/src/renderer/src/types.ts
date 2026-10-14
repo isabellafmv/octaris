@@ -4,7 +4,6 @@ import type { components } from './generated/api'
 
 type Schemas = components['schemas']
 
-export type SyringeMode = 'left' | 'right' | 'both'
 export type PrintStatus = Schemas['StatusEvent']['value']
 
 export type PortInfo = Schemas['PortInfo']
@@ -14,8 +13,13 @@ export type UploadResult = Schemas['UploadResult']
 export type GcodeEditResult = Schemas['GcodeEditResult']
 export type GcodeLineError = Schemas['GcodeLineError']
 export type Snapshot = Schemas['Snapshot']
-// Which nozzles are zeroed: X/Y plus the nozzle's own height (Z left, A right)
-export type NozzleCalibration = Schemas['NozzleCalibration']
+// Which of the profile's nozzles are zeroed (X/Y plus the nozzle's own height), by id
+export type NozzleCalibration = Record<string, boolean>
+// The printer: its nozzles left to right (each with its height and plunger
+// axis and its offset from the first), bed limits and build volume
+export type PrinterProfile = Schemas['PrinterProfile']
+export type NozzleSpec = Schemas['NozzleSpec']
+export type PrinterProfilesResponse = Schemas['PrinterProfilesResponse']
 export type CalibrateResponse = Schemas['CalibrateResponse']
 export type PrintSession = Schemas['PrintSession']
 export type SensorInfo = Pick<SensorReading, 'sensor' | 'name' | 'min' | 'max' | 'settable'>
@@ -46,6 +50,8 @@ export type PrinterEvent = Schemas['PrinterEvent']
 export type SettingsEvent = Schemas['SettingsEvent']
 export type SnapshotEvent = Schemas['SnapshotEvent']
 export type CalibrationEvent = Schemas['CalibrationEvent']
+// Another printer profile was selected
+export type PrinterProfileEvent = Schemas['PrinterProfileEvent']
 export type PrintEndEvent = Schemas['PrintEndEvent']
 export type PrintResumedEvent = Schemas['PrintResumedEvent']
 export type WsEvent = Schemas['WsEvent']

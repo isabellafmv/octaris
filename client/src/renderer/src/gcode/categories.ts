@@ -1,7 +1,4 @@
-import { EXTRUDE, NOZZLE_RIGHT, type ParsedGcode } from './parse'
-
-export type Category = 'left' | 'right' | 'travel'
-export const CATEGORIES: Category[] = ['left', 'right', 'travel']
+import { EXTRUDE, type ParsedGcode } from './parse'
 
 // The segments of one category, ordered by layer, so that the viewer can
 // show a range of layers by drawing a range of the buffer.
@@ -14,38 +11,53 @@ export interface CategorySegments {
 
 export interface GcodePreviewData {
   layerHeights: number[]
-  categories: Record<Category, CategorySegments>
+  // Each nozzle's extrusion, by its index in the printer profile
+  nozzles: CategorySegments[]
+  travel: CategorySegments
 }
 
-function categoryOf(kind: number, nozzle: number): Category {
-  if (kind !== EXTRUDE) return 'travel'
-  return nozzle === NOZZLE_RIGHT ? 'right' : 'left'
+// Category i < nozzleCount is nozzle i's extrusion; nozzleCount is travel
+function categoryOf(kind: number, nozzle: number, nozzleCount: number): number {
+  return kind === EXTRUDE ? nozzle : nozzleCount
 }
 
 // Counting sort by layer, keeping file order within a layer
 export function groupByCategory(parsed: ParsedGcode): GcodePreviewData {
   const layerCount = Math.max(parsed.layerHeights.length, 1)
-  const counts = {} as Record<Category, Uint32Array>
-  for (const c of CATEGORIES) counts[c] = new Uint32Array(layerCount + 1)
+  const categoryCount = parsed.nozzleCount + 1
+  const counts = Array.from({ length: categoryCount }, () => new Uint32Array(layerCount + 1))
+  const category = (i: number): number =>
+    categoryOf(parsed.kinds[i], parsed.nozzles[i], parsed.nozzleCount)
 
   for (let i = 0; i < parsed.segmentCount; i++) {
-    counts[categoryOf(parsed.kinds[i], parsed.nozzles[i])][parsed.layers[i] + 1]++
+    counts[category(i)][parsed.layers[i] + 1]++
   }
 
-  const categories = {} as Record<Category, CategorySegments>
-  const next = {} as Record<Category, Uint32Array>
-  for (const c of CATEGORIES) {
-    const layerStart = counts[c]
+  const categories: CategorySegments[] = []
+  const next: Uint32Array[] = []
+  for (const layerStart of counts) {
     for (let l = 1; l <= layerCount; l++) layerStart[l] += layerStart[l - 1]
-    categories[c] = { positions: new Float32Array(layerStart[layerCount] * 6), layerStart }
-    next[c] = layerStart.slice(0, layerCount)
+    categories.push({ positions: new Float32Array(layerStart[layerCount] * 6), layerStart })
+    next.push(layerStart.slice(0, layerCount))
   }
 
   for (let i = 0; i < parsed.segmentCount; i++) {
-    const c = categoryOf(parsed.kinds[i], parsed.nozzles[i])
+    const c = category(i)
     const slot = next[c][parsed.layers[i]]++
     categories[c].positions.set(parsed.positions.subarray(i * 6, i * 6 + 6), slot * 6)
   }
 
-  return { layerHeights: parsed.layerHeights, categories }
+  return {
+    layerHeights: parsed.layerHeights,
+    nozzles: categories.slice(0, parsed.nozzleCount),
+    travel: categories[parsed.nozzleCount]
+  }
+}
+
+// Every buffer of the preview data, to transfer from the worker
+export function buffers(data: GcodePreviewData): ArrayBuffer[] {
+  return [...data.nozzles, data.travel].flatMap((c) => [
+    c.positions.buffer as ArrayBuffer,
+    c.layerStart.buffer as ArrayBuffer
+  ])
 }

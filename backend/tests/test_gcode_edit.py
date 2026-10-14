@@ -58,10 +58,10 @@ async def test_saves_the_edit(client):
     assert body["filename"] == "sample.gcode"
     assert body["lines_total"] == len(loaded_lines())
     assert body["preview_lines"][4] == "G1 F300 X10 B-0.5 ; faster"
-    # Served back as saved, with the print's start point and mode kept
+    # Served back as saved, with the print's start point and nozzles kept
     assert (await client.get("/gcode/loaded")).text.split("\n")[4] == "G1 F300 X10 B-0.5 ; faster"
     loaded = session.loaded
-    assert loaded.edited and loaded.mode == before.mode and loaded.source == "gcode"
+    assert loaded.edited and loaded.nozzles == before.nozzles and loaded.source == "gcode"
     assert loaded.gcode.start_position == before.gcode.start_position
     # Re-simulated from the print's zero point
     assert len(loaded.gcode.state_after) == len(loaded.gcode.lines)
@@ -305,7 +305,7 @@ async def test_upload_during_the_check_wins(client, monkeypatch):
 
     def check_then_upload(old, lines):
         result = check(old, lines)
-        session.load_gcode("lab.gcode", LAB_FILE, "left")
+        session.load_gcode("lab.gcode", LAB_FILE, ["left"])
         return result
 
     monkeypatch.setattr(session, "_check_edit", check_then_upload)

@@ -56,10 +56,10 @@ async def all_log_entries(client) -> list[dict[str, Any]]:
     return resp.json()["entries"]
 
 
-async def upload_sample(client, mode: str = "left"):
+async def upload_sample(client, nozzles: tuple[str, ...] = ("left",)):
     resp = await client.post(
         "/upload/gcode",
-        params={"syringe_mode": mode},
+        params={"nozzles": list(nozzles)},
         files={"file": ("sample.gcode", RAW_SAMPLE.encode(), "text/plain")},
     )
     assert resp.status_code == 200, resp.text

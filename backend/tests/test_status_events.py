@@ -3,16 +3,17 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from backend.config import load_config
 from backend.database import init_db
 from backend.main import app, wire
+from tests.conftest import make_config
+from tests.nozzles import PRINTESS_1
 from tests.serial_fakes import mock_port
 
 
 def _setup_app_state():
     """Wire up app.state the same way the conftest `client` fixture does,
     without running the real lifespan (which would open a real db file)."""
-    wire(app, load_config(), init_db(Path(":memory:")))
+    wire(app, make_config(), init_db(Path(":memory:")))
 
 
 def receive_state_event(ws) -> dict:
@@ -48,6 +49,8 @@ def test_ws_sends_snapshot_right_after_connect():
         "stop_reason": None,
         "time_estimate_s": None,
         "settings": {"temperature_sensors": False},
+        "printer": PRINTESS_1.model_dump(),
+        "nozzles": ["left"],
     }
 
 
@@ -71,6 +74,8 @@ def test_status_endpoint_matches_snapshot_shape():
         "stop_reason": None,
         "time_estimate_s": None,
         "settings": {"temperature_sensors": False},
+        "printer": PRINTESS_1.model_dump(),
+        "nozzles": ["left"],
     }
 
 

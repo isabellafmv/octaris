@@ -19,6 +19,7 @@ from backend.gcode_processor import (
     trim_to_print,
     validate,
 )
+from tests.nozzles import BOTH, LEFT, RIGHT
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -77,18 +78,18 @@ def test_trim_drops_end_code():
 
 
 def test_substitute_extrusion_left():
-    """Left mode: E values should be negated for B axis."""
+    """The left nozzle: E values should be negated for B axis."""
     lines = ["G1 X10 E0.5 F200", "G1 X20 E1.0 F200"]
-    result = run(substitute_extrusion, lines, "left")
+    result = run(substitute_extrusion, lines, LEFT)
     assert result[0] == "G1 X10 B-0.5 F200"
     assert result[1] == "G1 X20 B-1 F200"
 
 
 def test_substitute_extrusion_right():
-    """Right mode: E values negated for the C axis. X is not shifted: right
-    mode is zeroed at the right nozzle."""
+    """The right nozzle: E values negated for the C axis. X is not shifted: a
+    right nozzle print is zeroed at the right nozzle."""
     lines = ["G1 X10 E0.5 F200"]
-    result = run(substitute_extrusion, lines, "right")
+    result = run(substitute_extrusion, lines, RIGHT)
     assert result[0] == "G1 X10 C-0.5 F200"
 
 
@@ -100,7 +101,7 @@ def test_substitute_extrusion_both():
         "T0",
         "G1 X30 E1.5",
     ]
-    result = run(substitute_extrusion, lines, "both")
+    result = run(substitute_extrusion, lines, BOTH)
     assert "B-0.5" in result[0]  # B is negated
     assert result[1] == "T1"
     assert "C-1" in result[2]  # C is also negated
@@ -111,7 +112,7 @@ def test_substitute_extrusion_both():
 def test_substitute_extrusion_negative_e():
     """Negative E values (retractions) become positive B (retract = opposite of extrude)."""
     lines = ["G1 X10 E-0.5 F200"]
-    result = run(substitute_extrusion, lines, "left")
+    result = run(substitute_extrusion, lines, LEFT)
     assert result[0] == "G1 X10 B0.5 F200"
 
 
@@ -134,7 +135,7 @@ def test_clamp_feed_rates_no_change():
 
 
 def test_build_preamble_left():
-    preamble = build_preamble("left")
+    preamble = build_preamble(LEFT)
     non_comment = [line for line in preamble if not line.strip().startswith(";")]
     assert non_comment[0] == "G91"
     assert "G90" not in preamble
@@ -144,12 +145,12 @@ def test_build_preamble_left():
 
 
 def test_build_preamble_right():
-    preamble = build_preamble("right")
+    preamble = build_preamble(RIGHT)
     assert "C-0.2" in "".join(preamble)  # C pressurizes in negative direction
 
 
 def test_build_footer_left():
-    footer = build_footer("left")
+    footer = build_footer(LEFT)
     joined = "".join(footer)
     assert "B0.2" in joined  # depressurize (positive = retract for B)
     assert "Z5" in joined  # clearance
@@ -157,10 +158,10 @@ def test_build_footer_left():
 
 
 def test_build_footer_right():
-    footer = build_footer("right")
+    footer = build_footer(RIGHT)
     joined = "".join(footer)
     assert "C0.2" in joined  # depressurize (positive = retract for C)
-    assert "A5" in joined  # right mode uses A axis for Z
+    assert "A5" in joined  # the right nozzle uses A for Z
 
 
 def test_validate_passes():
@@ -211,7 +212,7 @@ def test_insert_layer_depressurize_skips_first():
         "G0 F300 X10 Y10 Z0.3",
         "G1 F200 X20 Y10 B0.5",
     ]
-    result = run(insert_layer_depressurize, lines, "left")
+    result = run(insert_layer_depressurize, lines, LEFT)
     assert result[0] == "G0 F300 X10 Y10 Z0.3"
     assert "depressurize" not in " ".join(result)
 
@@ -224,7 +225,7 @@ def test_insert_layer_depressurize_wraps_second():
         "G0 F300 X10 Y10 Z0.5",
         "G1 F200 X20 Y10 B-1.0",
     ]
-    result = run(insert_layer_depressurize, lines, "left")
+    result = run(insert_layer_depressurize, lines, LEFT)
     joined = "\n".join(result)
     assert "depressurize" in joined
     assert "repressurize" in joined
@@ -236,14 +237,14 @@ def test_insert_layer_depressurize_wraps_second():
 
 
 def test_insert_layer_depressurize_right_mode():
-    """Right mode uses A axis for Z — should detect G0 with A."""
+    """The right nozzle uses A for Z — should detect G0 with A."""
     lines = [
         "G0 F300 X10 Y10 A0.3",
         "G1 F200 X20 Y10 C-0.5",
         "G0 F300 X10 Y10 A0.5",
         "G1 F200 X20 Y10 C-1.0",
     ]
-    result = run(insert_layer_depressurize, lines, "right")
+    result = run(insert_layer_depressurize, lines, RIGHT)
     joined = "\n".join(result)
     assert "C0.2" in joined  # depressurize (retract = positive for C)
     assert "C-0.2" in joined  # repressurize (push = negative for C)
@@ -251,7 +252,7 @@ def test_insert_layer_depressurize_right_mode():
 
 def test_process_gcode_integration():
     raw = (FIXTURES / "raw_sample.gcode").read_text()
-    result = process_gcode(raw, "left")
+    result = process_gcode(raw, LEFT)
 
     assert result.time_estimate_s == 847
 
@@ -286,7 +287,7 @@ def test_process_gcode_integration():
 
 def test_process_gcode_right():
     raw = (FIXTURES / "raw_sample.gcode").read_text()
-    result = process_gcode(raw, "right")
+    result = process_gcode(raw, RIGHT)
 
     # Should use C axis for extrusion (negated)
     found_c = False
@@ -308,7 +309,7 @@ def test_insert_travel_retract_wraps_g0():
         "G0 X50 Y50 F300",  # travel move — should trigger retract
         "G1 X60 Y60 B-1.0 F200",
     ]
-    result = run(insert_travel_retract, lines, "left")
+    result = run(insert_travel_retract, lines, LEFT)
     joined = "\n".join(result)
     # Should have retract before travel and prime after
     assert "; retract" in joined
@@ -325,7 +326,7 @@ def test_insert_travel_retract_skips_layer_change():
         "G0 X50 Y50 Z0.5 F300",  # layer change — skip
         "G1 X60 Y60 B-1.0 F200",
     ]
-    result = run(insert_travel_retract, lines, "left")
+    result = run(insert_travel_retract, lines, LEFT)
     joined = "\n".join(result)
     assert "; retract" not in joined
     assert "; prime" not in joined
@@ -339,7 +340,7 @@ def test_insert_travel_retract_consecutive_g0():
         "G0 X50 Y50 F300",  # second travel — already retracted
         "G1 X60 Y60 B-1.0 F200",
     ]
-    result = run(insert_travel_retract, lines, "left")
+    result = run(insert_travel_retract, lines, LEFT)
     assert result.count("G1 B0.2 F400 ; retract B") == 1
     assert result.count("G1 B-0.2 F400 ; prime B") == 1
 
@@ -347,7 +348,7 @@ def test_insert_travel_retract_consecutive_g0():
 def test_substitute_both_mirror():
     """Single STL in 'both' mode: E values duplicated to B and C."""
     lines = ["G1 X10 E0.5 F200", "G0 X20 Y20 F300"]
-    result = run(substitute_extrusion, lines, "both")
+    result = run(substitute_extrusion, lines, BOTH)
     assert "B-0.5" in result[0]
     assert "C-0.5" in result[0]
     # G0 travel has no E — should pass through unchanged
@@ -362,20 +363,20 @@ def test_substitute_both_multi():
         "T1",
         "G1 X10 E0.3 F200",
     ]
-    result = run(substitute_extrusion, lines, "both")
+    result = run(substitute_extrusion, lines, BOTH)
     # T0 section → B axis, no X offset
     assert "B-0.5" in result[1]
     assert "X10" in result[1]
-    # T1 section → C axis, X shifted by NOZZLE_OFFSET_X
+    # T1 section → C axis, X shifted by the right nozzle's offset_x
     assert "C-0.3" in result[3]
     assert "X40" in result[3]  # 10 + 30 mm offset
 
 
 def test_build_preamble_both():
-    """Both mode should pressurize B and C."""
+    """Two nozzles should pressurize B and C."""
     from backend.gcode_processor import build_preamble
 
-    lines = build_preamble("both")
+    lines = build_preamble(BOTH)
     joined = "\n".join(lines)
     assert "B-" in joined  # pressurize B (negative direction)
     assert "C-" in joined  # pressurize C (negative direction)
@@ -384,10 +385,10 @@ def test_build_preamble_both():
 
 
 def test_build_footer_both():
-    """Both mode should depressurize B and C."""
+    """Two nozzles should depressurize B and C."""
     from backend.gcode_processor import build_footer
 
-    lines = build_footer("both")
+    lines = build_footer(BOTH)
     joined = "\n".join(lines)
     # Depressurize is opposite of extrude: positive for B/C
     assert "depressurize B" in joined
@@ -395,13 +396,13 @@ def test_build_footer_both():
 
 
 def test_insert_travel_retract_both():
-    """Both mode should retract/prime both B and C."""
+    """Two nozzles should retract/prime both B and C."""
     lines = [
         "G1 X10 B-0.5 C-0.5 F200",
         "G0 X50 F300",
         "G1 X60 B-1.0 C-1.0 F200",
     ]
-    result = run(insert_travel_retract, lines, "both")
+    result = run(insert_travel_retract, lines, BOTH)
     joined = "\n".join(result)
     assert "; retract B" in joined
     assert "; retract C" in joined
@@ -411,10 +412,10 @@ def test_insert_travel_retract_both():
 
 def test_numbers_without_leading_zero():
     """Cura writes e.g. "X-.5" and "E.01234"; both must be converted."""
-    result = run(substitute_extrusion, ["G1 X-.5 Y1 E.01234 F200"], "right")
+    result = run(substitute_extrusion, ["G1 X-.5 Y1 E.01234 F200"], RIGHT)
     assert result == ["G1 X-.5 Y1 C-0.01234 F200"]
     # A shifted X (the right nozzle's section of a two-material file) is parsed too
-    result = run(substitute_extrusion, ["T1", "G1 X-.5 Y1 E.01234 F200"], "both")
+    result = run(substitute_extrusion, ["T1", "G1 X-.5 Y1 E.01234 F200"], BOTH)
     assert result[-1] == "G1 X29.5 Y1 C-0.01234 F200"
     with pytest.raises(GcodeValidationError, match="Unsubstituted E"):
         validate(parse(["G91", "G1 X1 E.5"]))
@@ -433,7 +434,7 @@ def test_trim_drops_any_end_code_after_the_last_move():
 
 def test_unchanged_lines_are_written_back_verbatim():
     lines = ["G0 F300 X1  Y1 Z0.20 ; start", "G1 F200 X2 Y1 B-.5"]
-    assert run(substitute_extrusion, lines, "left") == lines
+    assert run(substitute_extrusion, lines, LEFT) == lines
 
 
 def test_scale_flow():
@@ -538,11 +539,11 @@ def test_relative_extrusion_file_converts_like_absolute_one():
             line, previous = f"{head} E{e_abs - previous:.5f}", e_abs
         relative_lines.append(line)
 
-    assert process_gcode("\n".join(relative_lines), "left").lines == process_gcode(absolute, "left").lines
+    assert process_gcode("\n".join(relative_lines), LEFT).lines == process_gcode(absolute, LEFT).lines
 
 
 def test_right_nozzle_prints_from_its_own_zero():
-    result = process_gcode((FIXTURES / "raw_sample.gcode").read_text(), "right")
+    result = process_gcode((FIXTURES / "raw_sample.gcode").read_text(), RIGHT)
     first_move = next(line for line in result.lines if line.startswith("G0"))
     # X10 from the zero point (set at the right nozzle, no offset), on the
     # right nozzle's height motor
@@ -559,7 +560,7 @@ G1 X5 B-0.5 F200"""
 
 
 def test_lab_relative_file_is_kept_as_it_is():
-    result = process_gcode(LAB_FILE, "right")
+    result = process_gcode(LAB_FILE, RIGHT)
     assert result.lines == LAB_FILE.splitlines()
     assert result.start_position is None  # starts wherever the head is
     assert result.extrusion_axes == ("B",)
@@ -575,4 +576,4 @@ def test_lab_relative_file_is_kept_as_it_is():
     ],
 )
 def test_other_files_are_converted(raw):
-    assert process_gcode(raw, "left").lines != raw.splitlines()
+    assert process_gcode(raw, LEFT).lines != raw.splitlines()

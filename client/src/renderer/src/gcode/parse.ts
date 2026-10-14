@@ -1,12 +1,30 @@
 // G-code → line segments for the 3D preview. Pure TypeScript, no DOM, so it
 // runs in a Web Worker (parse.worker.ts) and under vitest.
 //
-// Understands G0/G1 moves on X Y Z A B C (and E, for raw slicer files),
-// G90/G91, G92 and M82/M83. Everything else is ignored.
+// Understands G0/G1 moves on X, Y and the nozzles' height and plunger axes
+// (and E, for raw slicer files), G90/G91, G92 and M82/M83. Everything else
+// is ignored.
 
-export const NOZZLE_LEFT = 0
-export const NOZZLE_RIGHT = 1
-export type Nozzle = typeof NOZZLE_LEFT | typeof NOZZLE_RIGHT
+import type { PrinterProfile } from '../types'
+
+// A nozzle as the preview needs it, from the printer profile. Segments name
+// their nozzle by its index in the profile's list (left to right).
+export interface PreviewNozzle {
+  heightAxis: string
+  plungerAxis: string
+  // mm from the profile's first (leftmost) nozzle
+  offsetX: number
+  offsetY: number
+}
+
+export function previewNozzles(profile: PrinterProfile): PreviewNozzle[] {
+  return profile.nozzles.map((n) => ({
+    heightAxis: n.height_axis,
+    plungerAxis: n.plunger_axis,
+    offsetX: n.offset_x ?? 0,
+    offsetY: n.offset_y ?? 0
+  }))
+}
 
 export const TRAVEL = 0
 export const EXTRUDE = 1
@@ -14,6 +32,8 @@ export type SegmentKind = typeof TRAVEL | typeof EXTRUDE
 
 export interface ParsedGcode {
   segmentCount: number
+  // The profile's nozzle count; nozzles[i] is below it
+  nozzleCount: number
   // [x0, y0, z0, x1, y1, z1] per segment
   positions: Float32Array
   kinds: Uint8Array
@@ -24,21 +44,6 @@ export interface ParsedGcode {
   layerHeights: number[]
 }
 
-// Plungers push in the negative direction (see backend gcode_processor.py);
-// E in raw slicer files extrudes in the positive one.
-const PLUNGERS = [
-  { axis: 'B', nozzle: NOZZLE_LEFT, sign: -1 },
-  { axis: 'C', nozzle: NOZZLE_RIGHT, sign: -1 },
-  { axis: 'E', nozzle: NOZZLE_LEFT, sign: 1 }
-] as const
-
-// How far the right nozzle sits from the left one in +X, in mm
-// (NOZZLE_OFFSET_X in backend/backend/gcode_processor.py). When one move
-// drives both plungers, both nozzles print the same path side by side, so
-// the right nozzle's copy is drawn this far over instead of on top of the
-// left one.
-export const RIGHT_NOZZLE_OFFSET_X = 30
-
 // Smaller plunger or position changes are float noise
 const EPSILON = 1e-6
 // Heights closer than this are the same layer
@@ -46,8 +51,7 @@ const LAYER_RESOLUTION = 1e-3
 
 const PROGRESS_EVERY = 20_000
 
-type Axis = 'X' | 'Y' | 'Z' | 'A' | 'B' | 'C' | 'E'
-type Position = Record<Axis, number>
+type Position = Record<string, number>
 
 // Growable typed array, so a large file isn't parsed into JS arrays of numbers
 class Buffer<T extends Float32Array | Uint8Array | Uint32Array> {
@@ -108,35 +112,50 @@ function parseWords(line: string, letters: string[], values: number[]): number {
   return count
 }
 
-export function parseGcode(text: string, onProgress?: (fraction: number) => void): ParsedGcode {
+// `nozzles`: the printer profile's (see previewNozzles).
+export function parseGcode(
+  text: string,
+  nozzles: PreviewNozzle[],
+  onProgress?: (fraction: number) => void
+): ParsedGcode {
   const positions = new Buffer((n) => new Float32Array(n))
   const kinds = new Buffer((n) => new Uint8Array(n))
-  const nozzles = new Buffer((n) => new Uint8Array(n))
+  const segmentNozzles = new Buffer((n) => new Uint8Array(n))
   // Height of each segment, turned into a layer index at the end
   const heights = new Buffer((n) => new Float32Array(n))
 
-  const pos: Position = { X: 0, Y: 0, Z: 0, A: 0, B: 0, C: 0, E: 0 }
+  const pos: Position = { X: 0, Y: 0, Z: 0, E: 0 }
+  for (const n of nozzles) pos[n.heightAxis] = pos[n.plungerAxis] = 0
+  // Plungers push in the negative direction (see backend gcode_processor.py);
+  // E in raw slicer files extrudes in the positive one, from the first nozzle.
+  const plungers = [
+    ...nozzles.map((n, i) => ({ axis: n.plungerAxis, nozzle: i, sign: -1 })),
+    { axis: 'E', nozzle: 0, sign: 1 }
+  ]
   let relative = false // G91
   let relativeE = false // M83, or G91
-  // The right nozzle's height is A, but files that never move A (the
-  // backend's "right" mode today) change layers on Z, so fall back to it.
-  let usesA = false
+  // A nozzle's height is its own axis, but a file that never moves that
+  // axis (an older file for one nozzle) changes layers on Z: fall back to it.
+  const movedAxes = new Set<string>(['Z'])
   // Travel belongs to the nozzle that last extruded
-  let active: Nozzle = NOZZLE_LEFT
+  let active = 0
 
   const letters: string[] = []
   const values: number[] = []
-  const extruding: Nozzle[] = []
+  const extruding: number[] = []
 
-  const height = (nozzle: Nozzle, p: Position): number =>
-    nozzle === NOZZLE_RIGHT && usesA ? p.A : p.Z
+  const height = (nozzle: number, p: Position): number => {
+    const axis = nozzles[nozzle]?.heightAxis ?? 'Z'
+    return movedAxes.has(axis) ? p[axis] : p.Z
+  }
 
   const addSegment = (
     from: Position,
     to: Position,
     kind: SegmentKind,
-    nozzle: Nozzle,
-    dx = 0
+    nozzle: number,
+    dx = 0,
+    dy = 0
   ): void => {
     const z0 = height(nozzle, from)
     const z1 = height(nozzle, to)
@@ -148,13 +167,13 @@ export function parseGcode(text: string, onProgress?: (fraction: number) => void
       return // a plunger-only move
     }
     positions.push(from.X + dx)
-    positions.push(from.Y)
+    positions.push(from.Y + dy)
     positions.push(z0)
     positions.push(to.X + dx)
-    positions.push(to.Y)
+    positions.push(to.Y + dy)
     positions.push(z1)
     kinds.push(kind)
-    nozzles.push(nozzle)
+    segmentNozzles.push(nozzle)
     heights.push(z1)
   }
 
@@ -187,35 +206,41 @@ export function parseGcode(text: string, onProgress?: (fraction: number) => void
       relativeE = true
     } else if (code === 92) {
       if (count === 1) {
-        for (const axis of Object.keys(pos) as Axis[]) pos[axis] = 0
+        for (const axis of Object.keys(pos)) pos[axis] = 0
       }
       for (let k = 1; k < count; k++) {
-        const axis = letters[k] as Axis
+        const axis = letters[k]
         if (axis in pos && !Number.isNaN(values[k])) pos[axis] = values[k]
       }
     } else if (code === 0 || code === 1) {
       const from = { ...pos }
       for (let k = 1; k < count; k++) {
-        const axis = letters[k] as Axis
+        const axis = letters[k]
         const value = values[k]
         if (!(axis in pos) || Number.isNaN(value)) continue
         const isRelative = axis === 'E' ? relativeE : relative
         pos[axis] = isRelative ? pos[axis] + value : value
-        if (axis === 'A') usesA = true
+        movedAxes.add(axis)
       }
 
       extruding.length = 0
-      for (const { axis, nozzle, sign } of PLUNGERS) {
+      for (const { axis, nozzle, sign } of plungers) {
         if ((pos[axis] - from[axis]) * sign > EPSILON && !extruding.includes(nozzle)) {
           extruding.push(nozzle)
         }
       }
+      extruding.sort((a, b) => a - b)
       if (extruding.length > 1) {
-        // Both nozzles at once: the right one prints its copy beside the
-        // left; travel is drawn as the left nozzle's (the head's) path
-        active = NOZZLE_LEFT
-        addSegment(from, pos, EXTRUDE, NOZZLE_LEFT)
-        addSegment(from, pos, EXTRUDE, NOZZLE_RIGHT, RIGHT_NOZZLE_OFFSET_X)
+        // Several nozzles at once: X/Y are the leftmost one's, and each
+        // other prints its copy beside it, as far over as it sits on the
+        // head. Travel is drawn as the leftmost nozzle's (the head's) path.
+        const [first] = extruding
+        active = first
+        for (const n of extruding) {
+          const dx = nozzles[n].offsetX - nozzles[first].offsetX
+          const dy = nozzles[n].offsetY - nozzles[first].offsetY
+          addSegment(from, pos, EXTRUDE, n, dx, dy)
+        }
       } else if (extruding.length > 0) {
         active = extruding[0]
         addSegment(from, pos, EXTRUDE, active)
@@ -226,13 +251,20 @@ export function parseGcode(text: string, onProgress?: (fraction: number) => void
   }
   onProgress?.(1)
 
-  return assignLayers(positions.trimmed(), kinds.trimmed(), nozzles.trimmed(), heights.trimmed())
+  return assignLayers(
+    Math.max(nozzles.length, 1),
+    positions.trimmed(),
+    kinds.trimmed(),
+    segmentNozzles.trimmed(),
+    heights.trimmed()
+  )
 }
 
 // Layers are the distinct heights extrusion happens at. A travel move gets
 // the highest layer at or below its height, so the move up to the next
 // layer belongs to that next layer, and a final lift to the last one.
 function assignLayers(
+  nozzleCount: number,
   positions: Float32Array,
   kinds: Uint8Array,
   nozzles: Uint8Array,
@@ -256,7 +288,7 @@ function assignLayers(
       layers[i] = index.get(k) ?? highestAtOrBelow(sorted, k)
     }
   }
-  return { segmentCount, positions, kinds, nozzles, layers, layerHeights }
+  return { segmentCount, nozzleCount, positions, kinds, nozzles, layers, layerHeights }
 }
 
 function highestAtOrBelow(sorted: number[], k: number): number {

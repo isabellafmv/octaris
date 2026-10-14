@@ -1,8 +1,6 @@
-from typing import cast
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
-
-from backend.gcode_processor import GcodeValidationError, ProcessedGcode, SyringeMode
+from backend.gcode_processor import GcodeValidationError, ProcessedGcode
 from backend.limits import LimitError
 from backend.routers import get_session
 from backend.schemas import UploadResult
@@ -14,7 +12,9 @@ router = APIRouter()
 ACCEPTED_MODEL_EXTENSIONS = (".stl", ".3mf")
 # Plain text G-code (.txt) is read exactly like .gcode
 ACCEPTED_GCODE_EXTENSIONS = (".gcode", ".gco", ".txt")
-SYRINGE_MODES = ("left", "right", "both")
+# The nozzles to print with, by id (repeat the parameter for several:
+# ?nozzles=left&nozzles=right). Default: the printer profile's first.
+NozzlesParam = Query(None, description="Ids of the nozzles to print with; default: the profile's first")
 
 
 def _check_positive(**values: float | None) -> None:
@@ -38,7 +38,7 @@ def _upload_result(filename: str, gcode: ProcessedGcode) -> UploadResult:
 @router.post("/upload", response_model=UploadResult)
 async def upload_model(
     file: UploadFile,
-    syringe_mode: str = "left",
+    nozzles: list[str] | None = NozzlesParam,
     nozzle_diameter: float | None = None,
     syringe_diameter: float | None = None,
     layer_height: float | None = None,
@@ -50,8 +50,7 @@ async def upload_model(
 ):
     if not file.filename or not file.filename.lower().endswith(ACCEPTED_MODEL_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Only .stl and .3mf files are accepted")
-    if syringe_mode not in SYRINGE_MODES:
-        raise HTTPException(status_code=400, detail="Invalid syringe_mode")
+    ids = session.select_nozzles(nozzles)
     settings: PrintSettings = {
         "nozzle_diameter": nozzle_diameter,
         "syringe_diameter": syringe_diameter,
@@ -73,9 +72,7 @@ async def upload_model(
         )
 
     try:
-        gcode = await session.load_model(
-            file.filename, await file.read(), cast(SyringeMode, syringe_mode), settings
-        )
+        gcode = await session.load_model(file.filename, await file.read(), ids, settings)
     except (SlicingError, GcodeValidationError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except LimitError as exc:
@@ -86,19 +83,18 @@ async def upload_model(
 @router.post("/upload/gcode", response_model=UploadResult)
 async def upload_gcode(
     file: UploadFile,
-    syringe_mode: str = "left",
+    nozzles: list[str] | None = NozzlesParam,
     # False: sent exactly as uploaded, only checked (see check_as_uploaded)
     needs_changes: bool = True,
     session: PrinterSession = Depends(get_session),
 ):
     if not file.filename or not file.filename.lower().endswith(ACCEPTED_GCODE_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Only .gcode and .txt files are accepted")
-    if syringe_mode not in SYRINGE_MODES:
-        raise HTTPException(status_code=400, detail="Invalid syringe_mode")
+    ids = session.select_nozzles(nozzles)
 
     raw = (await file.read()).decode("utf-8", errors="replace")
     try:
-        gcode = session.load_gcode(file.filename, raw, cast(SyringeMode, syringe_mode), needs_changes)
+        gcode = session.load_gcode(file.filename, raw, ids, needs_changes)
     except (GcodeValidationError, LimitError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _upload_result(file.filename, gcode)

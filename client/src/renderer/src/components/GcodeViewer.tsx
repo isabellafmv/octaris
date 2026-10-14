@@ -6,7 +6,9 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js'
 import { api } from '../api'
 import type { CategorySegments, GcodePreviewData } from '../gcode/categories'
-import type { WorkerMessage } from '../gcode/parse.worker'
+import { previewNozzles } from '../gcode/parse'
+import type { WorkerMessage, WorkerRequest } from '../gcode/parse.worker'
+import { usePrinter } from '../stores/printer'
 import { themeColor } from '../themeColor'
 
 // TODO: take the bed from the printer profile once there are profiles
@@ -17,12 +19,9 @@ const BED_GRID_MM = 10
 const EXTRUSION_WIDTH_PX = 2
 const TRAVEL_OPACITY = 0.45
 
-type Nozzle = 'left' | 'right'
-const NOZZLES: Nozzle[] = ['left', 'right']
-const NOZZLE_LABEL: Record<Nozzle, { name: string; swatch: string }> = {
-  left: { name: 'Left nozzle', swatch: 'bg-nozzle-left' },
-  right: { name: 'Right nozzle', swatch: 'bg-nozzle-right' }
-}
+// Each nozzle's color, by its index in the printer profile (main.css)
+const NOZZLE_COLORS = 4
+const nozzleColor = (index: number): string => `--color-nozzle-${(index % NOZZLE_COLORS) + 1}`
 
 interface View {
   layer: number
@@ -47,7 +46,7 @@ class GcodeScene {
   private readonly controls: OrbitControls
   private readonly resizeObserver: ResizeObserver
   private readonly toolpath = new THREE.Group()
-  private extrusion: Partial<Record<Nozzle, Extrusion>> = {}
+  private extrusion: Extrusion[] = []
   private travel: { segments: CategorySegments; lines: THREE.LineSegments } | null = null
   private frame = 0
 
@@ -88,7 +87,7 @@ class GcodeScene {
     this.camera.aspect = width / height
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(width, height)
-    for (const e of Object.values(this.extrusion)) e.material.resolution.set(width, height)
+    for (const e of this.extrusion) e.material.resolution.set(width, height)
     this.requestRender()
   }
 
@@ -96,23 +95,22 @@ class GcodeScene {
     this.clearToolpath()
     const bounds = new THREE.Box3()
 
-    for (const nozzle of NOZZLES) {
-      const segments = data.categories[nozzle]
-      if (segments.positions.length === 0) continue
+    data.nozzles.forEach((segments, nozzle) => {
+      if (segments.positions.length === 0) return
       const full = new LineSegmentsGeometry()
       full.setPositions(segments.positions)
       const material = new LineMaterial({
-        color: themeColor(`--color-nozzle-${nozzle}`),
+        color: themeColor(nozzleColor(nozzle)),
         linewidth: EXTRUSION_WIDTH_PX
       })
       material.resolution.set(this.mount.clientWidth || 1, this.mount.clientHeight || 1)
       const mesh = new LineSegments2(full, material)
       this.toolpath.add(mesh)
-      this.extrusion[nozzle] = { segments, mesh, full, material }
+      this.extrusion.push({ segments, mesh, full, material })
       bounds.union(full.boundingBox!)
-    }
+    })
 
-    const travel = data.categories.travel
+    const travel = data.travel
     if (travel.positions.length > 0) {
       const geometry = new THREE.BufferGeometry()
       geometry.setAttribute('position', new THREE.BufferAttribute(travel.positions, 3))
@@ -137,7 +135,7 @@ class GcodeScene {
   }
 
   setView({ layer, onlyCurrent, showTravel }: View): void {
-    for (const e of Object.values(this.extrusion)) {
+    for (const e of this.extrusion) {
       const { layerStart, positions } = e.segments
       const end = layerStart[layer + 1]
       if (onlyCurrent) {
@@ -185,7 +183,7 @@ class GcodeScene {
   }
 
   private clearToolpath(): void {
-    for (const e of Object.values(this.extrusion)) {
+    for (const e of this.extrusion) {
       if (e.mesh.geometry !== e.full) e.mesh.geometry.dispose()
       e.full.dispose()
       e.material.dispose()
@@ -195,7 +193,7 @@ class GcodeScene {
       ;(this.travel.lines.material as THREE.Material).dispose()
     }
     this.toolpath.clear()
-    this.extrusion = {}
+    this.extrusion = []
     this.travel = null
   }
 
@@ -253,8 +251,9 @@ type Phase =
   | { kind: 'ready'; data: GcodePreviewData }
   | { kind: 'error'; message: string }
 
-// Fetches the loaded print's G-code and parses it in a worker. Mounted once
-// per upload (the preview unmounts while a new file is processed).
+// Fetches the loaded print's G-code and parses it in a worker, with the
+// printer profile's nozzles. Mounted once per upload (the preview unmounts
+// while a new file is processed).
 function useParsedGcode(): Phase {
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' })
 
@@ -278,7 +277,9 @@ function useParsedGcode(): Phase {
           if (message.type !== 'progress') worker?.terminate()
         }
         worker.onerror = (event) => setPhase({ kind: 'error', message: event.message })
-        worker.postMessage(text)
+        const profile = usePrinter.getState().profile
+        const request: WorkerRequest = { text, nozzles: profile ? previewNozzles(profile) : [] }
+        worker.postMessage(request)
       })
       .catch((e: unknown) => {
         if (abort.signal.aborted) return
@@ -346,7 +347,13 @@ export function GcodeViewer(): React.JSX.Element {
     if (data) sceneRef.current?.setView({ layer, onlyCurrent, showTravel })
   }, [data, layer, onlyCurrent, showTravel])
 
-  const nozzles = data ? NOZZLES.filter((n) => data.categories[n].positions.length > 0) : []
+  const profile = usePrinter((s) => s.profile)
+  // The nozzles that print, with their names, for the legend
+  const nozzles = (data?.nozzles ?? []).flatMap((segments, index) =>
+    segments.positions.length > 0
+      ? [{ index, name: profile?.nozzles[index]?.name ?? `Nozzle ${index + 1}` }]
+      : []
+  )
 
   return (
     <div className="flex flex-col bg-surface">
@@ -378,9 +385,12 @@ export function GcodeViewer(): React.JSX.Element {
         {nozzles.length > 0 && (
           <div className="absolute top-2 left-3 flex gap-3 text-[11px] text-text-muted pointer-events-none">
             {nozzles.map((n) => (
-              <span key={n} className="flex items-center gap-1.5">
-                <span className={`w-2.5 h-0.5 rounded-full ${NOZZLE_LABEL[n].swatch}`} />
-                {NOZZLE_LABEL[n].name}
+              <span key={n.index} className="flex items-center gap-1.5">
+                <span
+                  className="w-2.5 h-0.5 rounded-full"
+                  style={{ background: `var(${nozzleColor(n.index)})` }}
+                />
+                {n.name} nozzle
               </span>
             ))}
           </div>

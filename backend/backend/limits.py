@@ -10,10 +10,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 
 from backend.checkpoint import fmt
-from backend.config import AxisRange, BedLimits
 from backend.gcode_processor import AXES, MachineState, parse_words, step
+from backend.printer import HEIGHT_AXES, PLUNGER_AXES, AxisRange, BedLimits
 
-PLUNGER_AXES = ("B", "C")
+__all__ = ["PLUNGER_AXES"]
 # Warn when a plunger has less than this fraction of its travel left
 LOW_TRAVEL_FRACTION = 0.10
 
@@ -23,8 +23,8 @@ class LimitError(Exception):
 
 
 def _ranges(bed: BedLimits) -> dict[str, AxisRange]:
-    """A is the right nozzle's height motor: the same range as Z."""
-    return {"X": bed.x, "Y": bed.y, "Z": bed.z, "A": bed.z}
+    """Every nozzle's height motor has the z range."""
+    return {"X": bed.x, "Y": bed.y, **dict.fromkeys(HEIGHT_AXES, bed.z)}
 
 
 def _describe(axis: str, value: float, allowed: AxisRange) -> str:
@@ -62,9 +62,9 @@ def check_path(
 ) -> None:
     """Raise LimitError if any move in `lines` ends outside the bed.
 
-    X, Y and `height_axes` are checked: the height motors of the nozzle(s)
-    the print uses (Z left, A right). The other nozzle's height isn't zeroed
-    for this print, so its coordinate means nothing.
+    X, Y and `height_axes` are checked: the height motors of the nozzles
+    the print uses. The other nozzles' heights aren't zeroed for this
+    print, so their coordinates mean nothing.
 
     Every move is a straight line and the bed is a box, so a path stays on
     the bed if all its end points do. An axis whose position is unknown (a
