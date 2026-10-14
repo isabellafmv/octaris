@@ -155,7 +155,7 @@ function ProfileSelect({
             {p.name}
           </option>
         ))}
-        {!hasCustom && <option value={CUSTOM_PROFILE_ID}>Custom (set up…)</option>}
+        {!hasCustom && <option value={CUSTOM_PROFILE_ID}>Custom</option>}
       </select>
     </label>
   )
