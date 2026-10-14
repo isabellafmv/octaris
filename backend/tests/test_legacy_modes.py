@@ -157,7 +157,8 @@ async def test_slicer_matches_the_old_mode(tmp_path, monkeypatch, key):
     )
 
     [cmd] = calls
-    args = [Path(a).name if "/" in a else a for a in cmd]
+    # Paths reduced to their file name; Windows writes them with backslashes
+    args = [Path(a).name if "/" in a or "\\" in a else a for a in cmd]
     args[args.index("-o") + 1] = "<out>"
     # The machine size now comes from the profile: the 60 mm the old code
     # left to octaris_settings.json
