@@ -61,7 +61,12 @@ export function SyringeSelectionSection({
         editing ? 'justify-start pt-12 overflow-y-auto' : 'justify-center'
       }`}
     >
-      <ProfileSelect profile={profile} disabled={printing || editing} onError={onError} />
+      <ProfileSelect
+        profile={profile}
+        disabled={printing || editing}
+        onNewCustom={() => setEditing(true)}
+        onError={onError}
+      />
       {profile && !editing && (
         <button
           onClick={() => setEditing(true)}
@@ -99,10 +104,13 @@ export function SyringeSelectionSection({
 function ProfileSelect({
   profile,
   disabled,
+  onNewCustom,
   onError
 }: {
   profile: PrinterProfile | null
   disabled: boolean
+  // Picking "Custom" before one has been saved opens the editor; saving there creates it
+  onNewCustom: () => void
   onError: (msg: string) => void
 }): React.JSX.Element {
   const profiles = usePrinter((s) => s.profiles)
@@ -117,8 +125,14 @@ function ProfileSelect({
   }, [setProfiles])
 
   const options = profiles.length > 0 ? profiles : profile ? [profile] : []
+  // Custom is always on the list, so a new printer can be set up from here
+  const hasCustom = options.some((p) => p.id === CUSTOM_PROFILE_ID)
 
   const select = async (id: string): Promise<void> => {
+    if (id === CUSTOM_PROFILE_ID && !hasCustom) {
+      onNewCustom()
+      return
+    }
     try {
       // The printer_profile event updates the store
       await api.selectPrinterProfile(id)
@@ -133,7 +147,7 @@ function ProfileSelect({
       <select
         value={profile?.id ?? ''}
         onChange={(e) => select(e.target.value)}
-        disabled={disabled || options.length < 2}
+        disabled={disabled}
         className="text-xs font-semibold normal-case tracking-normal rounded-lg px-2 py-1 bg-surface-sunken text-text disabled:opacity-100"
       >
         {options.map((p) => (
@@ -141,6 +155,7 @@ function ProfileSelect({
             {p.name}
           </option>
         ))}
+        {!hasCustom && <option value={CUSTOM_PROFILE_ID}>Custom (set up…)</option>}
       </select>
     </label>
   )
