@@ -347,6 +347,10 @@ class PrintStartRequest(BaseModel):
     # Hold the print until every sensor with a target has stayed within
     # temperature.target_band_c of it for temperature.settle_s
     wait_for_temperature: bool = False
+    # Return to the zero point first (Restart): lift clear, travel to X0 Y0,
+    # lower to height 0. Converted prints always do; this makes a file sent
+    # as uploaded, which otherwise starts wherever the nozzle is, do it too.
+    from_origin: bool = False
 
 
 class PrintStartResponse(BaseModel):

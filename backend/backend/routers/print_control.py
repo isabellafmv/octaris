@@ -16,7 +16,7 @@ router = APIRouter(prefix="/print")
 @router.post("/start", response_model=PrintStartResponse)
 async def start_print(body: PrintStartRequest | None = None, session: PrinterSession = Depends(get_session)):
     body = body or PrintStartRequest()
-    lines_total = await session.start_print(body.wait_for_temperature)
+    lines_total = await session.start_print(body.wait_for_temperature, from_origin=body.from_origin)
     return {"status": "printing", "lines_total": lines_total}
 
 

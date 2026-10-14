@@ -871,6 +871,11 @@ export interface components {
              * @default false
              */
             wait_for_temperature?: boolean;
+            /**
+             * From Origin
+             * @default false
+             */
+            from_origin?: boolean;
         };
         /** PrintStartResponse */
         PrintStartResponse: {

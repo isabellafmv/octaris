@@ -65,10 +65,11 @@ function App(): React.JSX.Element {
     resetPrintState()
   }, [navigate, resetPrintState])
 
+  // Restart goes back to the zero point (lift, X0 Y0, lower) and prints again
   const handleRestart = useCallback(async () => {
     setStartError(null)
     try {
-      await api.printStart()
+      await api.printStart(true)
       resetPrintState()
     } catch (e) {
       setStartError(e instanceof Error ? e.message : 'Failed to restart print')

@@ -592,11 +592,14 @@ class PrinterSession:
 
     # --- printing ---------------------------------------------------------------
 
-    async def start_print(self, wait_for_temperature: bool = False) -> int:
+    async def start_print(self, wait_for_temperature: bool = False, from_origin: bool = False) -> int:
         """Start the loaded print; returns its line count. Raises LimitError
         if it would leave the bed or run a syringe empty. With
         `wait_for_temperature`, its first line waits until every sensor
-        with a target has held it (see QueueWorker.start)."""
+        with a target has held it (see QueueWorker.start). With
+        `from_origin` (Restart), a file sent as uploaded also starts from
+        the zero point: the nozzle lifts, travels to X0 Y0 and lowers to
+        height 0 first, as a converted print always does."""
         worker = self.worker
         loaded = self.loaded
         if loaded is None:
@@ -627,12 +630,22 @@ class PrinterSession:
         # A converted print's moves are relative to its zero point: if the
         # head isn't there, it travels back first.
         gcode = loaded.gcode
+        target = gcode.start_position
+        if target is None and from_origin:
+            origin_axes = ["X", "Y", *gcode.height_axes]
+            unzeroed = [axis for axis in origin_axes if axis not in self.zeroed]
+            if unzeroed:
+                raise NotReady(
+                    f"Can't return to the zero point: {', '.join(unzeroed)} not zeroed. "
+                    "Zero the nozzle first."
+                )
+            target = dict.fromkeys(origin_axes, 0.0)
         travel: list[str] = []
-        if gcode.start_position is not None:
-            if moved(position, gcode.start_position):
-                travel = travel_moves(position, gcode.start_position)
+        if target is not None:
+            if moved(position, target):
+                travel = travel_moves(position, target)
                 check_path(self.config.bed, travel, start_state(position), gcode.height_axes)
-            position = {**position, **gcode.start_position}
+            position = {**position, **target}
 
         # Checked before load_gcode, which would drop a resumable checkpoint.
         check_path(self.config.bed, gcode.lines, start_state(position), gcode.height_axes)

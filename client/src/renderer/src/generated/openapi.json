@@ -1952,6 +1952,11 @@
             "type": "boolean",
             "title": "Wait For Temperature",
             "default": false
+          },
+          "from_origin": {
+            "type": "boolean",
+            "title": "From Origin",
+            "default": false
           }
         },
         "type": "object",

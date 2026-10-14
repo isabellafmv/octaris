@@ -112,7 +112,14 @@ export const api = {
       file,
       new URLSearchParams({ syringe_mode: syringeMode, needs_changes: String(needsChanges) })
     ),
-  printStart: () => json<{ status: string }>('/print/start', { method: 'POST' }),
+  // fromOrigin (Restart): return to the zero point before starting, also for a
+  // file sent as uploaded
+  printStart: (fromOrigin = false) =>
+    json<{ status: string }>('/print/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_origin: fromOrigin })
+    }),
   printStop: () => json<{ status: string }>('/print/stop', { method: 'POST' }),
   printPause: () => json<{ status: string }>('/print/pause', { method: 'POST' }),
   printResume: () => json<{ status: string }>('/print/resume', { method: 'POST' }),
