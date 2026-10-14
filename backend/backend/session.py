@@ -17,6 +17,7 @@ from backend.checkpoint import moved, parse_m114, travel_moves
 from backend.config import Config
 from backend.gcode_processor import (
     NOZZLE_OFFSET_X,
+    TRAVEL_FEED,
     Command,
     GcodeValidationError,
     MachineState,
@@ -37,6 +38,7 @@ from backend.limits import (
     PLUNGER_AXES,
     LimitError,
     check_jog,
+    check_move_to,
     check_path,
     check_plunger_travel,
     plunger_step,
@@ -77,6 +79,9 @@ MODE_NOZZLES: dict[SyringeMode, tuple[Nozzle, ...]] = {
     "right": ("right",),
     "both": ("left", "right"),
 }
+
+# The height motor of each nozzle: Z left, A right
+NOZZLE_HEIGHT_AXIS: dict[Nozzle, str] = {"left": "Z", "right": "A"}
 
 # Steps/mm, sent on every connect: EEPROM is disabled on this board
 STEPS_PER_MM = "M92 X800 Y800 Z800 A800 B800 C800"
@@ -326,6 +331,37 @@ class PrinterSession:
         if current is None:
             raise SerialError(f"Couldn't read the printer's {axis} position to check the bed limits")
         check_jog(self.config.bed, axis, current, distance)
+
+    async def go_to_origin(self, lower: bool = False) -> list[str]:
+        """Travel to X0 Y0 at the current height and, with `lower`, then
+        lower the height axes of the syringe mode's nozzle(s) to 0 — onto
+        the bed. Returns the lines sent, as one sequence.
+
+        Raises Conflict while printing, NotReady if `lower` and those
+        height axes aren't zeroed (their 0 would be wherever the printer
+        powered up), and LimitError if the origin is off the bed.
+        """
+        if self.worker.status == PrintStatus.PRINTING:
+            raise Conflict("Pause the print first")
+        self._require_connection()
+        heights = [NOZZLE_HEIGHT_AXIS[nozzle] for nozzle in MODE_NOZZLES[self.syringe_mode]]
+        if lower and not set(heights) <= self.zeroed:
+            raise NotReady("Zero the nozzle height first: lowering to an unset zero could crash the nozzle")
+        # As for jogs, the bed limits only apply once an axis is zeroed
+        for axis in ["X", "Y", *(heights if lower else [])]:
+            if axis in self.zeroed:
+                check_move_to(self.config.bed, axis, 0.0)
+
+        self.worker.manual_command()
+        lines = ["G90", f"G1 X0 Y0 F{TRAVEL_FEED}"]
+        if lower:
+            lines.append("G1 " + " ".join(f"{axis}0" for axis in heights) + f" F{TRAVEL_FEED}")
+        # Back to the mode the printer was in; G91 while a print is loaded,
+        # as every print runs relative (see jog)
+        if self.serial.relative or self.loaded is not None:
+            lines.append("G91")
+        await self.serial.send_lines(lines)
+        return lines
 
     async def send_gcode(self, line: str) -> str:
         """Send one raw line and return the printer's reply."""

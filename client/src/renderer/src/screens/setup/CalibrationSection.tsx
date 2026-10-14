@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../../api'
 import { JogPanel } from '../../components/JogPanel'
 import { usePrintSettings } from '../../stores/printSettings'
@@ -70,15 +72,24 @@ export function CalibrationSection({
     }
   }
 
-  // The printer may be left relative (G91) by a print: go to the origin in
-  // absolute mode, then back to relative, the mode every print runs in.
-  const handleGoToOrigin = async (): Promise<void> => {
+  // The move running, for its spinner
+  const [moving, setMoving] = useState<'origin' | 'lower' | null>(null)
+  const [confirmLower, setConfirmLower] = useState(false)
+
+  // X0 Y0 at the current height; with lower, then the nozzle(s) down to zero
+  // height. One sequence on the backend, which restores the positioning mode.
+  const goToOrigin = async (lower: boolean): Promise<void> => {
+    setMoving(lower ? 'lower' : 'origin')
     try {
-      for (const line of ['G90', 'G1 X0 Y0 F300', 'G91']) await api.sendGcode(line)
+      await api.goToOrigin(lower)
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Move failed')
+    } finally {
+      setMoving(null)
     }
   }
+
+  const moveDisabled = !printerConnected || isPrinting || moving !== null
 
   return (
     <div>
@@ -93,14 +104,60 @@ export function CalibrationSection({
             </span>
           )}
         </div>
-        <button
-          className="text-xs font-semibold px-3 py-1 rounded-lg transition-all active:scale-95 disabled:opacity-40 bg-surface-sunken text-text-muted"
-          disabled={!printerConnected || isPrinting}
-          onClick={handleGoToOrigin}
-        >
-          Go to Origin
-        </button>
+        <div className="flex items-center gap-2">
+          <MoveButton
+            label="Go to Origin"
+            busy={moving === 'origin'}
+            disabled={moveDisabled}
+            onClick={() => goToOrigin(false)}
+          />
+          {/* Zero height only means something once the nozzle(s) are zeroed */}
+          <MoveButton
+            label="Lower to zero height"
+            busy={moving === 'lower'}
+            disabled={moveDisabled || !calibrated}
+            onClick={() => setConfirmLower(true)}
+          />
+        </div>
       </div>
+
+      {confirmLower &&
+        createPortal(
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(40,43,43,0.7)]">
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="lower-title"
+              className="rounded-3xl p-7 mx-4 max-w-sm bg-surface text-center shadow-[0_24px_60px_rgba(0,0,0,0.3)]"
+            >
+              <h2 id="lower-title" className="text-lg font-bold mb-1">
+                Lower to zero height?
+              </h2>
+              <p className="text-sm mb-6 text-text-muted">
+                Make sure nothing is on the bed below the nozzle.
+              </p>
+              <div className="flex flex-col gap-2.5">
+                <button
+                  autoFocus
+                  onClick={() => setConfirmLower(false)}
+                  className="w-full py-3 rounded-2xl font-semibold text-sm bg-surface-sunken text-text"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmLower(false)
+                    goToOrigin(true)
+                  }}
+                  className="w-full py-3 rounded-2xl font-semibold text-sm text-white bg-primary"
+                >
+                  Lower
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       <ol className="flex flex-col gap-2 mb-3">
         {steps.map((step, i) => {
@@ -136,5 +193,38 @@ export function CalibrationSection({
         <JogPanel syringeMode={syringeMode} disabled={!printerConnected || isPrinting} />
       )}
     </div>
+  )
+}
+
+function MoveButton({
+  label,
+  busy,
+  disabled,
+  onClick
+}: {
+  label: string
+  busy: boolean
+  disabled: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-lg transition-all active:scale-95 disabled:opacity-40 bg-surface-sunken text-text-muted"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {busy && (
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className="w-3 h-3 animate-spin"
+        >
+          <path strokeLinecap="round" d="M12 3a9 9 0 1 0 9 9" />
+        </svg>
+      )}
+      {label}
+    </button>
   )
 }

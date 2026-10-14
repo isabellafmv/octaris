@@ -126,6 +126,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ axis, distance, feed_rate: feedRate })
     }),
+  // X0 Y0 at the current height; with lower, then the mode's nozzle(s) down to zero height
+  goToOrigin: (lower = false) =>
+    json<{ status: string; lines: string[] }>('/jog/origin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lower })
+    }),
   sendGcode: (line: string) =>
     json<{ status: string; response: string }>('/gcode/send', {
       method: 'POST',

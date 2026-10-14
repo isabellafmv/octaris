@@ -41,6 +41,13 @@ def check_jog(bed: BedLimits, axis: str, current: float, distance: float) -> Non
         raise LimitError(f"This jog would move {_describe(axis, target, allowed)}")
 
 
+def check_move_to(bed: BedLimits, axis: str, target: float) -> None:
+    """Raise LimitError if moving `axis` to the absolute `target` leaves the bed."""
+    allowed = _ranges(bed).get(axis)
+    if allowed is not None and not allowed.min <= target <= allowed.max:
+        raise LimitError(f"This move would go {_describe(axis, target, allowed)}")
+
+
 def start_state(position: dict[str, float] | None) -> MachineState:
     """A MachineState at `position` (as parsed from M114), absolute mode."""
     position = position or {}

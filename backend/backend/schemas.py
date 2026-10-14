@@ -354,6 +354,12 @@ class JogResponse(BaseModel):
     distance: float
 
 
+class OriginResponse(BaseModel):
+    status: Literal["ok"]
+    # The G-code sent, in order
+    lines: list[str]
+
+
 class GcodeSendResponse(BaseModel):
     status: Literal["ok"]
     response: str

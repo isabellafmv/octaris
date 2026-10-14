@@ -283,6 +283,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jog/origin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Go To Origin */
+        post: operations["go_to_origin_jog_origin_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/gcode/send": {
         parameters: {
             query?: never;
@@ -692,6 +709,24 @@ export interface components {
             left: boolean;
             /** Right */
             right: boolean;
+        };
+        /** OriginRequest */
+        OriginRequest: {
+            /**
+             * Lower
+             * @default false
+             */
+            lower?: boolean;
+        };
+        /** OriginResponse */
+        OriginResponse: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "ok";
+            /** Lines */
+            lines: string[];
         };
         /** PauseResponse */
         PauseResponse: {
@@ -1639,6 +1674,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    go_to_origin_jog_origin_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OriginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OriginResponse"];
                 };
             };
             /** @description Validation Error */
