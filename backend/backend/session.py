@@ -25,9 +25,12 @@ from backend.gcode_processor import (
     SyringeMode,
     as_uploaded,
     check_as_uploaded,
+    is_relative_program,
+    mirror_to_both,
     parse,
     parse_words,
     process_gcode,
+    render,
     scale_flow,
     simulate_states,
     step,
@@ -493,10 +496,21 @@ class PrinterSession:
         Raises GcodeValidationError or LimitError if it can't be printed.
         """
         max_feed = self.config.max_feed_mm_min
+        cmds = parse(raw.splitlines())
+        # A file kept as it is (as uploaded, or a relative lab file) and
+        # written for one nozzle prints from both in both mode
+        kept = not needs_changes or is_relative_program(cmds)
+        notes: list[str] = []
+        if mode == "both" and kept:
+            cmds, note = mirror_to_both(cmds)
+            if note:
+                raw = "\n".join(render(cmds))
+                notes.append(note)
         if needs_changes:
             gcode = process_gcode(raw, mode, max_feed=max_feed)
+            gcode.warnings[:0] = notes
         else:
-            gcode = as_uploaded(raw, warnings=check_as_uploaded(parse(raw.splitlines()), max_feed))
+            gcode = as_uploaded(raw, warnings=[*notes, *check_as_uploaded(cmds, max_feed)])
         # A converted print is checked from the zero point it starts at; a
         # lab file starts wherever the head is, so only at print start.
         check_path(self.config.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)

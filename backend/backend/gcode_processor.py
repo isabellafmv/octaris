@@ -339,6 +339,43 @@ def map_height_axes(cmds: list[Command], mode: SyringeMode) -> list[Command]:
     return result
 
 
+# Each nozzle's plunger and height axis, left and right
+_NOZZLE_AXIS_PAIRS = (("B", "C"), ("Z", "A"))
+
+
+def mirror_to_both(cmds: list[Command]) -> tuple[list[Command], str | None]:
+    """Both mode, for a file written for one nozzle (it drives B or C, not
+    both): copy that nozzle's plunger and height words to the other
+    nozzle's axes on every move and G92, so both nozzles print the same
+    path. A height axis the file already moves on both sides is left alone.
+
+    Returns the commands and a note saying what was copied, or the commands
+    unchanged and None for a file that isn't for one nozzle.
+    """
+    used = {w.letter for c in cmds if c.is_move or c.code == "G92" for w in c.words}
+    if ("B" in used) == ("C" in used):
+        return cmds, None  # drives both plungers already, or neither
+    copies: dict[str, str] = {}
+    for left, right in _NOZZLE_AXIS_PAIRS:
+        if left in used and right not in used:
+            copies[left] = right
+        elif right in used and left not in used:
+            copies[right] = left
+
+    result = []
+    for cmd in cmds:
+        if (cmd.is_move or cmd.code == "G92") and any(cmd.has(a) for a in copies):
+            words: list[Word] = []
+            for w in cmd.words:
+                words.append(w)
+                if w.letter in copies:
+                    words.append(Word(copies[w.letter], w.value, w.text))
+            cmd = cmd.with_words(words)
+        result.append(cmd)
+    copied = " and ".join(f"{a} to {b}" for a, b in copies.items())
+    return result, f"Both mode: copied {copied} on every line, so both nozzles print the same path"
+
+
 def _rename_e(cmd: Command, axis: str) -> Command:
     if not cmd.has("E"):
         return cmd
