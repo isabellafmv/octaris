@@ -267,11 +267,31 @@ class NozzleFields(BaseModel):
     offset_y: float = 0.0
 
 
+class RangeFields(BaseModel):
+    """An axis range as the app's editor sends it, checked (min < max) by
+    custom_profile like NozzleFields."""
+
+    min: float
+    max: float
+
+
+class BedFields(BaseModel):
+    """Bed limits as the app's editor sends them (see BedLimits)."""
+
+    x: RangeFields
+    y: RangeFields
+    z: RangeFields
+
+
 def custom_profile(
-    base: PrinterProfile, nozzles: Sequence[NozzleFields | dict[str, Any]], nozzle_offset_measured: bool
+    base: PrinterProfile,
+    nozzles: Sequence[NozzleFields | dict[str, Any]],
+    nozzle_offset_measured: bool,
+    bed: BedFields | dict[str, Any] | None = None,
 ) -> PrinterProfile:
-    """The Custom profile: `base`'s bed, build volume and steps/mm, with
-    these nozzles. Raises pydantic.ValidationError for invalid nozzles."""
+    """The Custom profile: `base`'s build volume and steps/mm, with these
+    nozzles and `bed` (None: `base`'s). Raises pydantic.ValidationError for
+    invalid nozzles or bed limits."""
     data = base.model_dump()
     data.update(
         id=CUSTOM_PROFILE_ID,
@@ -279,4 +299,6 @@ def custom_profile(
         nozzles=[n.model_dump() if isinstance(n, BaseModel) else n for n in nozzles],
         nozzle_offset_measured=nozzle_offset_measured,
     )
+    if bed is not None:
+        data["bed"] = bed.model_dump() if isinstance(bed, BaseModel) else bed
     return PrinterProfile.model_validate(data)

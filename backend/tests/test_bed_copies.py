@@ -53,7 +53,8 @@ FOUR = custom_profile(PRINTESS_1, FOUR_NOZZLES, nozzle_offset_measured=True)
 ALL_FOUR = ["fl", "fr", "bl", "br"]
 
 ADVICE = (
-    "Move the model, select fewer syringes, or check the zero point, the syringe offsets and the bed limits."
+    "Move the model, select fewer syringes, or check the zero point, the syringe offsets "
+    "and the bed limits (Edit setup on the Setup screen)."
 )
 
 # A 10 × 10 mm square, sliced for one extruder (relative E)

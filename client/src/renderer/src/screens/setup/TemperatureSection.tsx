@@ -2,9 +2,15 @@ import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import { SensorsNotReporting } from '../../components/SensorsNotReporting'
 import { useTemperature } from '../../stores/temperature'
-import type { SensorTestResponse } from '../../types'
+import type { SensorTestResponse, TemperatureProtocol } from '../../types'
 
 type TestReading = SensorTestResponse['sensors'][number]
+
+// How the heaters are addressed: the temperature_protocol setting
+const PROTOCOLS: { value: NonNullable<TemperatureProtocol>; label: string }[] = [
+  { value: 'marlin', label: 'Marlin (M104/M140)' },
+  { value: 'printess', label: 'Printess lab firmware (M104 I<n> T<°C> H/C)' }
+]
 
 function describe(s: TestReading): string {
   const reading = `${s.name} ${s.actual.toFixed(1)} °C`
@@ -20,7 +26,8 @@ interface TemperatureSectionProps {
   onError: (msg: string) => void
 }
 
-// The temperature_sensors setting, and a one-off M105 to check the printer's sensors
+// The temperature_sensors and temperature_protocol settings, and a one-off
+// M105 to check the printer's sensors
 export function TemperatureSection({
   printerConnected,
   enabled,
@@ -31,6 +38,8 @@ export function TemperatureSection({
   const [test, setTest] = useState<SensorTestResponse | null>(null)
   // Lab firmware: its heater channels, listed by name in the test result
   const channels = useTemperature((s) => s.status?.channels) ?? []
+  // The protocol in use: the one chosen here, or config.json's until then
+  const protocol = useTemperature((s) => s.status?.protocol)
 
   // Whether polling is paused comes with the temperature status
   useEffect(() => {
@@ -45,6 +54,20 @@ export function TemperatureSection({
     try {
       // The settings event that follows updates `enabled`
       await api.saveSettings({ temperature_sensors: !enabled })
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Saving the setting failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleProtocol = async (value: NonNullable<TemperatureProtocol>): Promise<void> => {
+    if (value === protocol) return
+    setSaving(true)
+    try {
+      // The temperature_status event that follows updates `protocol`
+      await api.saveSettings({ temperature_protocol: value })
+      setTest(null) // read with the old protocol's sensor names
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Saving the setting failed')
     } finally {
@@ -99,6 +122,27 @@ export function TemperatureSection({
         >
           {testing ? 'Testing…' : 'Test sensors'}
         </button>
+      </div>
+
+      <div
+        role="radiogroup"
+        aria-label="Temperature protocol"
+        className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-secondary"
+      >
+        <span className="text-text-muted">Protocol</span>
+        {PROTOCOLS.map((p) => (
+          <label key={p.value} className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="radio"
+              name="temperature-protocol"
+              value={p.value}
+              checked={protocol === p.value}
+              onChange={() => handleProtocol(p.value)}
+              disabled={saving}
+            />
+            {p.label}
+          </label>
+        ))}
       </div>
 
       {test && (

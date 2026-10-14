@@ -62,7 +62,7 @@ The printer shows up as a COM port. Octaris lists only ports that belong to the 
 
    **Every copy has to stay on the bed.** With several syringes selected, each one's copy of the path is checked against the bed limits (the first's path shifted by the syringe's offset minus the first selected syringe's), on upload, at print start (from the position the printer reports), after an edit in the G-code editor and on *Restart*. A copy that would leave the bed is refused, naming the syringe and the line, for example *The right syringe's copy leaves the bed: line 12 moves it to X 52 mm (bed −45 to 45 mm).* Jogs and *Go to Origin* are checked the same way for every selected syringe, once zeroed. With one syringe nothing changes.
 
-   **Set up the syringes** (a printer with other axes or more syringes, such as the Printess 2.0): click **Edit setup**. Under each syringe, type its name, its height axis (*H*) and plunger axis (*P*), and its offset from the first syringe in mm (*X*, *Y*). **+ Add syringe** adds one on the right (up to 6, as long as axis letters are left), **Remove** takes one away (at least 1 stays). Tick **Offsets measured** once the offsets are measured: prints with several syringes are refused until then. Each axis is one of Z, A, B, C, I, J, K, U, V, W (not X/Y, the stage, nor E), used once in the setup; a field that breaks this turns red and says why, and **Save** stays off until every field is valid. Saving stores the setup as the *Custom* profile (editing a built-in profile copies it, with its bed and build volume, into *Custom*) and selects it at once, kept across restarts: no `config.json` change or restart needed. **Reset to Printess 1.0** deletes *Custom* and goes back to the Printess 1.0. Saving, resetting or switching the printer resets the calibration and the resume checkpoint and unloads the loaded print, and isn't possible while a print is running or paused.
+   **Set up the syringes** (a printer with other axes or more syringes, such as the Printess 2.0): click **Edit setup**. Under each syringe, type its name, its height axis (*H*) and plunger axis (*P*), and its offset from the first syringe in mm (*X*, *Y*). **+ Add syringe** adds one on the right (up to 6, as long as axis letters are left), **Remove** takes one away (at least 1 stays). Tick **Offsets measured** once the offsets are measured: prints with several syringes are refused until then. Below the syringes, **Bed limits (mm)** sets where the nozzles may go, X, Y and Z min to max, relative to where you zero (e.g. −45 to 45 for a 90 mm dish zeroed in the centre; every syringe's height has the Z range); each min has to be below its max. Jogs (once zeroed), *Go to Origin* and prints that would leave the bed are refused. Each axis is one of Z, A, B, C, I, J, K, U, V, W (not X/Y, the stage, nor E), used once in the setup; a field that breaks this turns red and says why, and **Save** stays off until every field is valid. Saving stores the setup, bed limits included, as the *Custom* profile (editing a built-in profile copies it, with its bed and build volume, into *Custom*; the built-in profile keeps its own bed from `config.json`) and selects it at once, kept across restarts: no `config.json` change or restart needed. **Reset to Printess 1.0** deletes *Custom* and goes back to the Printess 1.0. Saving, resetting or switching the printer resets the calibration and the resume checkpoint and unloads the loaded print, and isn't possible while a print is running or paused.
 
 3. **Calibrate (zero the nozzles)** with the jog panel, which has X/Y and a height column that moves the height axes chosen with its chips: by default those of the selected syringes (Z for the left, A for the right on the Printess 1.0; see *Jog panel* under [Manual control](#manual-control-take-over-screen)). X/Y are set at the first (leftmost) selected nozzle over the print's start point; each nozzle's height is set with that nozzle lowered onto the bed. One step per selected nozzle, left to right:
    - The first: jog it over the start point, lower it onto the bed, click **Zero <nozzle>** (`G92 X0 Y0 <height>0 <plunger>0`).
@@ -109,6 +109,15 @@ work. **Test sensors** next to the switch sends `M105` once (5 s to answer) and
 shows the raw reply and the sensors it found, or *No reply*, whether the
 setting is on or off: use it to check the setup.
 
+Under the switch, **Protocol** chooses how heater targets are sent: **Marlin
+(M104/M140)** or **Printess lab firmware (M104 I<n> T<°C> H/C)** (see *Lab
+firmware* below). It is kept in `settings.json` and applies at once, like the
+switch: no restart or reconnect. Until one is chosen here,
+`temperature.protocol` in `config.json` is used. Switching forgets the readings
+and targets remembered for the old protocol (the logged readings stay in the
+database), and isn't possible while a print is waiting for its temperatures.
+The channel names and the off command still come from `config.json`.
+
 The **Temperature** screen (sidebar) shows each sensor's reading, target and status, a chart of actual vs. target, and a CSV export. Warnings appear when a sensor drifts from its target during a print, stops reporting, or reads something implausible (see the safety note above).
 
 The backend reads the printer's temperatures (Marlin's `M155` auto-report, or
@@ -119,8 +128,11 @@ answered, and gives way after 0.5 s to a command that arrives. If two polls in
 a row get no usable reply, polling pauses, and Setup and Temperature show *The
 printer doesn't report temperatures* with a **Retry** button.
 
-- `GET /settings`, `PUT /settings` `{"temperature_sensors": true}`: the settings
-  changed in the app, saved to `settings.json` in the app data folder.
+- `GET /settings`, `PUT /settings` `{"temperature_sensors": true}`,
+  `{"temperature_protocol": "printess"}`: the settings changed in the app, saved
+  to `settings.json` in the app data folder. Only the settings given change.
+  `temperature_protocol` is `null` until one is chosen (then `config.json`'s
+  applies); changing it is refused (409) while a print waits for temperatures.
 - `POST /temperature/test`: one `M105`; `{"reply": "ok T:…" | null, "sensors": […]}`.
 - `POST /temperature/retry`: start polling again after it paused.
 
@@ -144,7 +156,8 @@ printer doesn't report temperatures* with a **Retry** button.
 #### Lab firmware: heater channels (`"protocol": "printess"`)
 
 The lab's own firmware addresses its heaters differently from Marlin. With
-`temperature.protocol` set to `"printess"` in `config.json` (default
+the protocol set to *Printess lab firmware* on Setup (or, until one is chosen
+there, `temperature.protocol` set to `"printess"` in `config.json`; default
 `"marlin"`), Octaris drives its four heater channels `I0`–`I3`:
 
 - A target goes out as `M104 I<n> T<°C> H` to heat or `M104 I<n> T<°C> C` to
@@ -250,7 +263,7 @@ The Electron app opens automatically. The backend must be running for any printe
 
 ### Without a printer
 
-Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time. It has the selected printer profile's axes: the `M92` sent on connect and on a change of profile names them, and its `M114` reports them all. With `"protocol": "printess"` in `config.json` it simulates the lab firmware's four heater channels instead of Marlin's heaters: `M104 I<n> T<°C> H` only heats, `C` only cools, `M104 I<n> T0` switches off, and `M105` answers `ok T0:21.30 T1:21.10 T2:20.80 T3:21.60`.
+Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time. It has the selected printer profile's axes: the `M92` sent on connect and on a change of profile names them, and its `M114` reports them all. With the *Printess lab firmware* protocol chosen on Setup (or `"protocol": "printess"` in `config.json`) when it connects, it simulates the lab firmware's four heater channels instead of Marlin's heaters (it keeps the protocol it connected with until it is reconnected): `M104 I<n> T<°C> H` only heats, `C` only cools, `M104 I<n> T0` switches off, and `M105` answers `ok T0:21.30 T1:21.10 T2:20.80 T3:21.60`.
 
 ```bash
 OCTARIS_VIRTUAL_PRINTER=1 uvicorn backend.main:app --host 127.0.0.1 --port 8000
@@ -324,16 +337,23 @@ The build bundles CuraEngine from `resources/bin/<target>/` and stops with an er
 
 ## Configuration
 
-`config.json` at the repository root controls runtime behaviour:
+`config.json` at the repository root controls runtime behaviour. In the installed app it is inside the app bundle and read-only, so the settings the lab needs to change are also set in the app, kept in `settings.json` in the app data folder (see [Logs](#logs) for where), and win over `config.json` from then on:
+
+- the printer profile (*Printer* dropdown on Setup) instead of `printer_profile`;
+- the Custom profile's syringes, offsets and **bed limits** (*Edit setup* on Setup) instead of a profile's `nozzles`, `nozzle_offset_measured` and `bed` under `profiles`;
+- whether the printer has temperature sensors (*Temperature control* on Setup);
+- the **temperature protocol** (*Protocol* on Setup) instead of `temperature.protocol`.
+
+Everything else, such as the channel names, is only in `config.json`:
 
 | Key | Values | Description |
 |-----|--------|-------------|
 | `target` | `macos` / `windows` / `rpi` | Platform, affects where CuraEngine is looked up. Defaults to the OS it runs on (Linux → `rpi`); set it only to override that. |
 | `baud_rate` | integer | Serial baud rate (default `115200`) |
 | `printer_profile` | profile id | The printer, from `profiles` (default `printess-1`), until one is chosen with the *Printer* dropdown on Setup: that choice is kept in `settings.json` and wins from then on. |
-| `profiles` | `{"<id>": {…}}` | Overrides of the built-in profiles and added ones, see [Printer profiles](#printer-profiles). |
+| `profiles` | `{"<id>": {…}}` | Overrides of the built-in profiles and added ones, see [Printer profiles](#printer-profiles). In the app, the Custom profile (*Edit setup*) has its own syringes and bed limits. |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
-| `temperature.protocol` | `marlin` / `printess` | How heaters are set: Marlin's `M104`/`M140`/`M141` (default), or the lab firmware's channels, `M104 I<n> T<°C> H\|C` (see *Lab firmware* above) |
+| `temperature.protocol` | `marlin` / `printess` | How heaters are set: Marlin's `M104`/`M140`/`M141` (default), or the lab firmware's channels, `M104 I<n> T<°C> H\|C` (see *Lab firmware* above). The default until a protocol is chosen on Setup, which is kept in `settings.json` and wins from then on. |
 | `temperature.channels` | `[{"index", "name", "reply_key", "min", "max"}, …]` | `printess` only: each heater channel `I<index>`, its name, the `M105` reply key it reads from (**unconfirmed**), and the targets it accepts (besides 0 for off). Default: `I0`–`I3` reading `T0`–`T3`, 0–120 °C |
 | `temperature.off_command` | string | `printess` only: the command that switches channel `{n}` off. Default `M104 I{n} T0` (**unconfirmed**) |
 | `temperature.sensors` | `{"T0": {"name", "min", "max"}, …}` | A readable name per sensor key the printer reports, and the targets it accepts (besides 0 for off). Unlisted sensors show under their raw key and accept 0–120 °C. |
@@ -351,13 +371,13 @@ A profile describes the printer: its nozzles left to right, each with its own he
 
 Nothing in Octaris knows axis letters other than through the selected profile: processing (Cura's Z becomes every selected nozzle's height axis, E each selected plunger, negated), calibration, jogs, *Go to Origin* / *Lower to zero height*, the bed limits (every height axis has the `z` range), the plunger travel check, the position read with `M114`, e-stop resume, the virtual printer, the 3D preview and the jog panel all take them from it. On connect, `M92` sets X, Y and every axis of the profile to its `steps_per_mm`.
 
-The *Custom* profile (`custom`) is the one edited on Setup (see [Setup screen](#setup-screen)). It is saved in `settings.json` in the app data folder, under `"printer"`, not in `config.json`, and is listed after the others once saved. `GET /printer/custom` returns it (`null` until saved), `PUT /printer/custom {"nozzles": [...], "nozzle_offset_measured": bool, "base": "<id>"}` saves and selects it (400 with every problem, one per line, for an invalid setup; 409 during a print), and `DELETE /printer/custom` deletes it and selects `printess-1`. The bed, build volume and steps/mm come from `base`, the profile being edited (default: the Custom profile so far). Other windows follow along through the `printer_profile` and `printer_profiles` events.
+The *Custom* profile (`custom`) is the one edited on Setup (see [Setup screen](#setup-screen)). It is saved in `settings.json` in the app data folder, under `"printer"`, not in `config.json`, and is listed after the others once saved. `GET /printer/custom` returns it (`null` until saved), `PUT /printer/custom {"nozzles": [...], "nozzle_offset_measured": bool, "base": "<id>", "bed": {"x": {"min", "max"}, "y": …, "z": …}}` saves and selects it (400 with every problem, one per line, for an invalid setup, e.g. *Bed X: min (45.0) must be below max (-45.0)*; 409 during a print), and `DELETE /printer/custom` deletes it and selects `printess-1`. The build volume and steps/mm (and the bed, if `bed` is left out) come from `base`, the profile being edited (default: the Custom profile so far). Other windows follow along through the `printer_profile` and `printer_profiles` events.
 
 | Key | Values | Description |
 |-----|--------|-------------|
 | `name` | text | Shown in the *Printer* dropdown |
 | `nozzles` | list of `{"id", "name", "height_axis", "plunger_axis", "offset_x", "offset_y"}` | Left to right, 1 to 6. `offset_x`/`offset_y`: mm from the first nozzle. Each axis is one of Z, A, B, C, I, J, K, U, V, W (Marlin's axis names but X/Y/E), used once in the profile, and a nozzle's height and plunger axis differ. Ten letters make 6 nozzles impossible in practice: 5 is the most. |
-| `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the nozzles may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60; every nozzle's height has the `z` range). Jogs (once zeroed) and prints that would leave it are refused, for every selected nozzle at its offset. |
+| `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the nozzles may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60; every nozzle's height has the `z` range). Jogs (once zeroed), *Go to Origin* and prints that would leave it are refused, for every selected nozzle at its offset. The Custom profile's is set in the app (*Edit setup*). |
 | `build_volume` | `{"x", "y", "z"}` | Cura's machine size in mm (default 60 × 60 × 60). Larger models are refused before slicing. |
 | `nozzle_offset_measured` | `true` / `false` | Set to `true` once the nozzles' `offset_x`/`offset_y` have been measured. Prints with more than one nozzle are refused until then. |
 | `steps_per_mm` | number | Steps/mm of every axis, sent as `M92` on connect and when the profile is selected (default `800`; EEPROM is disabled on the board). |

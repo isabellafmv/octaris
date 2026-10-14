@@ -86,14 +86,17 @@ def open_virtual() -> VirtualPrinter:
     """A freshly powered-on virtual printer, for a connect in dev mode.
 
     OCTARIS_VIRTUAL_PRINTER_SPEED runs its moves that many times faster than
-    real time (default 1). It speaks the heater protocol config.json's
-    temperature.protocol names, unless DEV_OPTIONS says otherwise.
+    real time (default 1). It speaks the heater protocol chosen in the app
+    (or config.json's temperature.protocol) at the time it connects, unless
+    DEV_OPTIONS says otherwise.
     """
     from backend.config import load_config
+    from backend.settings import SettingsStore
 
     speed = float(os.environ.get("OCTARIS_VIRTUAL_PRINTER_SPEED", "1"))
     options: dict[str, Any] = {"speed": speed, "ok_delay_s": 0.002, **DEV_OPTIONS}
-    protocol = options.setdefault("protocol", load_config().temperature.protocol)
+    chosen = SettingsStore().current.temperature_protocol
+    protocol = options.setdefault("protocol", chosen or load_config().temperature.protocol)
     options.setdefault("sensors", PRINTESS_SENSORS if protocol == "printess" else DEV_SENSORS)
     return VirtualPrinter(**options)
 

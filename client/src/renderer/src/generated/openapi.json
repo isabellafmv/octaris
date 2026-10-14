@@ -1141,7 +1141,7 @@
       },
       "put": {
         "summary": "Put Settings",
-        "description": "Save the settings; they apply at once and are kept across restarts.\nTurning temperature_sensors on or off starts or stops temperature\nmonitoring right away, connected or not.",
+        "description": "Save the settings given (the others stay as they are); they apply\nat once and are kept across restarts. Turning temperature_sensors on or\noff starts or stops temperature monitoring right away, connected or\nnot. A new temperature_protocol forgets the readings and targets of the\nold one; 409 while a print waits for its temperatures.",
         "operationId": "put_settings_settings_put",
         "requestBody": {
           "content": {
@@ -1280,7 +1280,7 @@
       },
       "put": {
         "summary": "Save Custom Profile",
-        "description": "Save the Custom profile and select it, as PUT /printer does (refused\nduring a print). 400 lists every problem: each axis must be one of Z, A,\nB, C, I, J, K, U, V, W, used once in the profile, and a syringe's height\nand plunger axis must differ; 1 to 6 syringes.",
+        "description": "Save the Custom profile and select it, as PUT /printer does (refused\nduring a print). 400 lists every problem: each axis must be one of Z, A,\nB, C, I, J, K, U, V, W, used once in the profile, and a syringe's height\nand plunger axis must differ; 1 to 6 syringes; each bed limit's min\nbelow its max.",
         "operationId": "save_custom_profile_printer_custom_put",
         "requestBody": {
           "content": {
@@ -1371,6 +1371,27 @@
         ],
         "title": "AxisRange",
         "type": "object"
+      },
+      "BedFields": {
+        "properties": {
+          "x": {
+            "$ref": "#/components/schemas/RangeFields"
+          },
+          "y": {
+            "$ref": "#/components/schemas/RangeFields"
+          },
+          "z": {
+            "$ref": "#/components/schemas/RangeFields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "z"
+        ],
+        "title": "BedFields",
+        "description": "Bed limits as the app's editor sends them (see BedLimits)."
       },
       "BedLimits": {
         "description": "Where the nozzles may go, in mm relative to the G92 zero point. Every\nnozzle's height axis has the z range.\n\nThe printer has no homing or endstops, so these are enforced by the host\nonly. The defaults match the 60 \u00d7 60 \u00d7 60 mm Cura machine definition with\nthe zero in the middle of the bed and Z0 at the print surface. Given as\nmin/max rather than a size so an off-centre zero can be described.",
@@ -1641,6 +1662,16 @@
               }
             ],
             "title": "Base"
+          },
+          "bed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BedFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1648,7 +1679,7 @@
           "nozzles"
         ],
         "title": "CustomProfileRequest",
-        "description": "The Custom profile's nozzles, left to right, as edited on the Setup\nscreen. Its bed, build volume and steps/mm are kept from the Custom\nprofile saved before or, the first time, copied from `base` (the\nprofile being edited; default: the selected one)."
+        "description": "The Custom profile's nozzles, left to right, and its bed limits, as\nedited on the Setup screen. Its build volume and steps/mm (and the bed,\nwithout `bed`) are kept from the Custom profile saved before or, the\nfirst time, copied from `base` (the profile being edited; default: the\nselected one)."
       },
       "DisconnectResponse": {
         "properties": {
@@ -2481,6 +2512,25 @@
         "title": "PrinterProfilesResponse",
         "description": "Every printer profile (built in, from config.json, and the Custom\nprofile once one is saved), and the selected one's id."
       },
+      "RangeFields": {
+        "properties": {
+          "min": {
+            "type": "number",
+            "title": "Min"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          }
+        },
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "title": "RangeFields",
+        "description": "An axis range as the app's editor sends it, checked (min < max) by\ncustom_profile like NozzleFields."
+      },
       "ResumeResponse": {
         "properties": {
           "status": {
@@ -2742,6 +2792,22 @@
             "default": false,
             "title": "Temperature Sensors",
             "type": "boolean"
+          },
+          "temperature_protocol": {
+            "anyOf": [
+              {
+                "enum": [
+                  "marlin",
+                  "printess"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature Protocol"
           }
         },
         "title": "Settings",
@@ -3452,6 +3518,22 @@
             "default": false,
             "title": "Temperature Sensors",
             "type": "boolean"
+          },
+          "temperature_protocol": {
+            "anyOf": [
+              {
+                "enum": [
+                  "marlin",
+                  "printess"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature Protocol"
           },
           "type": {
             "const": "settings",

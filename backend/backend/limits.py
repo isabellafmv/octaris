@@ -183,7 +183,7 @@ def check_path(
             raise LimitError(
                 f"{who} leaves the bed: line {number} moves it to {axis} {_mm(off_value)} mm "
                 f"(bed {_span(allowed)}). Move the model, select fewer syringes, or check the "
-                f"zero point, the syringe offsets and the bed limits.",
+                f"zero point, the syringe offsets and the bed limits (Edit setup on the Setup screen).",
                 number,
             )
         for axis, allowed in ranges.items():
@@ -192,7 +192,7 @@ def check_path(
                 raise LimitError(
                     f"The print leaves the bed: line {number} ({line.strip()}) moves "
                     f"{_describe(axis, value, allowed)}. Move the model, or check the "
-                    f"zero point and the bed limits in config.json.",
+                    f"zero point and the bed limits (Edit setup on the Setup screen).",
                     number,
                 )
 
