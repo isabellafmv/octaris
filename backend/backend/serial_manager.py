@@ -145,7 +145,8 @@ def parse_temperatures(line: str) -> dict[str, dict[str, float | None]] | None:
     if not _TEMPERATURE_REPORT.match(line):
         return None
     return {
-        key: {"actual": float(actual), "target": float(target) if target is not None else None}
+        # findall gives "" for a sensor reported without "/target"
+        key: {"actual": float(actual), "target": float(target) if target else None}
         for key, actual, target in _TEMPERATURE.findall(line)
     }
 

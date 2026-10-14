@@ -467,8 +467,10 @@ export interface paths {
         put?: never;
         /**
          * Set Temperature Target
-         * @description Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C).
-         *     Allowed while printing.
+         * @description Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with
+         *     the lab firmware (protocol "printess"), a channel's (I<n>) with
+         *     M104 I<n> T<°C> H to heat or C to cool, chosen from its current reading
+         *     (refused without one). Allowed while printing.
          */
         post: operations["set_temperature_target_temperature_target_post"];
         delete?: never;
@@ -605,6 +607,24 @@ export interface components {
             /** Calibrated */
             calibrated: boolean;
             nozzles: components["schemas"]["NozzleCalibration"];
+        };
+        /**
+         * ChannelInfo
+         * @description A heater channel of the lab (printess) firmware.
+         */
+        ChannelInfo: {
+            /** Sensor */
+            sensor: string;
+            /** Index */
+            index: number;
+            /** Name */
+            name: string;
+            /** Reply Key */
+            reply_key: string;
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
         };
         /** ConnectRequest */
         ConnectRequest: {
@@ -916,6 +936,11 @@ export interface components {
              * @enum {string}
              */
             status: "heating" | "cooling" | "at_target" | "off";
+            /**
+             * Mode
+             * @default null
+             */
+            mode?: ("heat" | "cool") | null;
             /** Timestamp */
             timestamp: number;
         };
@@ -929,6 +954,13 @@ export interface components {
             actual: number;
             /** Target */
             target: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "heating" | "cooling" | "at_target" | "off";
+            /** Mode */
+            mode?: ("heat" | "cool") | null;
         };
         /**
          * SensorTestResponse
@@ -1060,6 +1092,17 @@ export interface components {
             monitor: "off" | "idle" | "starting" | "autoreport" | "polling" | "paused";
             /** Sensors */
             sensors: components["schemas"]["SensorReading"][];
+            /**
+             * Protocol
+             * @default marlin
+             * @enum {string}
+             */
+            protocol?: "marlin" | "printess";
+            /**
+             * Channels
+             * @default []
+             */
+            channels?: components["schemas"]["ChannelInfo"][];
         };
         /** TemperatureTargetRequest */
         TemperatureTargetRequest: {
@@ -1348,6 +1391,17 @@ export interface components {
             monitor: "off" | "idle" | "starting" | "autoreport" | "polling" | "paused";
             /** Sensors */
             sensors: components["schemas"]["SensorReading"][];
+            /**
+             * Protocol
+             * @default marlin
+             * @enum {string}
+             */
+            protocol?: "marlin" | "printess";
+            /**
+             * Channels
+             * @default []
+             */
+            channels?: components["schemas"]["ChannelInfo"][];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}

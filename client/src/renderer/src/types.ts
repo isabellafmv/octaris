@@ -21,6 +21,9 @@ export type PrintSession = Schemas['PrintSession']
 export type SensorInfo = Pick<SensorReading, 'sensor' | 'name' | 'min' | 'max' | 'settable'>
 export type SensorReading = Schemas['SensorReading']
 export type TemperatureStatus = Schemas['TemperatureStatus']
+// The lab firmware's heater channels (protocol "printess"), I0..I3
+export type ChannelInfo = Schemas['ChannelInfo']
+export type TemperatureProtocol = TemperatureStatus['protocol']
 export type TemperatureSeries = Schemas['TemperatureSeries']
 export type TemperatureHistoryResponse = Schemas['TemperatureHistoryResponse']
 // How the backend gets temperature reports; "paused": the printer doesn't answer M105

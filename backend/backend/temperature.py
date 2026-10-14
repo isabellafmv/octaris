@@ -15,6 +15,12 @@ must stay enabled.
 
 All of it is off while the temperature_sensors setting is: reports (from a
 manual M105) are ignored, and the state is "off".
+
+With the lab firmware (temperature.protocol "printess") the heaters are
+channels I0-I3: each reads from a configured key of the M105 reply and goes
+by "I<n>" here, and a target goes out as M104 I<n> T<°C> H to heat or C to
+cool. Its reply may not carry the targets, so the store keeps the target and
+direction last sent to each channel.
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.config import SensorConfig, TemperatureConfig
+from backend.config import ChannelConfig, SensorConfig, TemperatureConfig
 from backend.database import (
     TemperatureRow,
     delete_temperature_readings_before,
@@ -41,9 +47,12 @@ from backend.database import (
     temperature_readings,
 )
 from backend.schemas import (
+    ChannelInfo,
+    HeaterMode,
     HeaterStatus,
     SensorInfo,
     SensorReading,
+    SensorTestReading,
     TemperatureMonitor,
     TemperatureSeries,
     TemperatureState,
@@ -69,6 +78,8 @@ _TOOL = re.compile(r"^T(\d+)$")
 # Sensors with a heater: the hotend(s), the bed and the chamber. The others
 # Marlin reports (P probe, R redundant, W cooler...) are read-only.
 _HEATER = re.compile(r"^(T\d*|B|C)$")
+# A printess target typed by hand: M104 I<n> T<°C> H|C
+_CHANNEL_TARGET = re.compile(r"^M104\s+I(\d+)\s+T(-?\d+(?:\.\d+)?)\s+([HC])\s*$", re.IGNORECASE)
 
 
 class TargetError(ValueError):
@@ -80,6 +91,36 @@ class Reading:
     timestamp: float  # Unix seconds
     actual: float
     target: float | None
+    # printess: the direction the target was sent with, if Octaris sent it
+    mode: HeaterMode | None = None
+
+
+@dataclass(frozen=True)
+class TargetPlan:
+    """A target to set, and the command that sets it."""
+
+    sensor: str
+    target: float  # 0: off
+    command: str
+    mode: HeaterMode | None = None  # printess: heat or cool; None when off, and for marlin
+
+
+def channel_command(
+    channel: ChannelConfig, target: float, actual: float | None, off_command: str
+) -> tuple[str, HeaterMode | None]:
+    """The lab firmware's command that sets `channel` to `target` (0: off),
+    and its direction: H (heat) when the target is at or above the current
+    reading `actual`, C (cool) when below. Without a reading the direction
+    can't be chosen: TargetError."""
+    if target == 0:
+        return off_command.format(n=channel.index), None
+    if actual is None:
+        raise TargetError(
+            f"No reading from {channel.name} yet, so it isn't known whether to heat or cool. "
+            "Wait for a temperature report (temperature control has to be on) and try again."
+        )
+    mode: HeaterMode = "heat" if target >= actual else "cool"
+    return f"M104 I{channel.index} T{target:g} {'H' if mode == 'heat' else 'C'}", mode
 
 
 def target_command(sensor: str, target: float) -> str:
@@ -130,6 +171,9 @@ class TemperatureStore:
         self._publish = publish
         self._clock = clock
         self._latest: dict[str, Reading] = {}
+        # printess: per channel, the target and direction Octaris last sent
+        # since connecting
+        self._sent: dict[str, tuple[float, HeaterMode | None]] = {}
         self._history: dict[str, deque[Reading]] = {}
         # Readings not yet written to the database
         self._pending: list[TemperatureRow] = []
@@ -151,40 +195,132 @@ class TemperatureStore:
 
     # --- sensors ------------------------------------------------------------------
 
+    @property
+    def printess(self) -> bool:
+        return self.config.protocol == "printess"
+
+    def _channel(self, key: str) -> ChannelConfig | None:
+        return self.config.channel(key) if self.printess else None
+
     def sensor(self, key: str) -> SensorConfig:
         """The configured name and range of sensor `key`, or its raw key with
         the default range."""
+        channel = self._channel(key)
+        if channel is not None:
+            return SensorConfig(name=channel.name, min=channel.min, max=channel.max)
         return self.config.sensors.get(key) or SensorConfig(name=key)
 
     def info(self, key: str) -> SensorInfo:
         sensor = self.sensor(key)
-        return SensorInfo(
-            sensor=key,
-            name=sensor.name,
-            min=sensor.min,
-            max=sensor.max,
-            settable=_HEATER.match(key) is not None,
-        )
+        if self.printess:
+            settable = self._channel(key) is not None
+        else:
+            settable = _HEATER.match(key) is not None
+        return SensorInfo(sensor=key, name=sensor.name, min=sensor.min, max=sensor.max, settable=settable)
+
+    def channels(self) -> list[ChannelInfo]:
+        """printess: every configured channel; marlin: none."""
+        if not self.printess:
+            return []
+        return [
+            ChannelInfo(
+                sensor=c.sensor, index=c.index, name=c.name, reply_key=c.reply_key, min=c.min, max=c.max
+            )
+            for c in self.config.channels
+        ]
+
+    def map_reply(
+        self, temperatures: Mapping[str, Mapping[str, float | None]]
+    ) -> dict[str, Mapping[str, float | None]]:
+        """A parsed report by the keys sensors go by here. With several tools
+        Marlin's "T:" repeats the active one's T<n> and is dropped; printess
+        channels go by "I<n>" instead of the reply key they read from, and
+        reply keys no channel reads from stay as they are."""
+        channels = {c.reply_key: c.sensor for c in self.config.channels} if self.printess else {}
+        tools = any(_TOOL.match(key) for key in temperatures)
+        result: dict[str, Mapping[str, float | None]] = {}
+        for key, value in temperatures.items():
+            if key == "T" and tools and key not in channels:
+                continue
+            result[channels.get(key, key)] = value
+        return result
 
     def _order(self, keys: Iterable[str]) -> list[str]:
-        """Configured sensors in config order, then the others by key."""
-        configured = list(self.config.sensors)
+        """Configured sensors (printess channels first) in config order, then
+        the others by key."""
+        configured = [c.sensor for c in self.config.channels] if self.printess else []
+        configured += list(self.config.sensors)
 
         def rank(key: str) -> tuple[int, str]:
             return (configured.index(key), "") if key in configured else (len(configured), key)
 
         return sorted(keys, key=rank)
 
-    def check_target(self, sensor: str, target: float) -> str:
-        """The command that sets `sensor` to `target` (0: off). Raises
-        TargetError if the sensor has no heater or the target is out of range."""
-        command = target_command(sensor, target)
+    def plan_target(self, sensor: str, target: float) -> TargetPlan:
+        """How to set `sensor` to `target` (0: off). Raises TargetError if the
+        sensor has no heater, the target is out of range, or (printess) there
+        is no reading yet to tell heating from cooling."""
+        if not self.printess:
+            command = target_command(sensor, target)
+            self._check_range(sensor, target)
+            return TargetPlan(sensor, target, command)
+        channel = self._channel(sensor)
+        if channel is None:
+            raise TargetError(f"Sensor {sensor} isn't a heater channel")
+        self._check_range(sensor, target)
+        reading = self._latest.get(sensor)
+        actual = None if reading is None else reading.actual
+        command, mode = channel_command(channel, target, actual, self.config.off_command)
+        return TargetPlan(sensor, target, command, mode)
+
+    def _check_range(self, sensor: str, target: float) -> None:
         config = self.sensor(sensor)
         if target != 0 and not config.min <= target <= config.max:
             raise TargetError(
                 f"{config.name} accepts targets from {config.min:g} to {config.max:g} °C (or 0 for off)"
             )
-        return command
+
+    def check_target(self, sensor: str, target: float) -> str:
+        """The command that sets `sensor` to `target` (0: off); see plan_target."""
+        return self.plan_target(sensor, target).command
+
+    def target_sent(self, plan: TargetPlan) -> None:
+        """printess: the target went out; the channel has it (and its
+        direction) until the reply says otherwise."""
+        if not self.printess:
+            return
+        self._sent[plan.sensor] = (plan.target, plan.mode)
+        reading = self._latest.get(plan.sensor)
+        if reading is not None:
+            self._latest[plan.sensor] = self._with_target(
+                plan.sensor, reading.timestamp, reading.actual, None
+            )
+            self._publish_status()
+
+    def note_command(self, line: str) -> None:
+        """printess: a line sent by hand (Take Over) that sets a channel's
+        target, M104 I<n> T<°C> H|C or the off command, counts as sent."""
+        if not self.printess:
+            return
+        line = " ".join(line.split()).upper()
+        for channel in self.config.channels:
+            if line == " ".join(self.config.off_command.format(n=channel.index).split()).upper():
+                self.target_sent(TargetPlan(channel.sensor, 0.0, line))
+                return
+        match = _CHANNEL_TARGET.match(line)
+        if match and self._channel(f"I{match.group(1)}") is not None:
+            mode: HeaterMode = "heat" if match.group(3) == "H" else "cool"
+            self.target_sent(TargetPlan(f"I{match.group(1)}", float(match.group(2)), line, mode))
+
+    def _with_target(self, key: str, timestamp: float, actual: float, target: float | None) -> Reading:
+        """A reading of `key`. printess: without a target in the reply, the
+        one last sent; the direction it was sent with while it is that one."""
+        sent = self._sent.get(key)
+        if sent is None:
+            return Reading(timestamp, actual, target)
+        if target is None:
+            target = sent[0]
+        return Reading(timestamp, actual, target, sent[1] if target == sent[0] else None)
 
     @property
     def latest(self) -> dict[str, Reading]:
@@ -202,6 +338,9 @@ class TemperatureStore:
             return "off"
         if abs(reading.actual - reading.target) <= self.config.target_band_c:
             return "at_target"
+        if reading.mode is not None:
+            # printess: the channel only moves the way it was told to
+            return "heating" if reading.mode == "heat" else "cooling"
         return "heating" if reading.actual < reading.target else "cooling"
 
     def state(self) -> TemperatureState:
@@ -230,10 +369,41 @@ class TemperatureStore:
                     actual=reading.actual,
                     target=reading.target,
                     status=self.heater_status(reading),
+                    mode=reading.mode,
                     timestamp=reading.timestamp,
                 )
             )
-        return TemperatureStatus(state=state, monitor=self._monitor(), sensors=sensors)
+        return TemperatureStatus(
+            state=state,
+            monitor=self._monitor(),
+            sensors=sensors,
+            protocol=self.config.protocol,
+            channels=self.channels(),
+        )
+
+    def test_readings(
+        self, temperatures: Mapping[str, Mapping[str, float | None]]
+    ) -> list[SensorTestReading]:
+        """The sensors in one parsed M105 reply (Setup's sensor test), named
+        and in order, without recording them."""
+        mapped = self.map_reply(temperatures)
+        result = []
+        for key in self._order(mapped):
+            actual = mapped[key]["actual"]
+            if actual is None:
+                continue
+            reading = self._with_target(key, 0.0, actual, mapped[key].get("target"))
+            result.append(
+                SensorTestReading(
+                    sensor=key,
+                    name=self.sensor(key).name,
+                    actual=actual,
+                    target=reading.target,
+                    status=self.heater_status(reading),
+                    mode=reading.mode,
+                )
+            )
+        return result
 
     def _publish_status(self) -> None:
         status = self.status()
@@ -275,7 +445,8 @@ class TemperatureStore:
         if event["type"] == "temperature":
             self.record(event["temperatures"])
         elif event["type"] == "printer":
-            # Readings from before don't describe the printer now
+            # Readings (and targets sent) from before don't describe the printer now
+            self._sent.clear()
             self._reset(connected=event["connected"])
             if event["connected"]:
                 self._start_watchdog()
@@ -310,17 +481,13 @@ class TemperatureStore:
             return
         now = self._clock()
         session_id = self._session_id()
-        tools = any(_TOOL.match(key) for key in temperatures)
         self._last_report = now
         self._warned.discard(("report", ""))
-        for key, value in temperatures.items():
-            if key == "T" and tools:
-                # With several tools, Marlin's "T:" repeats the active one's T<n>
-                continue
+        for key, value in self.map_reply(temperatures).items():
             actual = value["actual"]
             if actual is None:
                 continue
-            reading = Reading(now, actual, value.get("target"))
+            reading = self._with_target(key, now, actual, value.get("target"))
             self._latest[key] = reading
             history = self._history.setdefault(key, deque())
             history.append(reading)

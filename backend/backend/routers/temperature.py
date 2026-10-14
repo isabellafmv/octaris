@@ -87,8 +87,10 @@ class TemperatureTargetRequest(BaseModel):
 async def set_temperature_target(
     body: TemperatureTargetRequest, session: PrinterSession = Depends(get_session)
 ):
-    """Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C).
-    Allowed while printing."""
+    """Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with
+    the lab firmware (protocol "printess"), a channel's (I<n>) with
+    M104 I<n> T<°C> H to heat or C to cool, chosen from its current reading
+    (refused without one). Allowed while printing."""
     command = await session.set_temperature_target(body.sensor, body.target)
     return {"status": "ok", "sensor": body.sensor, "target": body.target, "command": command}
 

@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { useTemperature } from '../stores/temperature'
 
 interface GcodeInputProps {
   disabled: boolean
@@ -29,10 +30,31 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
   const inputRef = useRef<HTMLInputElement>(null)
   // Inline M104 field: null while closed, else the raw °C text
   const [tempText, setTempText] = useState<string | null>(null)
+  // Lab firmware (protocol "printess"): M104 sets one of its heater channels
+  const channels = useTemperature((s) => s.status?.channels) ?? []
+  const printess = useTemperature((s) => s.status?.protocol) === 'printess'
+  const [tempSensor, setTempSensor] = useState<string | null>(null)
+  const tempChannel = channels.find((c) => c.sensor === tempSensor) ?? channels[0]
+
+  // The protocol comes with the temperature status
+  useEffect(() => {
+    if (useTemperature.getState().status) return
+    api
+      .getTemperature()
+      .then(useTemperature.getState().applyStatus)
+      .catch(() => {})
+  }, [])
 
   const commandsDisabled = disabled || printing
 
   // Resolves true once the command was accepted
+  // Add to history (dedup consecutive identical commands)
+  const remember = (line: string): void =>
+    setHistory((prev) => {
+      const updated = prev[prev.length - 1] === line ? prev : [...prev, line]
+      return updated.length > MAX_HISTORY ? updated.slice(-MAX_HISTORY) : updated
+    })
+
   const sendCommand = useCallback(async (line: string): Promise<boolean> => {
     const trimmed = line.trim()
     if (!trimmed) return false
@@ -41,11 +63,7 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
     setSending(true)
     try {
       await api.sendGcode(trimmed)
-      // Add to history (dedup consecutive identical commands)
-      setHistory((prev) => {
-        const updated = prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed]
-        return updated.length > MAX_HISTORY ? updated.slice(-MAX_HISTORY) : updated
-      })
+      remember(trimmed)
       setInput('')
       setHistoryIndex(-1)
       return true
@@ -72,12 +90,31 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
   }, [])
 
   const tempValue = parseFloat(tempText ?? '')
-  const tempValid = tempValue >= MIN_TEMP_C && tempValue <= MAX_TEMP_C
+  const tempMin = printess ? (tempChannel?.min ?? MIN_TEMP_C) : MIN_TEMP_C
+  const tempMax = printess ? (tempChannel?.max ?? MAX_TEMP_C) : MAX_TEMP_C
+  // A channel also takes 0 (off)
+  const tempValid = (tempValue >= tempMin && tempValue <= tempMax) || (printess && tempValue === 0)
   const tempInvalid = !!tempText && !tempValid
 
   const handleSetTemp = async (): Promise<void> => {
     if (!tempValid || sending) return
-    if (await sendCommand(`M104 S${tempValue}`)) setTempText(null)
+    if (!printess) {
+      if (await sendCommand(`M104 S${tempValue}`)) setTempText(null)
+      return
+    }
+    if (!tempChannel) return
+    // The backend picks H (heat) or C (cool) from the channel's current reading
+    setError(null)
+    setSending(true)
+    try {
+      const { command } = await api.setTemperatureTarget(tempChannel.sensor, tempValue)
+      remember(command)
+      setTempText(null)
+    } catch (e) {
+      setError((e instanceof Error && e.message) || 'Setting the temperature failed')
+    } finally {
+      setSending(false)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -163,7 +200,7 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
           <button
             onClick={() => setTempText((t) => (t === null ? '' : null))}
             disabled={commandsDisabled || sending}
-            title="M104 S<°C>"
+            title={printess ? 'M104 I<channel> T<°C> H|C' : 'M104 S<°C>'}
             aria-expanded={tempText !== null}
             className={`px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed ${
               tempText !== null
@@ -172,17 +209,36 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
             }`}
           >
             <span className="block">Set Temp</span>
-            <span className="block text-xs opacity-60 font-mono">M104</span>
+            <span className="block text-xs opacity-60 font-mono">
+              {printess ? 'M104 I…' : 'M104'}
+            </span>
           </button>
           {tempText !== null && (
             <div className="col-span-2">
               <div className="flex gap-2">
+                {printess && (
+                  <select
+                    value={tempChannel?.sensor ?? ''}
+                    onChange={(e) => setTempSensor(e.target.value)}
+                    disabled={commandsDisabled || sending || channels.length === 0}
+                    aria-label="Heater channel"
+                    className="rounded px-2 py-2 font-mono text-sm bg-surface-card border border-border text-text"
+                  >
+                    {channels.map((c) => (
+                      <option key={c.sensor} value={c.sensor}>
+                        {c.sensor} · {c.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <label className="flex-1 flex items-center gap-2 rounded px-3 py-2 bg-surface-card border border-border">
-                  <span className="font-mono text-sm text-text-muted">M104 S</span>
+                  <span className="font-mono text-sm text-text-muted">
+                    {printess ? 'T' : 'M104 S'}
+                  </span>
                   <input
                     type="number"
-                    min={MIN_TEMP_C}
-                    max={MAX_TEMP_C}
+                    min={printess ? 0 : tempMin}
+                    max={tempMax}
                     step="1"
                     autoFocus
                     value={tempText}
@@ -210,7 +266,13 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
               </div>
               {tempInvalid && (
                 <p className="mt-1 text-xs text-danger">
-                  Temperature must be between {MIN_TEMP_C} and {MAX_TEMP_C} °C
+                  Temperature must be between {tempMin} and {tempMax} °C
+                  {printess && ', or 0 for off'}
+                </p>
+              )}
+              {printess && !tempInvalid && (
+                <p className="mt-1 text-xs text-text-subtle">
+                  H (heat) or C (cool) is chosen from the channel&apos;s current reading
                 </p>
               )}
             </div>

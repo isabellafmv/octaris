@@ -55,7 +55,6 @@ from backend.schemas import (
     ExtrusionRateEvent,
     NozzleCalibration,
     PrinterEvent,
-    SensorTestReading,
     SensorTestResponse,
     Settings,
     SettingsEvent,
@@ -391,7 +390,10 @@ class PrinterSession:
         if reason:
             self.worker.invalidate_checkpoint(reason)
         self.worker.manual_command()
-        return await self.serial.send(line)
+        reply = await self.serial.send(line)
+        # printess: a channel target typed by hand counts as one set here
+        self.temperature.note_command(line)
+        return reply
 
     async def set_temperature_target(self, sensor: str, target: float) -> str:
         """Set a heater's target (0: off); returns the command sent.
@@ -399,15 +401,16 @@ class PrinterSession:
         Allowed while printing, unlike other manual commands: it moves
         nothing, and M104/M140/M141 return at once (M109/M190, which wait
         for the temperature, are never sent). It goes out between two print
-        lines.
+        lines. With the lab firmware (printess) it is M104 I<n> T<°C> H|C.
         """
         try:
-            command = self.temperature.check_target(sensor, target)
+            plan = self.temperature.plan_target(sensor, target)
         except TargetError as exc:
             raise NotReady(str(exc)) from exc
         self._require_connection()
-        await self.serial.send(command)
-        return command
+        await self.serial.send(plan.command)
+        self.temperature.target_sent(plan)
+        return plan.command
 
     async def test_sensors(self) -> SensorTestResponse:
         """Send one M105 (whether or not temperature control is on) and
@@ -417,16 +420,7 @@ class PrinterSession:
         found: dict[str, dict[str, float | None]] = {}
         for line in (reply or "").splitlines():
             found.update(parse_temperatures(line) or {})
-        if any(key.startswith("T") and key != "T" for key in found):
-            found.pop("T", None)  # with several tools, "T:" repeats the active one
-        sensors = [
-            SensorTestReading(
-                sensor=key, name=self.temperature.sensor(key).name, actual=actual, target=value["target"]
-            )
-            for key, value in found.items()
-            if (actual := value["actual"]) is not None
-        ]
-        return SensorTestResponse(reply=reply, sensors=sensors)
+        return SensorTestResponse(reply=reply, sensors=self.temperature.test_readings(found))
 
     def retry_temperature(self) -> None:
         """Start temperature monitoring again after polling paused."""
