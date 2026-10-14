@@ -7,13 +7,12 @@ are the only guard; they work in the coordinate system set by the G92 zero.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from backend.checkpoint import fmt
-from backend.gcode_processor import AXES, MachineState, parse_words, step
-from backend.printer import HEIGHT_AXES, PLUNGER_AXES, AxisRange, BedLimits
+from backend.gcode_processor import MachineState, parse_words, step
+from backend.printer import Axes, AxisRange, BedLimits
 
-__all__ = ["PLUNGER_AXES"]
 # Warn when a plunger has less than this fraction of its travel left
 LOW_TRAVEL_FRACTION = 0.10
 
@@ -22,18 +21,19 @@ class LimitError(Exception):
     pass
 
 
-def _ranges(bed: BedLimits) -> dict[str, AxisRange]:
+def _ranges(bed: BedLimits, height_axes: Iterable[str]) -> dict[str, AxisRange]:
     """Every nozzle's height motor has the z range."""
-    return {"X": bed.x, "Y": bed.y, **dict.fromkeys(HEIGHT_AXES, bed.z)}
+    return {"X": bed.x, "Y": bed.y, **dict.fromkeys(height_axes, bed.z)}
 
 
 def _describe(axis: str, value: float, allowed: AxisRange) -> str:
     return f"{axis} to {fmt(value)} mm, outside the bed ({fmt(allowed.min)} to {fmt(allowed.max)} mm)"
 
 
-def check_jog(bed: BedLimits, axis: str, current: float, distance: float) -> None:
-    """Raise LimitError if jogging `axis` by `distance` from `current` leaves the bed."""
-    allowed = _ranges(bed).get(axis)
+def check_jog(bed: BedLimits, height_axes: Iterable[str], axis: str, current: float, distance: float) -> None:
+    """Raise LimitError if jogging `axis` by `distance` from `current` leaves
+    the bed. `height_axes` (the profile's) have the bed's z range."""
+    allowed = _ranges(bed, height_axes).get(axis)
     if allowed is None:
         return
     target = current + distance
@@ -41,24 +41,25 @@ def check_jog(bed: BedLimits, axis: str, current: float, distance: float) -> Non
         raise LimitError(f"This jog would move {_describe(axis, target, allowed)}")
 
 
-def check_move_to(bed: BedLimits, axis: str, target: float) -> None:
+def check_move_to(bed: BedLimits, height_axes: Iterable[str], axis: str, target: float) -> None:
     """Raise LimitError if moving `axis` to the absolute `target` leaves the bed."""
-    allowed = _ranges(bed).get(axis)
+    allowed = _ranges(bed, height_axes).get(axis)
     if allowed is not None and not allowed.min <= target <= allowed.max:
         raise LimitError(f"This move would go {_describe(axis, target, allowed)}")
 
 
-def start_state(position: dict[str, float] | None) -> MachineState:
-    """A MachineState at `position` (as parsed from M114), absolute mode."""
+def start_state(position: Mapping[str, float] | None, axes: Iterable[str]) -> MachineState:
+    """A MachineState of `axes` (a profile's Axes.all) at `position` (as
+    parsed from M114), absolute mode."""
     position = position or {}
-    return MachineState(pos={ax: position.get(ax) for ax in AXES})
+    return MachineState(pos={ax: position.get(ax) for ax in axes})
 
 
 def check_path(
     bed: BedLimits,
     lines: Sequence[str],
-    start: MachineState | None = None,
-    height_axes: Sequence[str] = ("Z",),
+    start: MachineState | None,
+    height_axes: Sequence[str],
 ) -> None:
     """Raise LimitError if any move in `lines` ends outside the bed.
 
@@ -71,12 +72,12 @@ def check_path(
     relative move before the program or `start` set it) can't be checked;
     pass the printer's current position as `start` to cover those.
     """
-    ranges = {axis: allowed for axis, allowed in _ranges(bed).items() if axis in ("X", "Y", *height_axes)}
-    state = start or start_state(None)
+    ranges = _ranges(bed, height_axes)
+    state = start or MachineState.unknown(ranges)
     for number, line in enumerate(lines, start=1):
         state = step(state, line)
         for axis, allowed in ranges.items():
-            value = state.pos[axis]
+            value = state.pos.get(axis)
             if value is not None and not allowed.min <= value <= allowed.max:
                 raise LimitError(
                     f"The print leaves the bed: line {number} ({line.strip()}) moves "
@@ -90,8 +91,10 @@ def _is_g92(line: str) -> bool:
     return bool(words) and words[0] == ("G", 92)
 
 
-def plunger_step(before: MachineState, after: MachineState, line: str) -> dict[str, float]:
-    """How far each plunger physically moved on `line` (negative = pushed).
+def plunger_step(
+    before: MachineState, after: MachineState, line: str, plungers: Iterable[str]
+) -> dict[str, float]:
+    """How far each of `plungers` physically moved on `line` (negative = pushed).
 
     G92 changes the coordinates without moving anything, and a move from an
     unknown position can't be measured, so both count as 0.
@@ -99,38 +102,40 @@ def plunger_step(before: MachineState, after: MachineState, line: str) -> dict[s
     if _is_g92(line):
         return {}
     moved = {}
-    for axis in PLUNGER_AXES:
-        old, new = before.pos[axis], after.pos[axis]
+    for axis in plungers:
+        old, new = before.pos.get(axis), after.pos.get(axis)
         if old is not None and new is not None and new != old:
             moved[axis] = new - old
     return moved
 
 
-def plunger_travel_needed(lines: Iterable[str], start: MachineState | None = None) -> dict[str, float]:
-    """The furthest each plunger gets pushed from where it starts, in mm.
+def plunger_travel_needed(
+    lines: Iterable[str], start: MachineState, plungers: Sequence[str]
+) -> dict[str, float]:
+    """The furthest each of `plungers` gets pushed from where it starts, in mm.
 
     Plungers extrude in the negative direction. Retracts pull back and the
     following prime pushes forward again, so the peak displacement, not the
     sum of all pushes, is the travel the syringe must have.
     """
-    state = start or start_state(None)
-    displacement = {axis: 0.0 for axis in PLUNGER_AXES}
-    peak = {axis: 0.0 for axis in PLUNGER_AXES}
+    state = start
+    displacement = {axis: 0.0 for axis in plungers}
+    peak = {axis: 0.0 for axis in plungers}
     for line in lines:
         after = step(state, line)
-        for axis, delta in plunger_step(state, after, line).items():
+        for axis, delta in plunger_step(state, after, line, plungers).items():
             displacement[axis] += delta
             peak[axis] = max(peak[axis], -displacement[axis])
         state = after
     return peak
 
 
-def check_plunger_travel(needed: dict[str, float], available_mm: float) -> None:
-    for axis in PLUNGER_AXES:
+def check_plunger_travel(needed: dict[str, float], available_mm: float, axes: Axes) -> None:
+    """Raise LimitError if a plunger of `axes` needs more than `available_mm`."""
+    for axis in axes.plungers:
         if needed.get(axis, 0.0) > available_mm:
-            side = "left" if axis == "B" else "right"
             raise LimitError(
-                f"This print needs {fmt(needed[axis])} mm of {side} plunger ({axis}) "
+                f"This print needs {fmt(needed[axis])} mm of {axes.plunger_name(axis)} plunger ({axis}) "
                 f"travel, but a full syringe only has {fmt(available_mm)} mm "
                 f"(syringe_travel_mm in config.json). Reduce the print, or lower "
                 f"the flow rate or flow multiplier."

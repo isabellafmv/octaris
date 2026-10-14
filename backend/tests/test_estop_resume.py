@@ -17,7 +17,7 @@ from backend.main import app
 from backend.queue_worker import PrintStatus
 from backend.session import LoadedPrint
 from backend.virtual_printer import Match, VirtualPrinter
-from tests.nozzles import LEFT
+from tests.nozzles import AXES, LEFT
 from tests.serial_fakes import attach
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -112,7 +112,7 @@ def worker_index(text: str, occurrence: int = 0) -> int:
 
 
 def test_state_simulation_on_fixture():
-    result = process_gcode(RAW_SAMPLE, LEFT)
+    result = process_gcode(RAW_SAMPLE, LEFT, axes=AXES)
     lines = result.lines
     assert len(result.state_before) == len(result.state_after) == len(lines)
     assert result.extrusion_axes == ("B",)
@@ -149,7 +149,7 @@ def test_state_simulation_on_fixture():
 
 def test_parse_m114():
     reply = "X:15.00 Y:10.00 Z:0.30 A:0.00 B:-0.25 C:0.00 Count X:12000 Y:8000 Z:240\nok"
-    assert parse_m114(reply) == {
+    assert parse_m114(reply, AXES.all) == {
         "X": 15.0,
         "Y": 10.0,
         "Z": 0.3,
@@ -157,7 +157,9 @@ def test_parse_m114():
         "B": -0.25,
         "C": 0.0,
     }
-    assert parse_m114("ok") is None
+    assert parse_m114("ok", AXES.all) is None
+    # Only X, Y and the profile's axes: not E, nor an axis it doesn't have
+    assert parse_m114("X:1.00 Y:2.00 Z:3.00 E:4.00 U:5.00", ("Z", "B")) == {"X": 1, "Y": 2, "Z": 3}
 
 
 # --- locating the stop line ------------------------------------------------
@@ -180,7 +182,7 @@ def _segments(before, after, indices=None):
 
 @pytest.mark.parametrize("b, expected_line", [(-0.5, 2), (-2.5, 4), (-2.47, 4)])
 def test_locate_line_on_self_crossing_path(b, expected_line):
-    before, after = simulate_states(SELF_CROSSING)
+    before, after = simulate_states(SELF_CROSSING, MachineState.unknown(AXES.all))
     point = {"X": 5.0, "Y": 5.0, "Z": 0.3, "A": 7.0, "B": b, "C": 0.0}
 
     located = locate_line(_segments(before, after), SELF_CROSSING, point)
@@ -192,7 +194,7 @@ def test_locate_line_on_self_crossing_path(b, expected_line):
 
 
 def test_locate_line_rejects_point_off_every_path():
-    before, after = simulate_states(SELF_CROSSING)
+    before, after = simulate_states(SELF_CROSSING, MachineState.unknown(AXES.all))
     segments = _segments(before, after)
 
     # On the XY path of line 4, but with B beyond the tolerance
@@ -432,7 +434,13 @@ async def test_resume_after_a_plunger_only_move(client, printer):
 def test_resume_commands_after_the_head_was_moved():
     zero = MachineState(pos={"X": 0, "Y": 0, "Z": 0, "A": None, "B": -2, "C": None})
     _, after = simulate_states(["G91", "G1 X1 Y1 Z1 F250", "M106"], zero)
-    cp = Checkpoint(line=2, position={"X": 1, "Y": 1, "Z": 1, "B": -2}, after=after[2], retract={"B": 0.2})
+    cp = Checkpoint(
+        line=2,
+        position={"X": 1, "Y": 1, "Z": 1, "B": -2},
+        after=after[2],
+        height_axes=("Z",),
+        retract={"B": 0.2},
+    )
 
     # Jogged 3 mm along X and 1 mm up since the stop: back the same way.
     assert build_resume_commands(cp, {"X": 4, "Y": 1, "Z": 2, "B": -1.8}) == [
@@ -446,8 +454,8 @@ def test_resume_commands_after_the_head_was_moved():
 
 
 def test_resume_commands_keep_an_absolute_program_absolute():
-    _, after = simulate_states(["G90", "G1 X1 Y1 Z1 F250"])
-    cp = Checkpoint(line=1, position={"X": 0.5, "Y": 0.5, "Z": 0.5}, after=after[1])
+    _, after = simulate_states(["G90", "G1 X1 Y1 Z1 F250"], MachineState.unknown(AXES.all))
+    cp = Checkpoint(line=1, position={"X": 0.5, "Y": 0.5, "Z": 0.5}, after=after[1], height_axes=("Z",))
     assert build_resume_commands(cp, {"X": 0.5, "Y": 0.5, "Z": 0.5}) == [
         "G91",
         "G1 X0.5 Y0.5 Z0.5 F250",

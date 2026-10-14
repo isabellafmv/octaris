@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { GcodeSaveError, api } from '../api'
 import {
+  axisLetters,
   errorLine,
   gcodeHighlight,
   gcodeTheme,
@@ -22,6 +23,7 @@ import {
   parseLineTarget,
   setErrorLine
 } from '../gcode/editor'
+import { usePrinter } from '../stores/printer'
 import type { GcodeEditResult } from '../types'
 
 interface GcodeEditorProps {
@@ -84,7 +86,8 @@ export function GcodeEditor({ filename, onSaved, onClose }: GcodeEditorProps): R
               ...historyKeymap,
               ...defaultKeymap
             ]),
-            gcodeHighlight,
+            // The profile can't change while a print is loaded
+            gcodeHighlight(axisLetters(usePrinter.getState().profile)),
             errorLine,
             gcodeTheme,
             EditorView.updateListener.of((update) => {

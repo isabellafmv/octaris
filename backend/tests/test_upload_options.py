@@ -28,7 +28,7 @@ from backend.gcode_processor import (
 )
 from backend.main import app
 from backend.queue_worker import PrintStatus
-from tests.nozzles import BOTH, LEFT
+from tests.nozzles import AXES, BOTH, LEFT
 from tests.test_relative_printing import (
     LAB_FILE,
     RAW_SAMPLE,
@@ -139,17 +139,17 @@ async def test_unchanged_file_leaving_the_bed_is_refused(client):
 
 
 def test_check_as_uploaded_warnings():
-    assert check_as_uploaded(parse(LAB_FILE.splitlines())) == []
-    [warning] = check_as_uploaded(parse(["G91", "G1 X1 F300", "G90", "G1 X0"]))
+    assert check_as_uploaded(parse(LAB_FILE.splitlines()), AXES) == []
+    [warning] = check_as_uploaded(parse(["G91", "G1 X1 F300", "G90", "G1 X0"]), AXES)
     assert warning == "Line 3: G90 switches the print back to absolute positioning"
-    [warning] = check_as_uploaded(parse(["G91", "G1 X1 F500", "G1 X1 F450"]))
+    [warning] = check_as_uploaded(parse(["G91", "G1 X1 F500", "G1 X1 F450"]), AXES)
     assert warning.startswith(
         "2 line(s) set a feed rate above the 400 mm/min limit (first on line 2, up to F500)"
     )
     # The cap is a parameter (config.max_feed_mm_min)
-    assert check_as_uploaded(parse(["G91", "G1 X1 F500"]), max_feed=600) == []
+    assert check_as_uploaded(parse(["G91", "G1 X1 F500"]), AXES, max_feed=600) == []
     with pytest.raises(GcodeValidationError, match="Empty"):
-        check_as_uploaded([])
+        check_as_uploaded([], AXES)
 
 
 # --- an unchanged lab file through the runtime ---------------------------------------

@@ -3,14 +3,20 @@ import type { NozzleSpec, PrinterProfile } from '../types'
 import { usePrintSettings } from './printSettings'
 
 // The printer profile, from the backend's snapshot (on connect) and
-// printer_profile events. null until the first snapshot.
+// printer_profile events. null until the first snapshot. `profiles` is
+// every profile there is (GET /printer/profiles, then printer_profiles
+// events); empty until fetched.
 interface PrinterState {
   profile: PrinterProfile | null
+  profiles: PrinterProfile[]
   setProfile: (profile: PrinterProfile) => void
+  setProfiles: (profiles: PrinterProfile[]) => void
 }
 
 export const usePrinter = create<PrinterState>()((set) => ({
   profile: null,
+  profiles: [],
+  setProfiles: (profiles) => set({ profiles }),
   setProfile: (profile) => {
     set({ profile })
     // Keep the selection to the profile's nozzles

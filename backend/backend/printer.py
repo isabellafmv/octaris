@@ -10,22 +10,76 @@ path, each in place.
 
 The built-in profiles are in BUILTIN_PROFILES; config.json picks one with
 "printer_profile" and can override any of its values, or add profiles,
-under "profiles" (see config.Config).
+under "profiles" (see config.Config). The "Custom" profile is edited in
+the app and kept in settings.json (see session.PrinterSession).
+
+Nothing else in the app knows axis letters: everything that moves, checks
+or reports an axis takes them from the active profile's `axes`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-# The axes the G-code processor knows (see gcode_processor.AXES): every
-# nozzle's height axis must be one of HEIGHT_AXES and its plunger one of
-# PLUNGER_AXES. A printer with other axis letters (Printess 2.0) needs its
-# letters added here and to gcode_processor.AXIS_DECIMALS.
-HEIGHT_AXES = ("Z", "A")
-PLUNGER_AXES = ("B", "C")
+# The letters a nozzle's height motor or plunger can have: Marlin's axis
+# names, except X/Y (the stage) and E (the slicer's extruder, which the
+# processing turns into plunger moves)
+NOZZLE_AXIS_LETTERS = ("Z", "A", "B", "C", "I", "J", "K", "U", "V", "W")
+# How many nozzles a profile may have
+MAX_NOZZLES = 6
+# Steps/mm sent for every axis on connect (M92), unless a profile sets its own
+DEFAULT_STEPS_PER_MM = 800.0
+# The id of the profile edited in the app
+CUSTOM_PROFILE_ID = "custom"
+CUSTOM_PROFILE_NAME = "Custom"
+
+
+@dataclass(frozen=True)
+class Axes:
+    """A profile's axes: X/Y, then each nozzle's height motor and plunger,
+    left to right. `names` are the nozzles' names, in the same order."""
+
+    heights: tuple[str, ...]
+    plungers: tuple[str, ...]
+    names: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, nozzles: Sequence[NozzleSpec]) -> Axes:
+        return cls(
+            heights=tuple(n.height_axis for n in nozzles),
+            plungers=tuple(n.plunger_axis for n in nozzles),
+            names=tuple(n.name for n in nozzles),
+        )
+
+    @property
+    def all(self) -> tuple[str, ...]:
+        """Every axis: X, Y, the heights, the plungers."""
+        return ("X", "Y", *self.heights, *self.plungers)
+
+    @property
+    def stage(self) -> tuple[str, ...]:
+        """X, Y and the heights: the axes the bed limits apply to."""
+        return ("X", "Y", *self.heights)
+
+    def decimals(self, axis: str) -> int:
+        """Decimals the axis is written with in a converted print: Cura's own
+        resolution for X/Y/Z (3) and for E (5), which the plungers come from."""
+        return 5 if axis in self.plungers else 3
+
+    def plunger_name(self, axis: str) -> str:
+        """The name of the plunger's nozzle, lower case ("left" for the Printess 1.0's B)."""
+        if axis in self.plungers and len(self.names) == len(self.plungers):
+            return self.names[self.plungers.index(axis)].lower()
+        return axis
+
+    def describe_plungers(self) -> str:
+        """ "B (left) and C (right)"."""
+        parts = [f"{axis} ({self.plunger_name(axis)})" for axis in self.plungers]
+        return " and ".join([", ".join(parts[:-1]), parts[-1]] if len(parts) > 1 else parts)
 
 
 class AxisRange(BaseModel):
@@ -67,23 +121,31 @@ class NozzleSpec(BaseModel):
     """One nozzle: its height motor, its plunger, and where it sits."""
 
     id: str = Field(min_length=1)
-    name: str
+    name: str = Field(min_length=1)
+    # Each one of NOZZLE_AXIS_LETTERS, and different from each other
     height_axis: str
     plunger_axis: str
     # mm from the leftmost nozzle (the profile's first)
     offset_x: float = 0.0
     offset_y: float = 0.0
 
+    @field_validator("height_axis", "plunger_axis", mode="before")
+    @classmethod
+    def _upper(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
+
     @model_validator(mode="after")
     def _check_axes(self) -> NozzleSpec:
-        if self.height_axis not in HEIGHT_AXES:
+        for field_name in ("height_axis", "plunger_axis"):
+            axis = getattr(self, field_name)
+            if axis not in NOZZLE_AXIS_LETTERS:
+                raise ValueError(
+                    f"nozzle {self.id!r}: {field_name} {axis!r} isn't one of {', '.join(NOZZLE_AXIS_LETTERS)}"
+                )
+        if self.height_axis == self.plunger_axis:
             raise ValueError(
-                f"nozzle {self.id!r}: height_axis {self.height_axis!r} isn't one of {', '.join(HEIGHT_AXES)}"
-            )
-        if self.plunger_axis not in PLUNGER_AXES:
-            raise ValueError(
-                f"nozzle {self.id!r}: plunger_axis {self.plunger_axis!r} "
-                f"isn't one of {', '.join(PLUNGER_AXES)}"
+                f"nozzle {self.id!r}: the height and plunger axis must be different "
+                f"(both are {self.height_axis})"
             )
         return self
 
@@ -92,12 +154,15 @@ class PrinterProfile(BaseModel):
     id: str = Field(min_length=1)
     name: str
     # Left to right
-    nozzles: list[NozzleSpec] = Field(min_length=1)
+    nozzles: list[NozzleSpec] = Field(min_length=1, max_length=MAX_NOZZLES)
     bed: BedLimits = BedLimits()
     build_volume: BuildVolume = BuildVolume()
     # The nozzles' offset_x/offset_y have been measured on the printer.
     # Prints with more than one nozzle are refused until they are.
     nozzle_offset_measured: bool = False
+    # Steps/mm of every axis, sent with M92 on connect (EEPROM is disabled
+    # on the board)
+    steps_per_mm: float = Field(default=DEFAULT_STEPS_PER_MM, gt=0)
 
     @model_validator(mode="after")
     def _check_nozzles(self) -> PrinterProfile:
@@ -105,9 +170,23 @@ class PrinterProfile(BaseModel):
         if len(set(ids)) != len(ids):
             raise ValueError(f"profile {self.id!r}: nozzle ids must be different ({', '.join(ids)})")
         axes = [ax for n in self.nozzles for ax in (n.height_axis, n.plunger_axis)]
-        if len(set(axes)) != len(axes):
-            raise ValueError(f"profile {self.id!r}: each nozzle needs its own height and plunger axis")
+        repeated = sorted({ax for ax in axes if axes.count(ax) > 1})
+        if repeated:
+            raise ValueError(
+                f"profile {self.id!r}: each nozzle needs its own height and plunger axis "
+                f"({', '.join(repeated)} is used twice)"
+            )
         return self
+
+    @property
+    def axes(self) -> Axes:
+        return Axes.of(self.nozzles)
+
+    @property
+    def steps_per_mm_command(self) -> str:
+        """The M92 sent on connect: X, Y and every axis of the profile."""
+        steps = f"{self.steps_per_mm:g}"
+        return "M92 " + " ".join(f"{axis}{steps}" for axis in self.axes.all)
 
     def nozzle(self, nozzle_id: str) -> NozzleSpec:
         for nozzle in self.nozzles:
@@ -163,5 +242,41 @@ def build_profiles(overrides: dict[str, dict[str, Any]] | None = None) -> dict[s
     a profile, which then needs all its values."""
     raw = {pid: dict(profile) for pid, profile in BUILTIN_PROFILES.items()}
     for pid, override in (overrides or {}).items():
+        if pid == CUSTOM_PROFILE_ID:
+            raise ValueError(f"The profile id {pid!r} is kept for the profile edited in the app")
         raw[pid] = _merge(raw.get(pid, {}), {**override, "id": pid})
     return {pid: PrinterProfile.model_validate(profile) for pid, profile in raw.items()}
+
+
+def default_axes() -> Axes:
+    """The default profile's axes, for a serial manager, queue worker or
+    virtual printer made without a profile (the session sets the active
+    profile's)."""
+    return PrinterProfile.model_validate(BUILTIN_PROFILES[DEFAULT_PROFILE]).axes
+
+
+class NozzleFields(BaseModel):
+    """A nozzle as the app's editor sends it: checked by save_custom_profile,
+    which reports every problem in words, rather than by FastAPI."""
+
+    id: str
+    name: str
+    height_axis: str
+    plunger_axis: str
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+
+
+def custom_profile(
+    base: PrinterProfile, nozzles: Sequence[NozzleFields | dict[str, Any]], nozzle_offset_measured: bool
+) -> PrinterProfile:
+    """The Custom profile: `base`'s bed, build volume and steps/mm, with
+    these nozzles. Raises pydantic.ValidationError for invalid nozzles."""
+    data = base.model_dump()
+    data.update(
+        id=CUSTOM_PROFILE_ID,
+        name=CUSTOM_PROFILE_NAME,
+        nozzles=[n.model_dump() if isinstance(n, BaseModel) else n for n in nozzles],
+        nozzle_offset_measured=nozzle_offset_measured,
+    )
+    return PrinterProfile.model_validate(data)

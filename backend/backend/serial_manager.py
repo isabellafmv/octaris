@@ -34,7 +34,8 @@ import serial
 import serial.tools.list_ports
 
 from backend.checkpoint import parse_m114
-from backend.gcode_processor import AXES, MachineState, step
+from backend.gcode_processor import MachineState, step
+from backend.printer import Axes, default_axes
 from backend.schemas import Event, PrinterEvent, SerialLogEvent, TemperatureEvent, TemperatureMonitor
 
 logger = logging.getLogger(__name__)
@@ -154,10 +155,6 @@ def parse_temperatures(line: str) -> dict[str, dict[str, float | None]] | None:
     }
 
 
-def _unknown_position(relative: bool = False) -> MachineState:
-    return MachineState(pos={ax: None for ax in AXES}, relative=relative)
-
-
 @dataclass
 class _Pending:
     """The one command in flight. While set, nothing else may be sent."""
@@ -198,7 +195,11 @@ class SerialManager:
         on_traffic: Callable[[SerialLogEntry], None] | None = None,
         temperature_enabled: bool = False,
         on_monitor: Callable[[], None] | None = None,
+        axes: Axes | None = None,
     ):
+        # The printer profile's axes: the ones tracked and read from M114
+        # (see set_axes)
+        self._axes = axes or default_axes()
         self._serial: serial.Serial | None = None
         self._port: str | None = None
         self._baud_rate: int = 115200
@@ -253,11 +254,23 @@ class SerialManager:
         # Where the printer was last commanded to go, from every line written
         # (G-code semantics via gcode_processor.step) and every M114 reply.
         # Axes are None while unknown.
-        self._state = _unknown_position()
+        self._state = self._unknown_position()
         self._log_buffer: deque[SerialLogEntry] = deque(maxlen=SERIAL_LOG_MAX_ENTRIES)
         # Receives every serial log entry as it is made, from whichever thread
         # made it, in order (unlike on_event, which runs later on the loop).
         self._on_traffic = on_traffic
+
+    @property
+    def axes(self) -> Axes:
+        return self._axes
+
+    def set_axes(self, axes: Axes) -> None:
+        """Track `axes` (another printer profile's) from now on, all unknown."""
+        self._axes = axes
+        self._state = self._unknown_position(self._state.relative)
+
+    def _unknown_position(self, relative: bool = False) -> MachineState:
+        return MachineState.unknown(self._axes.all, relative)
 
     @property
     def log_buffer(self) -> list[dict[str, Any]]:
@@ -339,7 +352,7 @@ class SerialManager:
             self._baud_rate = baud_rate
         self._resync = True
         self._stale_ok = False
-        self._state = _unknown_position()
+        self._state = self._unknown_position()
         with self._state_lock:
             self._emergency_oks.clear()
         stop = threading.Event()
@@ -367,7 +380,7 @@ class SerialManager:
         self._set_monitor("idle" if self._temperature_enabled else "off")
         self._stop_reader()
         ser, self._serial = self._serial, None
-        self._state = _unknown_position()
+        self._state = self._unknown_position()
         if ser is not None:
             try:
                 ser.close()
@@ -462,7 +475,7 @@ class SerialManager:
         stripped = line.strip()
         # A quick stop (M410) halts mid-move: the position is unknown until
         # the next M114.
-        self._state = _unknown_position(self._state.relative)
+        self._state = self._unknown_position(self._state.relative)
         with self._state_lock:
             self._emergency_oks.append(self._pending)
         try:
@@ -592,7 +605,7 @@ class SerialManager:
             if isinstance(exc, SerialTimeout) and not poll:
                 # Unknown whether (or when) the printer acts on it (a poll
                 # moves nothing)
-                self._state = _unknown_position(self._state.relative)
+                self._state = self._unknown_position(self._state.relative)
             if number is not None:
                 # The printer may or may not have taken this line. Re-use its
                 # number for the retry, and agree on it with M110 first.
@@ -607,9 +620,9 @@ class SerialManager:
                 if self._pending is pending:
                     self._pending = None
         if words and words[0].upper() == "M114":
-            reported = parse_m114(reply)
+            reported = parse_m114(reply, self._axes.all)
             if reported is not None:
-                pos = {ax: reported.get(ax, self._state.pos[ax]) for ax in AXES}
+                pos = {ax: reported.get(ax, self._state.pos.get(ax)) for ax in self._axes.all}
                 self._state = MachineState(pos, self._state.relative, self._state.feed)
         return reply
 
@@ -689,7 +702,8 @@ class SerialManager:
                 self._log("received", line)
             if self._is_emergency_ok(pending):
                 return
-            if pending is not None and pending.sync and not any(map(parse_m114, pending.lines)):
+            position_seen = pending is not None and any(parse_m114(r, self._axes.all) for r in pending.lines)
+            if pending is not None and pending.sync and not position_seen:
                 return  # the late reply to a poll that was given up on
             if temperatures is not None and pending is not None and not pending.wants_temperatures:
                 # Only M105 is acked with "ok T:...": the late reply to a

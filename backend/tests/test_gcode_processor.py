@@ -19,7 +19,7 @@ from backend.gcode_processor import (
     trim_to_print,
     validate,
 )
-from tests.nozzles import BOTH, LEFT, RIGHT
+from tests.nozzles import AXES, BOTH, LEFT, RIGHT
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -438,16 +438,16 @@ def test_unchanged_lines_are_written_back_verbatim():
 
 
 def test_scale_flow():
-    assert scale_flow("G1 F200 X10 Y20 B-1.5", 0.8) == "G1 F200 X10 Y20 B-1.2"
-    assert scale_flow("G1 B-0.2 F400 ; pressurize B", 0.5) == "G1 B-0.1 F400 ; pressurize B"
-    assert scale_flow("G1 X1 Y1", 0.5) == "G1 X1 Y1"
-    assert scale_flow("G1 B-1.5", 1.0) == "G1 B-1.5"
+    assert scale_flow("G1 F200 X10 Y20 B-1.5", 0.8, AXES.plungers) == "G1 F200 X10 Y20 B-1.2"
+    assert scale_flow("G1 B-0.2 F400 ; pressurize B", 0.5, AXES.plungers) == "G1 B-0.1 F400 ; pressurize B"
+    assert scale_flow("G1 X1 Y1", 0.5, AXES.plungers) == "G1 X1 Y1"
+    assert scale_flow("G1 B-1.5", 1.0, AXES.plungers) == "G1 B-1.5"
     # Fixed point, never an exponent Marlin can't read, and no digits lost
-    assert scale_flow("G1 X1 B-0.00005", 0.8) == "G1 X1 B-0.00004"
-    assert scale_flow("G1 X1 B-10.55675", 1.5) == "G1 X1 B-15.835125"
+    assert scale_flow("G1 X1 B-0.00005", 0.8, AXES.plungers) == "G1 X1 B-0.00004"
+    assert scale_flow("G1 X1 B-10.55675", 1.5, AXES.plungers) == "G1 X1 B-15.835125"
     # Only moves: a coordinate reset or a setting isn't a distance to push
-    assert scale_flow("G92 B-4", 0.5) == "G92 B-4"
-    assert scale_flow("M92 B800", 0.5) == "M92 B800"
+    assert scale_flow("G92 B-4", 0.5, AXES.plungers) == "G92 B-4"
+    assert scale_flow("M92 B800", 0.5, AXES.plungers) == "M92 B800"
 
 
 # --- relative conversion -----------------------------------------------------------
@@ -455,7 +455,7 @@ def test_scale_flow():
 
 def test_to_relative_writes_distances_behind_one_g91():
     lines = ["G90", "M82", "G0 F300 X10 Y10 Z0.3", "G1 X20 Y10 B-0.5 F200", "G1 X20.25 Y5 B-0.75"]
-    assert run(to_relative, lines) == [
+    assert run(to_relative, lines, AXES) == [
         "G91 ; relative positioning for the whole print",
         "G0 F300 X10 Y10 Z0.3",
         "G1 X10 B-0.5 F200",  # unchanged axes are left out
@@ -479,7 +479,7 @@ def test_to_relative_follows_the_programs_modes():
         "G92 X0",  # X renumbered: the next X2 is 2 mm on
         "G1 X2",
     ]
-    assert run(to_relative, lines) == [
+    assert run(to_relative, lines, AXES) == [
         "G91 ; relative positioning for the whole print",
         "G1 X5 B-0.5",
         "G1 X1 B-0.5",
@@ -491,7 +491,7 @@ def test_to_relative_follows_the_programs_modes():
 
 
 def test_to_relative_starts_from_the_given_position():
-    assert run(to_relative, ["G90", "G1 X10 Y10"], {"X": 4, "Y": 0}) == [
+    assert run(to_relative, ["G90", "G1 X10 Y10"], AXES, {"X": 4, "Y": 0}) == [
         "G91 ; relative positioning for the whole print",
         "G1 X6 Y10",
     ]
@@ -501,14 +501,14 @@ def test_to_relative_rounding_never_accumulates():
     # 1000 steps of 0.0004 mm: each one rounds to 0 on its own, but the
     # absolute targets they reach don't, and those are what's written.
     lines = ["G91", *["G1 X0.0004"] * 1000, "G1 B-0.000004"]
-    moves = run(to_relative, lines)[1:]
+    moves = run(to_relative, lines, AXES)[1:]
     assert sum(float(line.split("X")[1]) for line in moves if "X" in line) == pytest.approx(0.4)
     assert len(moves) == 400  # one 0.001 move each time the target rounds up; B rounds to 0
 
 
 def test_to_relative_drops_moves_that_go_nowhere():
     lines = ["G90", "G1 X1 Y1", "G1 X1 ; same place", "G1 Y1", "G1 X1 F200"]
-    assert run(to_relative, lines) == [
+    assert run(to_relative, lines, AXES) == [
         "G91 ; relative positioning for the whole print",
         "G1 X1 Y1",
         "; same place",
@@ -518,7 +518,7 @@ def test_to_relative_drops_moves_that_go_nowhere():
 
 def test_to_relative_rejects_homing():
     with pytest.raises(GcodeValidationError, match="Homing"):
-        to_relative(parse(["G90", "G1 X1", "G28 X"]))
+        to_relative(parse(["G90", "G1 X1", "G28 X"]), AXES)
 
 
 def test_relative_extrusion_file_converts_like_absolute_one():
@@ -560,7 +560,7 @@ G1 X5 B-0.5 F200"""
 
 
 def test_lab_relative_file_is_kept_as_it_is():
-    result = process_gcode(LAB_FILE, RIGHT)
+    result = process_gcode(LAB_FILE, RIGHT, axes=AXES)
     assert result.lines == LAB_FILE.splitlines()
     assert result.start_position is None  # starts wherever the head is
     assert result.extrusion_axes == ("B",)

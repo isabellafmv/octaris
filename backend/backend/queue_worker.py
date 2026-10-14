@@ -14,8 +14,9 @@ from backend.checkpoint import (
     locate_line,
     parse_m114,
 )
-from backend.gcode_processor import AXES, PRESSURIZE_FEED, MachineState, scale_flow, step
-from backend.limits import LOW_TRAVEL_FRACTION, PLUNGER_AXES, plunger_step
+from backend.gcode_processor import PRESSURIZE_FEED, MachineState, scale_flow, step
+from backend.limits import LOW_TRAVEL_FRACTION, plunger_step
+from backend.printer import Axes, default_axes
 from backend.schemas import (
     EndReason,
     ErrorEvent,
@@ -108,13 +109,15 @@ class SentTracker:
 
     Seeded from a real M114 at the start of each print, so even a fully
     relative (G91) file has a known absolute reference to build from.
+    Tracks `axes`: the printer profile's.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, axes: Axes) -> None:
+        self.axes = axes
         self.reset()
 
     def reset(self) -> None:
-        self.state = MachineState(pos={ax: None for ax in AXES})
+        self.state = MachineState.unknown(self.axes.all)
         # (index into the print's lines, as-sent state before, after)
         self.recent: deque[tuple[int, MachineState, MachineState]] = deque(maxlen=RECENT_LINES)
         # Why the starting position is unknown, if it is. Any stop of this
@@ -122,7 +125,7 @@ class SentTracker:
         self.error: str | None = None
 
     def seed(self, position: dict[str, float]) -> None:
-        self.state = MachineState(pos={ax: position.get(ax) for ax in AXES})
+        self.state = MachineState(pos={ax: position.get(ax) for ax in self.axes.all})
         self.error = None
 
     def track(self, line: str, index: int | None) -> tuple[MachineState, MachineState]:
@@ -145,8 +148,11 @@ class QueueWorker:
         retract_on_estop: bool = True,
         syringe_travel_mm: float | None = None,
         temperature: TemperatureStore | None = None,
+        axes: Axes | None = None,
     ):
         self._serial = serial_manager
+        # The printer profile's axes (see set_axes)
+        self._axes = axes or default_axes()
         self._priority_queue: asyncio.Queue[str] = asyncio.Queue()
         self._state = IDLE
         # Set in every state but PAUSED; the worker waits on it between lines.
@@ -156,9 +162,9 @@ class QueueWorker:
         # the index of the next line to send.
         self._lines: list[str] = []
         self._next = 0
-        self._tracker = SentTracker()
+        self._tracker = SentTracker(self._axes)
         self._extrusion_axes: tuple[str, ...] = ()
-        self._height_axes: tuple[str, ...] = ("Z",)
+        self._height_axes: tuple[str, ...] = self._axes.heights[:1]
         self._retract_mm = 0.0
         self._retract_on_estop = retract_on_estop
         # Set exactly while the state is STOPPED_RESUMABLE
@@ -235,6 +241,18 @@ class QueueWorker:
         line or two (e.g. a preamble line queued behind a manual command)."""
         return self._task is not None and not self._task.done()
 
+    @property
+    def axes(self) -> Axes:
+        return self._axes
+
+    def set_axes(self, axes: Axes) -> None:
+        """Another printer profile was selected: its axes are tracked from
+        the next print on. Not while one is running."""
+        if self._state in ACTIVE:
+            raise InvalidTransition("Can't change the printer's axes while a print is running")
+        self._axes = axes
+        self._tracker = SentTracker(axes)
+
     def set_flow_rate(self, rate: float) -> None:
         """Set runtime flow rate as percentage (100 = normal)."""
         self._flow_rate = max(0, rate)
@@ -272,13 +290,14 @@ class QueueWorker:
         state_after: Sequence[MachineState] | None = None,
         extrusion_axes: Sequence[str] = (),
         pressurize_mm: float = 0.0,
-        height_axes: Sequence[str] = ("Z",),
+        height_axes: Sequence[str] | None = None,
     ) -> None:
         """Load a print, replacing any stopped or finished one.
 
         state_before/state_after (the planned per-line states from
         ProcessedGcode) are checked for consistency only: resuming works
-        from the as-sent states the worker tracks itself.
+        from the as-sent states the worker tracks itself. `height_axes`
+        default to the profile's first nozzle's.
         """
         if self._state in ACTIVE:
             raise InvalidTransition("Can't load a new print while one is running")
@@ -299,9 +318,9 @@ class QueueWorker:
         self._forget_pause_position()
         self._time_estimate_s = time_estimate_s
         self._extrusion_axes = tuple(extrusion_axes)
-        self._height_axes = tuple(height_axes)
+        self._height_axes = tuple(self._axes.heights[:1] if height_axes is None else height_axes)
         self._retract_mm = pressurize_mm
-        self._plunger_pushed = {axis: 0.0 for axis in PLUNGER_AXES}
+        self._plunger_pushed = {axis: 0.0 for axis in self._axes.plungers}
         self._low_travel_warned = set()
         if self._state == STOPPED_RESUMABLE:
             self._transition(STOPPED)  # the old checkpoint is for the old lines
@@ -370,7 +389,7 @@ class QueueWorker:
             logger.error("Couldn't read the position at the pause: %s", exc)
             return
         if self._pause_reading is reading:  # not a pause since forgotten
-            self._paused_at = parse_m114(reply)
+            self._paused_at = parse_m114(reply, self._axes.all)
             logger.info("Paused at %s", self._paused_at)
 
     def _forget_pause_position(self) -> None:
@@ -467,7 +486,7 @@ class QueueWorker:
             self._not_resumable(f"Couldn't read the printer position: {exc}")
             return
 
-        position = parse_m114(replies[1])
+        position = parse_m114(replies[1], self._axes.all)
         if position is None:
             self._not_resumable(f"Couldn't parse the printer position from {replies[1]!r}")
             return
@@ -514,7 +533,7 @@ class QueueWorker:
         await self.wait_until_sent()
         # Where the head is now: the stage may have been jogged since the stop.
         [reply] = await self._serial.send_lines(["M114"])
-        position = parse_m114(reply)
+        position = parse_m114(reply, self._axes.all)
         if position is None:
             raise SerialError(f"Couldn't parse the printer position from {reply!r}")
         await self._serial.send_lines(build_resume_commands(checkpoint, position))
@@ -549,7 +568,7 @@ class QueueWorker:
             self._tracker.error = f"Couldn't read the printer's starting position: {exc}"
             return
 
-        position = parse_m114(reply)
+        position = parse_m114(reply, self._axes.all)
         if position is None:
             self._tracker.error = f"Couldn't parse the printer's starting position from {reply!r}"
             return
@@ -563,7 +582,7 @@ class QueueWorker:
         still a candidate for where an e-stop actually landed.
         """
         before, after = self._tracker.track(line, index)
-        for axis, delta in plunger_step(before, after, line).items():
+        for axis, delta in plunger_step(before, after, line, self._axes.plungers).items():
             self._plunger_pushed[axis] = self._plunger_pushed.get(axis, 0.0) - delta
             self._check_plunger_travel(axis)
 
@@ -576,11 +595,10 @@ class QueueWorker:
         if remaining >= LOW_TRAVEL_FRACTION * travel:
             return
         self._low_travel_warned.add(axis)
-        side = "left" if axis == "B" else "right"
         self._emit(
             WarningEvent(
                 message=(
-                    f"The {side} syringe ({axis}) is nearly empty: "
+                    f"The {self._axes.plunger_name(axis)} syringe ({axis}) is nearly empty: "
                     f"{max(remaining, 0):.1f} of {travel:g} mm plunger travel left."
                 )
             )
@@ -666,7 +684,7 @@ class QueueWorker:
                     break
 
                 index = self._next
-                sent_line = scale_flow(self._lines[index], self._flow_rate / 100.0)
+                sent_line = scale_flow(self._lines[index], self._flow_rate / 100.0, self._axes.plungers)
                 self._track_send(sent_line, index=index)
                 # On failure _next stays put: a timed-out line is re-sent on resume.
                 if await self._send(sent_line, numbered=True):
@@ -695,7 +713,7 @@ class QueueWorker:
         retry on the next resume."""
         try:
             replies = await self._serial.send_lines(["M400", "M114"])
-            position = parse_m114(replies[1])
+            position = parse_m114(replies[1], self._axes.all)
             if position is None:
                 raise ValueError(f"couldn't parse the printer position from {replies[1]!r}")
             commands = build_return_commands(
@@ -704,6 +722,7 @@ class QueueWorker:
                 self._tracker.state,
                 restore_modes=self._restore_needed,
                 height_axes=self._height_axes,
+                plunger_axes=self._axes.plungers,
             )
             if commands:
                 await self._serial.send_lines(commands)

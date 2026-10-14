@@ -279,7 +279,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Jog */
+        /**
+         * Jog
+         * @description Move one axis, or several together (`axes`), by `distance`. Each
+         *     axis is checked against the bed limits once zeroed; 400 if one would
+         *     leave the bed, and then nothing moves.
+         */
         post: operations["jog_jog_post"];
         delete?: never;
         options?: never;
@@ -561,9 +566,10 @@ export interface paths {
         get: operations["get_printer_printer_get"];
         /**
          * Select Printer
-         * @description Select another printer profile, until the backend restarts
-         *     (config.json's printer_profile is the one it starts with). Resets the
-         *     calibration and any resume checkpoint, and unloads the loaded print.
+         * @description Select another printer profile, kept across restarts (settings.json;
+         *     until one is chosen in the app, config.json's printer_profile is used).
+         *     Resets the calibration and any resume checkpoint, unloads the loaded
+         *     print, and sends a connected printer the profile's steps/mm (M92).
          *     Refused during a print.
          */
         put: operations["select_printer_printer_put"];
@@ -583,12 +589,45 @@ export interface paths {
         };
         /**
          * List Profiles
-         * @description Every printer profile: built in, or added in config.json.
+         * @description Every printer profile: built in, added in config.json, and the
+         *     Custom one once saved.
          */
         get: operations["list_profiles_printer_profiles_get"];
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/printer/custom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Custom Profile
+         * @description The Custom profile edited in the app; null until one is saved.
+         */
+        get: operations["get_custom_profile_printer_custom_get"];
+        /**
+         * Save Custom Profile
+         * @description Save the Custom profile and select it, as PUT /printer does (refused
+         *     during a print). 400 lists every problem: each axis must be one of Z, A,
+         *     B, C, I, J, K, U, V, W, used once in the profile, and a syringe's height
+         *     and plunger axis must differ; 1 to 6 syringes.
+         */
+        put: operations["save_custom_profile_printer_custom_put"];
+        post?: never;
+        /**
+         * Reset Custom Profile
+         * @description Delete the Custom profile and select the Printess 1.0 (refused
+         *     during a print). Returns the Printess 1.0 profile.
+         */
+        delete: operations["reset_custom_profile_printer_custom_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -760,6 +799,24 @@ export interface components {
             /** Port */
             port: string;
         };
+        /**
+         * CustomProfileRequest
+         * @description The Custom profile's nozzles, left to right, as edited on the Setup
+         *     screen. Its bed, build volume and steps/mm are kept from the Custom
+         *     profile saved before or, the first time, copied from `base` (the
+         *     profile being edited; default: the selected one).
+         */
+        CustomProfileRequest: {
+            /** Nozzles */
+            nozzles: components["schemas"]["NozzleFields"][];
+            /**
+             * Nozzle Offset Measured
+             * @default false
+             */
+            nozzle_offset_measured?: boolean;
+            /** Base */
+            base?: string | null;
+        };
         /** DisconnectResponse */
         DisconnectResponse: {
             /**
@@ -885,7 +942,9 @@ export interface components {
         /** JogRequest */
         JogRequest: {
             /** Axis */
-            axis: string;
+            axis?: string | null;
+            /** Axes */
+            axes?: string[] | null;
             /** Distance */
             distance: number;
             /**
@@ -903,8 +962,35 @@ export interface components {
             status: "ok";
             /** Axis */
             axis: string;
+            /** Axes */
+            axes: string[];
             /** Distance */
             distance: number;
+        };
+        /**
+         * NozzleFields
+         * @description A nozzle as the app's editor sends it: checked by save_custom_profile,
+         *     which reports every problem in words, rather than by FastAPI.
+         */
+        NozzleFields: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Height Axis */
+            height_axis: string;
+            /** Plunger Axis */
+            plunger_axis: string;
+            /**
+             * Offset X
+             * @default 0
+             */
+            offset_x?: number;
+            /**
+             * Offset Y
+             * @default 0
+             */
+            offset_y?: number;
         };
         /**
          * NozzleSpec
@@ -1078,10 +1164,16 @@ export interface components {
              * @default false
              */
             nozzle_offset_measured?: boolean;
+            /**
+             * Steps Per Mm
+             * @default 800
+             */
+            steps_per_mm?: number;
         };
         /**
          * PrinterProfilesResponse
-         * @description Every printer profile (built in or from config.json), and the selected one's id.
+         * @description Every printer profile (built in, from config.json, and the Custom
+         *     profile once one is saved), and the selected one's id.
          */
         PrinterProfilesResponse: {
             /** Selected */
@@ -1443,7 +1535,8 @@ export interface components {
         };
         /**
          * PrinterProfileEvent
-         * @description Another printer profile was selected (PUT /printer).
+         * @description Another printer profile was selected (PUT /printer), or the Custom
+         *     profile in use was saved (PUT /printer/custom).
          */
         PrinterProfileEvent: {
             /**
@@ -1452,6 +1545,22 @@ export interface components {
              */
             type: "printer_profile";
             printer: components["schemas"]["PrinterProfile"];
+        };
+        /**
+         * PrinterProfilesEvent
+         * @description The list of printer profiles changed: the Custom profile was saved
+         *     or reset (PUT/DELETE /printer/custom). Same body as GET /printer/profiles.
+         */
+        PrinterProfilesEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "printer_profiles";
+            /** Selected */
+            selected: string;
+            /** Profiles */
+            profiles: components["schemas"]["PrinterProfile"][];
         };
         /** ProgressEvent */
         ProgressEvent: {
@@ -1667,7 +1776,7 @@ export interface components {
             /** Message */
             message: string;
         };
-        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["TemperatureWaitEvent"] | components["schemas"]["SettingsEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrinterProfileEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
+        WsEvent: components["schemas"]["SnapshotEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["ProgressEvent"] | components["schemas"]["ExtrusionRateEvent"] | components["schemas"]["ErrorEvent"] | components["schemas"]["WarningEvent"] | components["schemas"]["StopEvent"] | components["schemas"]["SerialLogEvent"] | components["schemas"]["TemperatureEvent"] | components["schemas"]["TemperatureStatusEvent"] | components["schemas"]["TemperatureWaitEvent"] | components["schemas"]["SettingsEvent"] | components["schemas"]["PrinterEvent"] | components["schemas"]["CalibrationEvent"] | components["schemas"]["PrinterProfileEvent"] | components["schemas"]["PrinterProfilesEvent"] | components["schemas"]["PrintEndEvent"] | components["schemas"]["PrintResumedEvent"];
         /**
          * ErrorResponse
          * @description The body of every 4xx/5xx response.
@@ -2599,6 +2708,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrinterProfilesResponse"];
+                };
+            };
+        };
+    };
+    get_custom_profile_printer_custom_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrinterProfile"] | null;
+                };
+            };
+        };
+    };
+    save_custom_profile_printer_custom_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrinterProfile"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_custom_profile_printer_custom_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrinterProfile"];
                 };
             };
         };

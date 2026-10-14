@@ -20,7 +20,7 @@ const EXTRUSION_WIDTH_PX = 2
 const TRAVEL_OPACITY = 0.45
 
 // Each nozzle's color, by its index in the printer profile (main.css)
-const NOZZLE_COLORS = 4
+const NOZZLE_COLORS = 6
 const nozzleColor = (index: number): string => `--color-nozzle-${(index % NOZZLE_COLORS) + 1}`
 
 interface View {

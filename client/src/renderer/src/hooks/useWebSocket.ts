@@ -83,6 +83,10 @@ export function useWebSocket(): PrintState & { resetPrintState: () => void } {
         usePrinter.getState().setProfile(data.printer)
         return
       }
+      if (data.type === 'printer_profiles') {
+        usePrinter.getState().setProfiles(data.profiles)
+        return
+      }
       setState((prev) => {
         switch (data.type) {
           case 'progress':

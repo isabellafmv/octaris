@@ -25,7 +25,7 @@ from backend.main import app
 from backend.queue_worker import CONNECTION_LOST, PrintState, PrintStatus, QueueWorker
 from backend.serial_manager import SerialError, SerialManager, _open_port
 from backend.session import LoadedPrint
-from tests.nozzles import LEFT
+from tests.nozzles import AXES, LEFT
 from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -279,33 +279,33 @@ BED = BedLimits()  # X/Y -30..30, Z 0..60
 
 
 def test_check_path_accepts_sample():
-    check_path(BED, process_gcode(RAW_SAMPLE, LEFT).lines)
+    check_path(BED, process_gcode(RAW_SAMPLE, LEFT).lines, None, ("Z",))
 
 
 def test_check_path_names_the_offending_line():
     with pytest.raises(LimitError, match=r"line 3 \(G1 X31 Y0\) moves X to 31 mm") as info:
-        check_path(BED, ["G90", "G1 X0 Y0 Z1", "G1 X31 Y0"])
+        check_path(BED, ["G90", "G1 X0 Y0 Z1", "G1 X31 Y0"], None, ("Z",))
     assert "-30 to 30 mm" in str(info.value)
 
 
 def test_check_path_catches_relative_moves_from_start_position():
     lines = ["G91", "G1 X10", "G90"]
-    check_path(BED, lines)  # unknown start: nothing to check
-    check_path(BED, lines, start_state({"X": 15.0, "Y": 0.0, "Z": 1.0}))
+    check_path(BED, lines, None, ("Z",))  # unknown start: nothing to check
+    check_path(BED, lines, start_state({"X": 15.0, "Y": 0.0, "Z": 1.0}, AXES.all), ("Z",))
     with pytest.raises(LimitError, match="X to 35"):
-        check_path(BED, lines, start_state({"X": 25.0, "Y": 0.0, "Z": 1.0}))
+        check_path(BED, lines, start_state({"X": 25.0, "Y": 0.0, "Z": 1.0}, AXES.all), ("Z",))
 
 
 def test_check_path_catches_z_below_zero():
     with pytest.raises(LimitError, match="Z to -0.5"):
-        check_path(BED, ["G90", "G1 X0 Y0 Z-0.5"])
+        check_path(BED, ["G90", "G1 X0 Y0 Z-0.5"], None, ("Z",))
 
 
 def test_check_jog():
-    check_jog(BED, "X", 25.0, 5.0)
+    check_jog(BED, AXES.heights, "X", 25.0, 5.0)
     with pytest.raises(LimitError, match="X to 30.1"):
-        check_jog(BED, "X", 25.0, 5.1)
-    check_jog(BED, "B", 0.0, -500.0)  # plungers aren't bed axes
+        check_jog(BED, AXES.heights, "X", 25.0, 5.1)
+    check_jog(BED, AXES.heights, "B", 0.0, -500.0)  # plungers aren't bed axes
 
 
 async def test_upload_rejects_print_leaving_bed(client):
@@ -410,20 +410,20 @@ def test_plunger_travel_is_peak_physical_push():
         "G1 B-1.5",  # prime past it: 3.5 mm
         "G90",
     ]
-    needed = plunger_travel_needed(lines, start_state(ORIGIN))
+    needed = plunger_travel_needed(lines, start_state(ORIGIN, AXES.all), AXES.plungers)
     assert needed["B"] == pytest.approx(3.5)
     assert needed["C"] == 0
 
 
 def test_check_plunger_travel():
-    check_plunger_travel({"B": 10.0, "C": 0.0}, 10.0)
+    check_plunger_travel({"B": 10.0, "C": 0.0}, 10.0, AXES)
     with pytest.raises(LimitError, match=r"12 mm of left plunger \(B\) travel.*only has 10 mm"):
-        check_plunger_travel({"B": 12.0}, 10.0)
+        check_plunger_travel({"B": 12.0}, 10.0, AXES)
 
 
 def sample_need() -> float:
     lines = process_gcode(RAW_SAMPLE, LEFT).lines
-    return plunger_travel_needed(lines, start_state(ORIGIN))["B"]
+    return plunger_travel_needed(lines, start_state(ORIGIN, AXES.all), AXES.plungers)["B"]
 
 
 async def test_print_start_refused_when_syringe_too_short(client, printer):

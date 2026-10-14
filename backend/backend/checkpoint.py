@@ -11,11 +11,10 @@ keep, and a G90 left behind would turn its next lines absolute.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from backend.gcode_processor import (
-    AXES,
     CLEARANCE_Z_MM,
     PRESSURIZE_FEED,
     TRAVEL_FEED,
@@ -30,7 +29,8 @@ POSITION_TOLERANCE_MM = 0.05
 # any offset carries on to every later move.
 MOVED_TOLERANCE_MM = 0.005
 
-_M114_AXIS = re.compile(r"\b([XYZABC]):\s*(-?\d+(?:\.\d+)?)")
+# An axis and its position in an M114 report ("X:1.00")
+_M114_AXIS = re.compile(r"\b([A-Z]):\s*(-?\d+(?:\.\d+)?)")
 
 
 @dataclass
@@ -38,19 +38,21 @@ class Checkpoint:
     line: int  # index of the line the printer stopped on
     position: dict[str, float]  # logical position reported by M114
     after: MachineState  # as-sent machine state right after the stopped line
-    retract: dict[str, float] = field(default_factory=dict)  # plunger retract after the stop
     # The height motors of the nozzle(s) printing: lifted to travel back
-    height_axes: tuple[str, ...] = ("Z",)
+    height_axes: tuple[str, ...]
+    retract: dict[str, float] = field(default_factory=dict)  # plunger retract after the stop
 
 
-def parse_m114(response: str) -> dict[str, float] | None:
-    """Parse "X:1.00 Y:2.00 Z:0.30 A:0.00 B:-1.20 C:0.00 Count X:..." into a dict.
+def parse_m114(response: str, axes: Iterable[str]) -> dict[str, float] | None:
+    """Parse "X:1.00 Y:2.00 Z:0.30 A:0.00 B:-1.20 C:0.00 Count X:..." into a
+    dict of X, Y and those of `axes` (a profile's Axes.all) it reports.
 
     Only the part before "Count" is used: the counts are raw stepper positions.
     """
+    wanted = {"X", "Y", *axes}
     for line in response.splitlines():
         logical = line.split("Count", 1)[0]
-        pos = {axis: float(value) for axis, value in _M114_AXIS.findall(logical)}
+        pos = {axis: float(value) for axis, value in _M114_AXIS.findall(logical) if axis in wanted}
         if "X" in pos and "Y" in pos:
             return pos
     return None
@@ -71,8 +73,8 @@ def segment_contains(
         if before.pos[axis] is None or after.pos[axis] is None or axis not in point:
             return False
     lo, hi = 0.0, 1.0
-    for axis in AXES:
-        start, end = before.pos[axis], after.pos[axis]
+    for axis, end in after.pos.items():
+        start = before.pos.get(axis)
         if end is None:
             continue  # axis never set by the program; nothing to compare
         if start is None:
@@ -151,10 +153,11 @@ def _distances(actual: Mapping[str, float], target: Mapping[str, float]) -> str:
 
 
 def travel_moves(actual: Mapping[str, float], target: Mapping[str, float]) -> list[str]:
-    """Relative (G91) moves from `actual` to `target` on the stage: lift Z/A
-    clear of the print, travel X/Y, lower onto the target. Only the axes of
-    `target` move, and the printer is left in G91."""
-    lift_axes = [ax for ax in ("Z", "A") if ax in target and ax in actual]
+    """Relative (G91) moves from `actual` to `target` on the stage: lift the
+    height motors (every axis of `target` but X/Y) clear of the print,
+    travel X/Y, lower onto the target. Only the axes of `target` move, and
+    the printer is left in G91."""
+    lift_axes = [ax for ax in target if ax not in ("X", "Y") and ax in actual]
     commands = ["G91"]
     if lift_axes:
         lift = " ".join(f"{ax}{fmt(CLEARANCE_Z_MM)}" for ax in lift_axes)
@@ -186,7 +189,7 @@ def build_resume_commands(checkpoint: Checkpoint, actual: Mapping[str, float]) -
     # Finish the stopped line: the rest of the way to where it was headed,
     # from the stop point. The F also restores the modal feedrate the
     # following lines rely on.
-    known = {axis: value for axis in AXES if (value := line_after.pos[axis]) is not None}
+    known = {axis: value for axis, value in line_after.pos.items() if value is not None}
     rest = _distances(stop, known)
     feed = f"F{fmt(line_after.feed)}" if line_after.feed is not None else ""
     if rest or feed:
@@ -201,7 +204,9 @@ def build_return_commands(
     paused_at: Mapping[str, float] | None,
     target: MachineState,
     restore_modes: bool = True,
-    height_axes: Sequence[str] = ("Z",),
+    *,
+    height_axes: Sequence[str],
+    plunger_axes: Sequence[str],
 ) -> list[str]:
     """Commands that take a paused print back to where it was paused.
 
@@ -210,7 +215,8 @@ def build_return_commands(
     `target` the as-sent state where the print left off. If the stage was
     moved (a jog, say), it travels back to `paused_at` — lift `height_axes`
     (those of the nozzles printing), X/Y, lower, as relative moves — or to
-    `target` without one. Another nozzle's height is left where it is. A plunger moved by hand
+    `target` without one. Another nozzle's height is left where it is. A
+    plunger (one of `plunger_axes`, the profile's) moved by hand
     stays where it is (priming, say) and is re-aligned with G92, so the
     print's coordinates carry on from there. With `restore_modes` (manual
     commands were sent, which may change them without moving anything), or
@@ -219,7 +225,7 @@ def build_return_commands(
 
     Raises ValueError if neither says where the stage should be.
     """
-    goal = {axis: value for axis in AXES if (value := target.pos[axis]) is not None}
+    goal = {axis: value for axis, value in target.pos.items() if value is not None}
     if paused_at is None:
         stage = [axis for axis in ("X", "Y", *height_axes) if axis in actual]
         unknown = [axis for axis in stage if axis not in goal]
@@ -236,7 +242,7 @@ def build_return_commands(
     # as-sent coordinates, which M114 rounds.
     plungers = {
         axis: goal.get(axis, paused_at[axis])
-        for axis in ("B", "C")
+        for axis in plunger_axes
         if axis in actual and axis in paused_at and moved(actual, {axis: paused_at[axis]})
     }
     if plungers:

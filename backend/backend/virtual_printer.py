@@ -19,6 +19,13 @@ the target and never cools, C cools down to it and never heats. M104 I<n> T0
 it drifts back to ambient. M105 answers "ok T0:21.30 T1:21.10 ..." without
 targets. This is a stand-in until the lab confirms its reply format.
 
+Its axes are X, Y and those of `axes` (default: the default printer
+profile's). A move, G92 or M92 on another nozzle axis letter (see
+printer.NOZZLE_AXIS_LETTERS) adds that axis at 0, as if the firmware had
+been built with it: the M92 Octaris sends on connect and on a change of
+printer profile names every axis the profile has, so the virtual printer
+always has the active profile's axes, and M114 reports them all.
+
 M410 is handled like Marlin's EMERGENCY_PARSER does: motion stops the moment
 it arrives, the planned moves are dropped, and the position is wherever the
 axes stopped. The line is then also queued like any other, so it gets its own
@@ -39,20 +46,20 @@ import re
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from backend.printer import NOZZLE_AXIS_LETTERS, default_axes
 from backend.serial_manager import checksum
 
-AXES = "XYZABC"
 # The device name /ports lists for the virtual printer in dev mode
 VIRTUAL_PORT = "virtual"
 VIRTUAL_PORT_DESCRIPTION = "Virtual printer"
 
 FIRMWARE = (
     "FIRMWARE_NAME:Marlin 2.1.2.5 (virtual) SOURCE_CODE_URL:github.com/MarlinFirmware/Marlin "
-    "PROTOCOL_VERSION:1.0 MACHINE_TYPE:Octaris EXTRUDER_COUNT:0 AXIS_COUNT:6 "
+    "PROTOCOL_VERSION:1.0 MACHINE_TYPE:Octaris EXTRUDER_COUNT:0 AXIS_COUNT:{axis_count} "
     "UUID:00000000-0000-4000-8000-000000000000"
 )
 # Heaters move towards their target at this rate (°C per second)
@@ -112,7 +119,7 @@ class _Move:
 
     def at(self, t: float) -> dict[str, float]:
         f = 1.0 if self.t1 <= self.t0 else min(max((t - self.t0) / (self.t1 - self.t0), 0.0), 1.0)
-        return {axis: self.start[axis] + (self.end[axis] - self.start[axis]) * f for axis in AXES}
+        return {axis: self.start[axis] + (self.end[axis] - self.start[axis]) * f for axis in self.start}
 
 
 class _MotionClock:
@@ -164,8 +171,11 @@ class VirtualPrinter:
         m105_delay_s: float = 0.0,
         emergency_parser: bool = True,
         protocol: str = "marlin",
+        axes: Iterable[str] | None = None,
     ):
         self.is_open = True
+        # X, Y and the nozzles' axes; more are added as they are used
+        self.axes = list(dict.fromkeys(["X", "Y", *(default_axes().all if axes is None else axes)]))
         # How many moves the planner buffers; a G0/G1 arriving when it's full
         # blocks (no "ok") until the oldest move finishes.
         self.planner_depth = planner_depth
@@ -194,10 +204,10 @@ class VirtualPrinter:
         self.executed: list[str] = []  # commands accepted and run, in order
         # Logical position as commanded (Marlin's current_position): where the
         # last planned move ends, or where the axes stopped after M410.
-        self.position = {axis: 0.0 for axis in AXES}
+        self.position = {axis: 0.0 for axis in self.axes}
         self.relative = False
         self.feed = 1000.0  # mm/min
-        self.steps_per_mm = {axis: 80.0 for axis in AXES}
+        self.steps_per_mm = {axis: 80.0 for axis in self.axes}
         # (actual, target) per heater, starting at ambient; a target of 0 is
         # off. No sensors: nothing is reported at all.
         self._ambient = dict(DEFAULT_SENSORS if sensors is None else sensors)
@@ -206,9 +216,9 @@ class VirtualPrinter:
         self.modes: dict[str, str | None] = {key: None for key in self._ambient}
 
         # Logical minus machine position per axis, set by G92
-        self._offset = {axis: 0.0 for axis in AXES}
+        self._offset = {axis: 0.0 for axis in self.axes}
         # Machine position while no move is running
-        self._idle = {axis: 0.0 for axis in AXES}
+        self._idle = {axis: 0.0 for axis in self.axes}
         self._moves: deque[_Move] = deque()
         self._clock = _MotionClock()
         # Guards the planner and position, shared with the writer thread (M410)
@@ -298,7 +308,20 @@ class VirtualPrinter:
         """Where the axes physically are right now, in logical coordinates."""
         with self._lock:
             machine = self._machine_at(self._clock.now())
-            return {axis: machine[axis] + self._offset[axis] for axis in AXES}
+            return {axis: machine[axis] + self._offset[axis] for axis in self.axes}
+
+    def _add_axes(self, letters: Iterable[str]) -> None:
+        """Nozzle axes not seen before start at 0, wherever the planned moves go."""
+        new = [axis for axis in letters if axis in NOZZLE_AXIS_LETTERS and axis not in self.axes]
+        if not new:
+            return
+        with self._lock:
+            for axis in new:
+                self.axes.append(axis)
+                self.position[axis] = self._offset[axis] = self._idle[axis] = 0.0
+                self.steps_per_mm[axis] = 80.0
+                for move in self._moves:
+                    move.start[axis] = move.end[axis] = 0.0
 
     def machine_coordinates(self) -> dict[str, float]:
         """Where the axes physically are right now, in machine coordinates:
@@ -445,6 +468,8 @@ class VirtualPrinter:
             except ValueError:
                 pass
 
+        if code in ("G0", "G1", "G92", "M92"):
+            self._add_axes(params)
         if code in ("G0", "G1"):
             self._move(params, command)
         elif code == "G4":
@@ -453,18 +478,18 @@ class VirtualPrinter:
             end = time.monotonic() + seconds
             self._wait(lambda: time.monotonic() >= end)
         elif code == "G28":
-            self._home([axis for axis in AXES if axis in params] or list("XYZ"))
+            self._home([axis for axis in self.axes if axis in params] or self.axes)
         elif code in ("G90", "G91"):
             self.relative = code == "G91"
         elif code == "G92":
             with self._lock:
-                for axis in AXES:
+                for axis in self.axes:
                     if axis in params:
                         machine = self.position[axis] - self._offset[axis]
                         self._offset[axis] = params[axis] - machine
                         self.position[axis] = params[axis]
         elif code == "M92":
-            for axis in AXES:
+            for axis in self.axes:
                 if axis in params:
                     self.steps_per_mm[axis] = params[axis]
         elif code == "M104" and self.protocol == "printess":
@@ -496,7 +521,7 @@ class VirtualPrinter:
             return [self._m114(), "ok"]
         elif code == "M115":
             return [
-                FIRMWARE,
+                FIRMWARE.format(axis_count=len(self.axes)),
                 "Cap:SERIAL_XON_XOFF:0",
                 "Cap:EEPROM:0",
                 f"Cap:AUTOREPORT_TEMP:{int(self.autoreport)}",
@@ -545,9 +570,9 @@ class VirtualPrinter:
 
     def _m114(self) -> str:
         with self._lock:
-            logical = " ".join(f"{axis}:{self.position[axis]:.2f}" for axis in AXES)
+            logical = " ".join(f"{axis}:{self.position[axis]:.2f}" for axis in self.axes)
             machine = self._machine_at(self._clock.now())
-        counts = " ".join(f"{axis}:{round(machine[axis] * self.steps_per_mm[axis])}" for axis in AXES)
+        counts = " ".join(f"{axis}:{round(machine[axis] * self.steps_per_mm[axis])}" for axis in self.axes)
         return f"{logical} Count {counts}"
 
     # --- motion -----------------------------------------------------------------------
@@ -580,12 +605,12 @@ class VirtualPrinter:
             if self._quickstops != quickstops:
                 return  # M410 came in while it waited: the move is dropped
             target = dict(self.position)
-            for axis in AXES:
+            for axis in self.axes:
                 if axis in params:
                     target[axis] = target[axis] + params[axis] if self.relative else params[axis]
-            start = {axis: self.position[axis] - self._offset[axis] for axis in AXES}
-            end = {axis: target[axis] - self._offset[axis] for axis in AXES}
-            distance = math.dist([start[a] for a in AXES], [end[a] for a in AXES])
+            start = {axis: self.position[axis] - self._offset[axis] for axis in self.axes}
+            end = {axis: target[axis] - self._offset[axis] for axis in self.axes}
+            distance = math.dist([start[a] for a in self.axes], [end[a] for a in self.axes])
             duration = distance / (self.feed / 60) / self.speed if self.feed > 0 else 0.0
             now = self._clock.now()
             t0 = max(now, self._moves[-1].t1 if self._moves else now)
@@ -612,7 +637,7 @@ class VirtualPrinter:
             machine = self._machine_at(self._clock.now())
             self._moves.clear()
             self._idle = machine
-            self.position = {axis: machine[axis] + self._offset[axis] for axis in AXES}
+            self.position = {axis: machine[axis] + self._offset[axis] for axis in self.axes}
             self._quickstops += 1
         self._hold = None
         self.held.clear()

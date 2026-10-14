@@ -132,6 +132,21 @@ describe('absolute (G90)', () => {
     ])
   })
 
+  it('takes any axis letters from the profile, Z even as a plunger', () => {
+    const custom: PreviewNozzle[] = [
+      { heightAxis: 'U', plungerAxis: 'Z', offsetX: 0, offsetY: 0 },
+      { heightAxis: 'W', plungerAxis: 'K', offsetX: 15, offsetY: 0 }
+    ]
+    const result = segments(gcode('G91', 'G1 U0.3 W0.3', 'G1 X10 Z-1 K-1', 'G1 Z-1'), custom)
+    expect(result.map((s) => [s.nozzle, s.kind, s.to])).toEqual([
+      ['left', 'travel', [0, 0, expect.closeTo(0.3)]],
+      ['left', 'extrude', [10, 0, expect.closeTo(0.3)]],
+      ['right', 'extrude', [25, 0, expect.closeTo(0.3)]]
+    ])
+    // A plunger called Z moving alone is no height change: nothing to draw
+    expect(segments(gcode('G91', 'G1 Z-1'), custom)).toEqual([])
+  })
+
   it('extrudes with E in raw slicer files (M82 absolute)', () => {
     const result = segments(gcode('M82', 'G1 X10 E1', 'G1 X20 E2', 'G1 X30 E1.5'))
     expect(result.map((s) => s.kind)).toEqual(['extrude', 'extrude', 'travel'])

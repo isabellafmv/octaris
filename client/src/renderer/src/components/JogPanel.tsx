@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { usePrinter } from '../stores/printer'
 import { usePrintSettings } from '../stores/printSettings'
+import { jogHeightNozzles, toggleJogHeight } from './jogHeights'
 
 interface JogPanelProps {
   disabled: boolean
@@ -14,7 +15,7 @@ const MAX_STEP = 20
 function ArrowButton({
   label,
   axisLabel,
-  axis,
+  axes,
   direction,
   step,
   disabled,
@@ -22,7 +23,7 @@ function ArrowButton({
 }: {
   label: string
   axisLabel: string
-  axis: string
+  axes: string[]
   direction: 1 | -1
   step: number
   disabled: boolean
@@ -30,7 +31,7 @@ function ArrowButton({
 }): React.JSX.Element {
   return (
     <button
-      onClick={() => !disabled && api.jog(axis, step * direction)}
+      onClick={() => !disabled && api.jog(axes, step * direction)}
       disabled={disabled}
       aria-label={label}
       className="w-16 h-16 rounded-full flex flex-col items-center justify-center gap-0.5 text-lg font-light transition-all active:scale-90 disabled:opacity-30 bg-surface-sunken text-text"
@@ -41,25 +42,24 @@ function ArrowButton({
   )
 }
 
-// Each nozzle has its own height motor (Z for the Printess 1.0's left one,
-// A for its right one): up and down buttons with the axis and nozzle name
+// One up/down column for the height axes chosen with the chips above it
+// (see jogHeights.ts): a press moves them all together, in one G1 block.
 function HeightColumn({
-  axis,
-  nozzle,
+  axes,
   step,
   disabled
 }: {
-  axis: string
-  nozzle: string
+  axes: string[]
   step: number
   disabled: boolean
 }): React.JSX.Element {
+  const label = axes.join(' ')
   return (
     <div className="flex flex-col items-center gap-2">
       <ArrowButton
-        label={`${axis}+ (${nozzle})`}
-        axisLabel={`${axis}+`}
-        axis={axis}
+        label={`Up: ${label}`}
+        axisLabel={axes.length > 2 ? `${axes.length}+` : `${axes.join('')}+`}
+        axes={axes}
         direction={1}
         step={step}
         disabled={disabled}
@@ -76,14 +76,16 @@ function HeightColumn({
       </ArrowButton>
 
       <div className="w-16 h-16 rounded-full flex flex-col items-center justify-center text-text-muted">
-        <span className="text-xs font-semibold tracking-widest">{axis}</span>
-        <span className="text-[9px] lowercase">{nozzle}</span>
+        <span className="text-xs font-semibold tracking-widest text-center leading-tight">
+          {label}
+        </span>
+        <span className="text-[9px] lowercase">height</span>
       </div>
 
       <ArrowButton
-        label={`${axis}- (${nozzle})`}
-        axisLabel={`${axis}-`}
-        axis={axis}
+        label={`Down: ${label}`}
+        axisLabel={axes.length > 2 ? `${axes.length}-` : `${axes.join('')}-`}
+        axes={axes}
         direction={-1}
         step={step}
         disabled={disabled}
@@ -106,6 +108,12 @@ export function JogPanel({ disabled: panelDisabled }: JogPanelProps): React.JSX.
   const profile = usePrinter((s) => s.profile)
   const step = usePrintSettings((s) => s.jogStep)
   const setStep = usePrintSettings((s) => s.setJogStep)
+  const printSelection = usePrintSettings((s) => s.selectedNozzles)
+  const manualHeights = usePrintSettings((s) => s.jogHeightNozzles)
+  const setManualHeights = usePrintSettings((s) => s.setJogHeightNozzles)
+  const nozzles = profile?.nozzles ?? []
+  const heightNozzles = jogHeightNozzles(nozzles, printSelection, manualHeights)
+  const chosen = heightNozzles.map((n) => n.id)
   // Raw text of the custom field; pre-filled when the stored step is a custom one
   const [customText, setCustomText] = useState(() => (STEPS.includes(step) ? '' : String(step)))
 
@@ -185,7 +193,7 @@ export function JogPanel({ disabled: panelDisabled }: JogPanelProps): React.JSX.
           <ArrowButton
             label="Y+"
             axisLabel="Y+"
-            axis="Y"
+            axes={['Y']}
             direction={1}
             step={step}
             disabled={disabled}
@@ -205,7 +213,7 @@ export function JogPanel({ disabled: panelDisabled }: JogPanelProps): React.JSX.
             <ArrowButton
               label="X-"
               axisLabel="X-"
-              axis="X"
+              axes={['X']}
               direction={-1}
               step={step}
               disabled={disabled}
@@ -232,7 +240,7 @@ export function JogPanel({ disabled: panelDisabled }: JogPanelProps): React.JSX.
             <ArrowButton
               label="X+"
               axisLabel="X+"
-              axis="X"
+              axes={['X']}
               direction={1}
               step={step}
               disabled={disabled}
@@ -252,7 +260,7 @@ export function JogPanel({ disabled: panelDisabled }: JogPanelProps): React.JSX.
           <ArrowButton
             label="Y-"
             axisLabel="Y-"
-            axis="Y"
+            axes={['Y']}
             direction={-1}
             step={step}
             disabled={disabled}
@@ -269,16 +277,35 @@ export function JogPanel({ disabled: panelDisabled }: JogPanelProps): React.JSX.
           </ArrowButton>
         </div>
 
-        {/* One height control per nozzle: each has its own height motor */}
-        {(profile?.nozzles ?? []).map((nozzle) => (
-          <HeightColumn
-            key={nozzle.id}
-            axis={nozzle.height_axis}
-            nozzle={nozzle.name}
-            step={step}
-            disabled={disabled}
-          />
-        ))}
+        {/* The height axes to move, chosen with the chips: the syringes
+            selected for printing until one is tapped */}
+        {nozzles.length > 0 && (
+          <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-wrap justify-center gap-1 max-w-[9rem]">
+              {nozzles.map((n) => {
+                const active = chosen.includes(n.id)
+                return (
+                  <button
+                    key={n.id}
+                    onClick={() => setManualHeights(toggleJogHeight(chosen, n.id))}
+                    aria-pressed={active}
+                    title={active && chosen.length === 1 ? 'At least one height moves' : undefined}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition-all ${
+                      active ? 'bg-primary text-white' : 'bg-surface-sunken text-text-muted'
+                    }`}
+                  >
+                    {n.height_axis} <span className="font-normal lowercase">{n.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <HeightColumn
+              axes={heightNozzles.map((n) => n.height_axis)}
+              step={step}
+              disabled={disabled}
+            />
+          </div>
+        )}
       </div>
     </div>
   )

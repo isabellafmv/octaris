@@ -5,6 +5,7 @@ its exceptions back to HTTP (see main.py for the status codes)."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import secrets
 import tempfile
@@ -12,6 +13,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
+
+from pydantic import ValidationError
 
 from backend.checkpoint import moved, parse_m114, travel_moves
 from backend.config import Config
@@ -25,6 +28,7 @@ from backend.gcode_processor import (
     check_as_uploaded,
     is_relative_program,
     mirror_to_nozzles,
+    moved_axes,
     parse,
     parse_words,
     process_gcode,
@@ -36,7 +40,6 @@ from backend.gcode_processor import (
 )
 from backend.history import PrintHistory
 from backend.limits import (
-    PLUNGER_AXES,
     LimitError,
     check_jog,
     check_move_to,
@@ -46,7 +49,15 @@ from backend.limits import (
     plunger_travel_needed,
     start_state,
 )
-from backend.printer import HEIGHT_AXES, NozzleSpec, PrinterProfile
+from backend.printer import (
+    CUSTOM_PROFILE_ID,
+    DEFAULT_PROFILE,
+    MAX_NOZZLES,
+    NozzleFields,
+    NozzleSpec,
+    PrinterProfile,
+    custom_profile,
+)
 from backend.queue_worker import InvalidTransition, PrintStatus, QueueWorker
 from backend.schemas import (
     CalibrationEvent,
@@ -55,6 +66,7 @@ from backend.schemas import (
     NozzleCalibration,
     PrinterEvent,
     PrinterProfileEvent,
+    PrinterProfilesEvent,
     SensorTestResponse,
     Settings,
     SettingsEvent,
@@ -62,15 +74,14 @@ from backend.schemas import (
     StatusEvent,
 )
 from backend.serial_manager import SerialError, SerialManager, parse_temperatures
-from backend.settings import SettingsStore
+from backend.settings import PrinterSettings, SettingsStore
 from backend.slicer import PrintSettings, slice_model
 from backend.temperature import TargetError, TemperatureStore
 
+logger = logging.getLogger(__name__)
+
 # Where uploaded models are written for the slicer
 DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
-
-# Steps/mm, sent on every connect: EEPROM is disabled on this board
-STEPS_PER_MM = "M92 X800 Y800 Z800 A800 B800 C800"
 
 
 def zero_axes(nozzle: NozzleSpec) -> frozenset[str]:
@@ -86,16 +97,35 @@ def offset_unmeasured(profile: PrinterProfile) -> str:
         for n in profile.nozzles[1:]
     )
     first, second = profile.nozzles[0].name.lower(), profile.nozzles[-1].name.lower()
-    return (
+    measure = (
         f"Prints with several nozzles are disabled: the {profile.name}'s nozzle offsets "
         f"({offsets}) are placeholders that haven't been measured. Zero at the {first} "
         f"nozzle, jog until the {second} nozzle is over the same point, and read the X "
-        f'distance. Set that nozzle\'s offset_x under "profiles" → "{profile.id}" in '
+        f"distance."
+    )
+    if profile.id == CUSTOM_PROFILE_ID:
+        return f'{measure} Enter it as that syringe\'s offset X on Setup, tick "Offsets measured", and save.'
+    return (
+        f'{measure} Set that nozzle\'s offset_x under "profiles" → "{profile.id}" in '
         f'config.json, set "nozzle_offset_measured": true there, and restart.'
     )
 
 
 TEMPERATURE_OFF = "Temperature control is off — enable it in Setup"
+
+
+def profile_errors(exc: ValidationError) -> str:
+    """A profile's validation errors in words, one per line: "Syringe 2:
+    ..." for a nozzle's own."""
+    messages = []
+    for error in exc.errors():
+        message = error["msg"].removeprefix("Value error, ")
+        loc = error["loc"]
+        if len(loc) >= 2 and loc[0] == "nozzles" and isinstance(loc[1], int):
+            field = f" {loc[2]}" if len(loc) > 2 else ""
+            message = f"Syringe {loc[1] + 1}{field}: {message}"
+        messages.append(message)
+    return "\n".join(messages)
 
 
 class NotReady(Exception):
@@ -148,9 +178,12 @@ class PrinterSession:
         settings: SettingsStore,
     ):
         self.config = config
-        # The printer: its nozzles, bed limits and build volume
-        self.profile = config.profile
         self.settings = settings
+        # The Custom profile edited in the app, once saved (settings.json)
+        self._custom = self._load_custom()
+        # The printer: its nozzles, bed limits and build volume. The one
+        # last chosen in the app, or config.json's printer_profile.
+        self.profile = self.profiles.get(settings.printer.selected or "", config.profile)
         self.serial = serial
         self.worker = worker
         self.history = history
@@ -165,6 +198,18 @@ class PrinterSession:
         # ids from those of an earlier run of the backend.
         self._loads = 0
         self._run_id = secrets.token_hex(4)
+        serial.set_axes(self.profile.axes)
+        worker.set_axes(self.profile.axes)
+
+    def _load_custom(self) -> PrinterProfile | None:
+        saved = self.settings.printer.custom
+        if saved is None:
+            return None
+        try:
+            return PrinterProfile.model_validate({**saved, "id": CUSTOM_PROFILE_ID})
+        except ValidationError as exc:
+            logger.error("The Custom printer profile in settings.json isn't valid, ignored: %s", exc)
+            return None
 
     def _publish(self, event: Event) -> None:
         self._bus_publish(event.dump())
@@ -217,30 +262,108 @@ class PrinterSession:
 
     # --- printer profile --------------------------------------------------------
 
-    def select_profile(self, profile_id: str) -> PrinterProfile:
-        """Switch to another printer profile (until the backend restarts;
-        config.json's printer_profile is the one it starts with). The
-        calibration, any resume checkpoint and the loaded print are dropped:
-        they were made for the old profile's nozzles.
+    @property
+    def profiles(self) -> dict[str, PrinterProfile]:
+        """Every profile: config.json's (the built-in ones and any it adds)
+        and the Custom one, once saved."""
+        profiles = dict(self.config.profiles)
+        if self._custom is not None:
+            profiles[CUSTOM_PROFILE_ID] = self._custom
+        return profiles
+
+    async def select_profile(self, profile_id: str) -> PrinterProfile:
+        """Switch to another printer profile, kept across restarts (in
+        settings.json). The calibration, any resume checkpoint and the
+        loaded print are dropped: they were made for the old profile's
+        nozzles.
 
         Raises NotReady for an unknown id and Conflict during a print."""
-        profile = self.config.profiles.get(profile_id)
+        profiles = self.profiles
+        profile = profiles.get(profile_id)
         if profile is None:
-            raise NotReady(
-                f"Unknown printer profile {profile_id!r} (there are {', '.join(self.config.profiles)})"
-            )
+            raise NotReady(f"Unknown printer profile {profile_id!r} (there are {', '.join(profiles)})")
         self._refuse_during_print()
         if profile is self.profile:
             return profile
+        try:
+            self.settings.save_printer(self.settings.printer.model_copy(update={"selected": profile.id}))
+        except OSError:
+            # It's still selected, until the backend restarts
+            logger.exception("Couldn't save the selected printer profile")
+        await self._use_profile(profile)
+        return profile
+
+    async def save_custom_profile(
+        self, nozzles: Sequence[NozzleFields], nozzle_offset_measured: bool = False, base: str | None = None
+    ) -> PrinterProfile:
+        """Save the Custom profile with these nozzles (left to right) and
+        select it, kept across restarts. Its bed, build volume and steps/mm
+        are `base`'s (a profile id: the one being edited, copied into Custom)
+        or, without one, the Custom profile's so far (or the selected one's).
+        As when switching profile, the calibration, any resume checkpoint
+        and the loaded print are dropped.
+
+        Raises NotReady for an invalid profile (every problem, one per
+        line), Conflict during a print and OSError if it can't be saved."""
+        profiles = self.profiles
+        if base is not None and base not in profiles:
+            raise NotReady(f"Unknown printer profile {base!r} (there are {', '.join(profiles)})")
+        if not nozzles:
+            raise NotReady("A printer needs at least one syringe")
+        if len(nozzles) > MAX_NOZZLES:
+            raise NotReady(f"A printer can have at most {MAX_NOZZLES} syringes")
+        source = profiles[base] if base is not None else self._custom or self.profile
+        try:
+            profile = custom_profile(source, nozzles, nozzle_offset_measured)
+        except ValidationError as exc:
+            raise NotReady(profile_errors(exc)) from exc
+        self._refuse_during_print()
+        self.settings.save_printer(PrinterSettings(selected=CUSTOM_PROFILE_ID, custom=profile.model_dump()))
+        self._custom = profile
+        await self._use_profile(profile)
+        self._publish_profiles()
+        return profile
+
+    async def reset_custom_profile(self) -> PrinterProfile:
+        """Delete the Custom profile and select the Printess 1.0 (as
+        config.json has it). Raises Conflict during a print and OSError if
+        settings.json can't be written."""
+        self._refuse_during_print()
+        printess = self.config.profiles[DEFAULT_PROFILE]
+        self.settings.save_printer(PrinterSettings(selected=DEFAULT_PROFILE, custom=None))
+        self._custom = None
+        if self.profile.id != printess.id:
+            await self._use_profile(printess)
+        self._publish_profiles()
+        return printess
+
+    async def _use_profile(self, profile: PrinterProfile) -> None:
+        """Make `profile` the printer's: its axes are tracked, calibration
+        and checkpoint are reset and the loaded print is unloaded, and a
+        connected printer is sent its steps/mm, for its axes."""
         self.profile = profile
         self._calibration_nozzles = (profile.nozzles[0].id,)
         self.worker.invalidate_checkpoint("The printer profile was changed")
+        self.worker.set_axes(profile.axes)
+        self.serial.set_axes(profile.axes)
         if self.loaded is not None:
             self.loaded = None
             self._publish(StatusEvent(value="idle"))
         self.reset_calibration()
         self._publish(PrinterProfileEvent(printer=profile))
-        return profile
+        if self.serial.is_connected:
+            await self._send_steps_per_mm()
+
+    def _publish_profiles(self) -> None:
+        self._publish(PrinterProfilesEvent(selected=self.profile.id, profiles=list(self.profiles.values())))
+
+    async def _send_steps_per_mm(self) -> None:
+        """M92 for X, Y and every axis of the profile: EEPROM is disabled on
+        the board, so it is sent on every connect."""
+        try:
+            await self.serial.send(self.profile.steps_per_mm_command)
+        except SerialError:
+            pass  # non-fatal — printer still usable
 
     # --- connection -----------------------------------------------------------
 
@@ -254,10 +377,7 @@ class PrinterSession:
         self._refuse_during_print()
         await self.serial.connect(port, self.config.baud_rate)
         self.worker.invalidate_checkpoint("The printer was reconnected")
-        try:
-            await self.serial.send(STEPS_PER_MM)
-        except SerialError:
-            pass  # non-fatal — printer still usable
+        await self._send_steps_per_mm()
         # on_event() resets the calibration
         self._publish(PrinterEvent(connected=True, port=port))
 
@@ -344,24 +464,40 @@ class PrinterSession:
     async def jog(self, axis: str, distance: float, feed_rate: float) -> str:
         """Move one axis by `distance`; returns the axis, upper-cased.
         Raises LimitError if the move would leave the bed."""
-        axis = axis.upper()
+        [moved] = await self.jog_axes([axis], distance, feed_rate)
+        return moved
+
+    async def jog_axes(self, axes: Sequence[str], distance: float, feed_rate: float) -> list[str]:
+        """Move each of `axes` (the profile's) by `distance`, together, in one
+        G1 block (several height axes, say: `G1 Z1 A1 F300`); returns the
+        axes, upper-cased. Each is checked against the bed limits before
+        anything moves: raises LimitError if one would leave the bed."""
+        axes = [axis.strip().upper() for axis in axes]
+        if not axes:
+            raise NotReady("No axis to jog")
+        if len(set(axes)) != len(axes):
+            raise NotReady(f"An axis is given twice: {', '.join(axes)}")
         plungers = [n.plunger_axis for n in self.profile.nozzles]
-        if axis not in ("X", "Y", *self._height_axes(), *plungers):
-            raise NotReady(f"Invalid axis: {axis}")
+        for axis in axes:
+            if axis not in ("X", "Y", *self._height_axes(), *plungers):
+                raise NotReady(f"Invalid axis: {axis}")
         if self.worker.status == PrintStatus.PRINTING:
             raise Conflict("Pause the print first")
         self._require_connection()
-        await self._check_jog_limits(axis, distance)
+        for axis in axes:
+            await self._check_jog_limits(axis, distance)
 
-        if axis in plungers:
-            self.worker.invalidate_checkpoint(f"The {axis} plunger was jogged")
+        moved_plungers = [axis for axis in axes if axis in plungers]
+        if moved_plungers:
+            self.worker.invalidate_checkpoint(f"The {', '.join(moved_plungers)} plunger was jogged")
         self.worker.manual_command()
         # Leave the printer in the mode it was in, except that it never goes
         # back to G90 while a print is loaded: every print runs in G91, and
         # a G90 slipped in before its next line would make that absolute.
         restore = [] if self.serial.relative or self.loaded is not None else ["G90"]
-        await self.serial.send_lines(["G91", f"G1 {axis}{distance} F{feed_rate}", *restore])
-        return axis
+        move = " ".join(f"{axis}{distance}" for axis in axes)
+        await self.serial.send_lines(["G91", f"G1 {move} F{feed_rate}", *restore])
+        return axes
 
     def _height_axes(self, nozzle_ids: Sequence[str] | None = None) -> list[str]:
         """The height axes of `nozzle_ids` (default: every nozzle), left to right."""
@@ -374,13 +510,13 @@ class PrinterSession:
         it. Every nozzle's height has the bed's z limits."""
         if axis not in ("X", "Y", *self._height_axes()) or axis not in self.zeroed:
             return
-        current = self.serial.position[axis]
+        current = self.serial.position.get(axis)
         if current is None:
             await self.serial.send("M114")  # the reply updates serial.position
-            current = self.serial.position[axis]
+            current = self.serial.position.get(axis)
         if current is None:
             raise SerialError(f"Couldn't read the printer's {axis} position to check the bed limits")
-        check_jog(self.profile.bed, axis, current, distance)
+        check_jog(self.profile.bed, self._height_axes(), axis, current, distance)
 
     async def go_to_origin(self, lower: bool = False) -> list[str]:
         """Travel to X0 Y0 at the current height and, with `lower`, then
@@ -400,7 +536,7 @@ class PrinterSession:
         # As for jogs, the bed limits only apply once an axis is zeroed
         for axis in ["X", "Y", *(heights if lower else [])]:
             if axis in self.zeroed:
-                check_move_to(self.profile.bed, axis, 0.0)
+                check_move_to(self.profile.bed, heights, axis, 0.0)
 
         self.worker.manual_command()
         lines = ["G90", f"G1 X0 Y0 F{TRAVEL_FEED}"]
@@ -424,7 +560,7 @@ class PrinterSession:
         if self.worker.status == PrintStatus.PAUSED and line.upper().startswith("G92"):
             raise Conflict("Can't re-zero during a print")
 
-        reason = _invalidates_checkpoint(line)
+        reason = _invalidates_checkpoint(line, self.profile.axes.plungers)
         if reason:
             self.worker.invalidate_checkpoint(reason)
         self.worker.manual_command()
@@ -507,6 +643,7 @@ class PrinterSession:
         would leave the bed.
         """
         ids = self.select_nozzles(nozzles)
+        axes = self.profile.axes
         self._publish(StatusEvent(value="slicing"))
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         model_path = DATA_DIR / filename
@@ -518,8 +655,10 @@ class PrinterSession:
                 **settings,
                 max_feed=self.config.max_feed_mm_min,
                 build_volume=self.profile.build_volume,
+                axes=axes,
             )
-            check_path(self.profile.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
+            start = start_state(gcode.start_position, axes.all)
+            check_path(self.profile.bed, gcode.lines, start, gcode.height_axes)
         except Exception:
             self._publish(StatusEvent(value="idle"))
             raise
@@ -538,6 +677,7 @@ class PrinterSession:
         """
         ids = self.select_nozzles(nozzles)
         selected = self.profile.select(ids)
+        axes = self.profile.axes
         max_feed = self.config.max_feed_mm_min
         cmds = parse(raw.splitlines())
         # A file kept as it is (as uploaded, or a relative lab file) and
@@ -550,13 +690,14 @@ class PrinterSession:
                 raw = "\n".join(render(cmds))
                 notes.append(note)
         if needs_changes:
-            gcode = process_gcode(raw, selected, max_feed=max_feed)
+            gcode = process_gcode(raw, selected, max_feed=max_feed, axes=axes)
             gcode.warnings[:0] = notes
         else:
-            gcode = as_uploaded(raw, warnings=[*notes, *check_as_uploaded(cmds, max_feed)])
+            gcode = as_uploaded(raw, axes, warnings=[*notes, *check_as_uploaded(cmds, axes, max_feed)])
         # A converted print is checked from the zero point it starts at; a
         # lab file starts wherever the head is, so only at print start.
-        check_path(self.profile.bed, gcode.lines, start_state(gcode.start_position), gcode.height_axes)
+        start = start_state(gcode.start_position, axes.all)
+        check_path(self.profile.bed, gcode.lines, start, gcode.height_axes)
         self._load(LoadedPrint(gcode, filename, ids, "gcode", as_uploaded=not needs_changes))
         return gcode
 
@@ -608,13 +749,14 @@ class PrinterSession:
     def _check_edit(self, loaded: LoadedPrint, lines: list[str]) -> ProcessedGcode:
         old = loaded.gcode
         cmds = parse(lines)
+        axes = self.profile.axes
         max_feed = self.config.max_feed_mm_min
         warnings: list[str] = []
         if loaded.as_uploaded:
             # Held to the upload's check: only an empty file or one without
             # moves fails, the rest is warned about
             try:
-                warnings = check_as_uploaded(cmds, max_feed)
+                warnings = check_as_uploaded(cmds, axes, max_feed)
             except GcodeValidationError as exc:
                 raise GcodeEditError(str(exc)) from exc
         else:
@@ -625,25 +767,27 @@ class PrinterSession:
 
         # From where the print was planned to start: its zero point, or for
         # a file kept as uploaded, unknown
-        before, after = simulate_states(lines, old.state_before[0] if old.state_before else None)
+        planned = old.state_before[0] if old.state_before else MachineState.unknown(axes.all)
+        before, after = simulate_states(lines, planned)
         gcode = replace(old, lines=lines, state_before=before, state_after=after, warnings=warnings)
         if old.start_position is None:
-            # As process_gcode derives them for a lab file, in one pass
-            moved = {w.letter for c in cmds if c.is_move for w in c.words}
-            gcode.extrusion_axes = tuple(ax for ax in PLUNGER_AXES if ax in moved)
-            gcode.height_axes = tuple(ax for ax in HEIGHT_AXES if ax in moved) or ("Z",)
+            # As process_gcode derives them for a lab file
+            gcode.extrusion_axes, gcode.height_axes = moved_axes(cmds, axes)
 
+        start = start_state(gcode.start_position, axes.all)
         try:
-            check_path(self.profile.bed, lines, start_state(gcode.start_position), gcode.height_axes)
+            check_path(self.profile.bed, lines, start, gcode.height_axes)
         except LimitError as exc:
             raise GcodeEditError(str(exc), _line_in(str(exc))) from exc
 
         # Each plunger counts from where it is, a full syringe
-        plungers = start_state({**(gcode.start_position or {}), **dict.fromkeys(PLUNGER_AXES, 0.0)})
+        full = {**(gcode.start_position or {}), **dict.fromkeys(axes.plungers, 0.0)}
+        plungers = start_state(full, axes.all)
+        travel_mm = self.config.syringe_travel_mm
         try:
-            check_plunger_travel(plunger_travel_needed(lines, plungers), self.config.syringe_travel_mm)
+            check_plunger_travel(plunger_travel_needed(lines, plungers, axes.plungers), travel_mm, axes)
         except LimitError as exc:
-            line = _plunger_overrun_line(lines, plungers, self.config.syringe_travel_mm)
+            line = _plunger_overrun_line(lines, plungers, travel_mm, axes.plungers)
             raise GcodeEditError(str(exc), line) from exc
         return gcode
 
@@ -681,17 +825,21 @@ class PrinterSession:
 
         # The printer's actual position, so relative moves can be checked too.
         # Also seeds the worker's as-sent tracker (see QueueWorker.start).
+        axes = self.profile.axes
         reply = await self.serial.send("M114")
-        position = parse_m114(reply)
+        position = parse_m114(reply, axes.all)
         if position is None:
             raise SerialError(f"Couldn't read the printer's position (M114 replied {reply!r})")
 
         # A converted print's moves are relative to its zero point: if the
         # head isn't there, it travels back first.
         gcode = loaded.gcode
+        # The height motors lifted on a resume: the print's, or (for a
+        # program that doesn't say) the first selected nozzle's
+        heights = gcode.height_axes or (selected[0].height_axis,)
         target = gcode.start_position
         if target is None and from_origin:
-            origin_axes = ["X", "Y", *gcode.height_axes]
+            origin_axes = ["X", "Y", *heights]
             unzeroed = [axis for axis in origin_axes if axis not in self.zeroed]
             if unzeroed:
                 raise NotReady(
@@ -703,15 +851,15 @@ class PrinterSession:
         if target is not None:
             if moved(position, target):
                 travel = travel_moves(position, target)
-                check_path(self.profile.bed, travel, start_state(position), gcode.height_axes)
+                check_path(self.profile.bed, travel, start_state(position, axes.all), heights)
             position = {**position, **target}
 
         # Checked before load_gcode, which would drop a resumable checkpoint.
-        check_path(self.profile.bed, gcode.lines, start_state(position), gcode.height_axes)
-        # As it will be sent: the flow override scales every B/C value.
-        lines = [scale_flow(line, worker.flow_rate / 100.0) for line in gcode.lines]
-        needed = plunger_travel_needed(lines, start_state(position))
-        check_plunger_travel(needed, self.config.syringe_travel_mm)
+        check_path(self.profile.bed, gcode.lines, start_state(position, axes.all), heights)
+        # As it will be sent: the flow override scales every plunger's values.
+        lines = [scale_flow(line, worker.flow_rate / 100.0, axes.plungers) for line in gcode.lines]
+        needed = plunger_travel_needed(lines, start_state(position, axes.all), axes.plungers)
+        check_plunger_travel(needed, self.config.syringe_travel_mm, axes)
 
         # The checks above were of `loaded`: an edit may have replaced it since
         if self.loaded is not loaded:
@@ -723,7 +871,7 @@ class PrinterSession:
             state_before=gcode.state_before or None,
             state_after=gcode.state_after or None,
             extrusion_axes=gcode.extrusion_axes,
-            height_axes=gcode.height_axes,
+            height_axes=heights,
             pressurize_mm=gcode.pressurize_mm,
         )
         if travel:
@@ -785,13 +933,15 @@ def _first_command_line(cmds: list[Command]) -> int | None:
     return next((i for i, cmd in enumerate(cmds, start=1) if cmd.code), None)
 
 
-def _plunger_overrun_line(lines: list[str], start: MachineState, available_mm: float) -> int | None:
-    """The first line that pushes a plunger past `available_mm`."""
+def _plunger_overrun_line(
+    lines: list[str], start: MachineState, available_mm: float, plungers: Sequence[str]
+) -> int | None:
+    """The first line that pushes one of `plungers` past `available_mm`."""
     state = start
-    displacement = dict.fromkeys(PLUNGER_AXES, 0.0)
+    displacement = dict.fromkeys(plungers, 0.0)
     for number, line in enumerate(lines, start=1):
         after = step(state, line)
-        for axis, delta in plunger_step(state, after, line).items():
+        for axis, delta in plunger_step(state, after, line, plungers).items():
             displacement[axis] += delta
             if -displacement[axis] > available_mm:
                 return number
@@ -799,13 +949,14 @@ def _plunger_overrun_line(lines: list[str], start: MachineState, available_mm: f
     return None
 
 
-def _invalidates_checkpoint(line: str) -> str | None:
-    """Why a manual line would make an e-stop checkpoint unusable, if it does."""
+def _invalidates_checkpoint(line: str, plungers: Sequence[str]) -> str | None:
+    """Why a manual line would make an e-stop checkpoint unusable, if it
+    does. `plungers`: the profile's."""
     words = parse_words(line)
     if not words or words[0][0] != "G":
         return None
     if words[0][1] == 92:
         return "G92 changed the coordinate system"
-    if words[0][1] in (0, 1) and any(letter in PLUNGER_AXES for letter, _ in words[1:]):
+    if words[0][1] in (0, 1) and any(letter in plungers for letter, _ in words[1:]):
         return "A plunger was moved manually"
     return None

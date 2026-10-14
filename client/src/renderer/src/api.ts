@@ -1,5 +1,6 @@
 import type {
   CalibrateResponse,
+  CustomProfileRequest,
   GcodeEditResult,
   GcodeLineError,
   NozzleCalibration,
@@ -136,11 +137,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rate })
     }),
-  jog: (axis: string, distance: number, feedRate = 300) =>
+  // Moves all of `axes` by `distance` together, in one G1 block
+  jog: (axes: string[], distance: number, feedRate = 300) =>
     json<{ status: string }>('/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ axis, distance, feed_rate: feedRate })
+      body: JSON.stringify({ axes, distance, feed_rate: feedRate })
     }),
   // X0 Y0 at the current height; with lower, then the selected nozzles down to zero height
   goToOrigin: (lower = false) =>
@@ -190,13 +192,23 @@ export const api = {
       body: JSON.stringify({ nozzle, nozzles })
     }),
   getPrinterProfiles: () => json<PrinterProfilesResponse>('/printer/profiles'),
-  // Until the backend restarts; resets the calibration and unloads the print
+  // Kept across restarts; resets the calibration and unloads the print
   selectPrinterProfile: (profile: string) =>
     json<PrinterProfile>('/printer', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ profile })
     }),
+  // Save the Custom profile and select it (resets the calibration and
+  // unloads the print, as switching does)
+  saveCustomProfile: (request: CustomProfileRequest) =>
+    json<PrinterProfile>('/printer/custom', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    }),
+  // Delete the Custom profile and go back to the Printess 1.0
+  resetCustomProfile: () => json<PrinterProfile>('/printer/custom', { method: 'DELETE' }),
   calibrationReset: () => json<{ status: string }>('/calibration/reset', { method: 'POST' }),
   getSettings: () => json<Settings>('/settings'),
   saveSettings: (settings: Settings) =>

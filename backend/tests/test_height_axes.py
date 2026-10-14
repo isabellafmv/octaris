@@ -16,7 +16,7 @@ from backend.limits import LimitError, check_jog, check_path, start_state
 from backend.main import app
 from backend.printer import AxisRange, BedLimits
 from backend.queue_worker import PrintStatus
-from tests.nozzles import PRINTESS_1
+from tests.nozzles import AXES, PRINTESS_1
 from tests.serial_fakes import attach
 from tests.test_relative_printing import (
     RAW_SAMPLE,
@@ -189,15 +189,15 @@ BED = BedLimits()
 
 
 def test_a_has_the_same_jog_limits_as_z():
-    check_jog(BED, "A", 10.0, 50.0)
+    check_jog(BED, AXES.heights, "A", 10.0, 50.0)
     with pytest.raises(LimitError, match="A to -0.5"):
-        check_jog(BED, "A", 0.0, -0.5)
+        check_jog(BED, AXES.heights, "A", 0.0, -0.5)
     with pytest.raises(LimitError, match="A to 60.5"):
-        check_jog(BED, "A", 60.0, 0.5)
+        check_jog(BED, AXES.heights, "A", 60.0, 0.5)
 
 
 def test_path_check_covers_the_height_axes_in_use():
-    start = start_state({"X": 0, "Y": 0, "Z": 0.5, "A": 0.5})
+    start = start_state({"X": 0, "Y": 0, "Z": 0.5, "A": 0.5}, AXES.all)
     with pytest.raises(LimitError, match="A to -0.5"):
         check_path(BED, ["G91", "G1 A-1"], start, height_axes=("A",))
     for axis in ("Z", "A"):
@@ -206,7 +206,7 @@ def test_path_check_covers_the_height_axes_in_use():
     # A right nozzle print doesn't use Z, nor a left one A: not checked
     check_path(BED, ["G91", "G1 Z-1"], start, height_axes=("A",))
     # A left nozzle print doesn't use A, whose zero means nothing for it
-    check_path(BED, ["G91", "G1 X1"], start_state({"X": 0, "Y": 0, "Z": 0, "A": -40}))
+    check_path(BED, ["G91", "G1 X1"], start_state({"X": 0, "Y": 0, "Z": 0, "A": -40}, AXES.all), ("Z",))
 
 
 async def test_a_jog_limits_once_the_right_nozzle_is_zeroed(client, printer):
@@ -271,7 +271,9 @@ def test_pause_return_lifts_the_given_height_axes(height_axes):
     paused_at = {"X": 5, "Y": 5, "Z": 1, "A": 1, "B": -2, "C": -2}
     jogged = {**paused_at, "Y": 9, "Z": 4, "A": 4}  # both heights raised
     target = MachineState(pos={ax: float(v) for ax, v in paused_at.items()}, relative=True, feed=200)
-    commands = build_return_commands(jogged, paused_at, target, restore_modes=False, height_axes=height_axes)
+    commands = build_return_commands(
+        jogged, paused_at, target, restore_modes=False, height_axes=height_axes, plunger_axes=AXES.plungers
+    )
     lift = " ".join(f"{ax}5" for ax in height_axes)
     lower = " ".join(f"{ax}-8" for ax in height_axes)
     assert commands == ["G91", f"G1 {lift} F300", "G1 Y-4 F300", f"G1 {lower} F300", "G1 F200", "G91"]

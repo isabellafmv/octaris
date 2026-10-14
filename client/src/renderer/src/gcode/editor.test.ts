@@ -2,6 +2,7 @@ import { history, undo } from '@codemirror/commands'
 import { EditorState, Text } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
 import {
+  axisLetters,
   clampLine,
   errorLine,
   hasUnsavedChanges,
@@ -11,12 +12,31 @@ import {
   tokenizeGcodeLine
 } from './editor'
 
+// The Printess 1.0's axes: X, Y, E, heights Z and A, plungers B and C
+const PRINTESS_AXES = new Set(['X', 'Y', 'E', 'Z', 'A', 'B', 'C'])
+
 // Each token as [text, kind], for readable assertions
-function tokens(line: string): [string, string][] {
-  return tokenizeGcodeLine(line).map((t) => [line.slice(t.from, t.to), t.kind])
+function tokens(line: string, axes: ReadonlySet<string> = PRINTESS_AXES): [string, string][] {
+  return tokenizeGcodeLine(line, axes).map((t) => [line.slice(t.from, t.to), t.kind])
 }
 
 describe('tokenizeGcodeLine', () => {
+  it("marks the profile's axis letters as axes, and only those", () => {
+    const profile = {
+      id: 'custom',
+      name: 'Custom',
+      nozzles: [{ id: 's', name: 'S', height_axis: 'U', plunger_axis: 'V' }]
+    }
+    const axes = axisLetters(profile)
+    expect([...axes].sort()).toEqual(['E', 'U', 'V', 'X', 'Y'])
+    expect(tokens('G1 U1 V-0.5 B2', axes)).toEqual([
+      ['G1', 'command'],
+      ['U1', 'axis'],
+      ['V-0.5', 'axis'],
+      ['B2', 'param']
+    ])
+  })
+
   it('splits a move into command, axis and parameter words', () => {
     expect(tokens('G1 X10.5 Y-3 B-.02 F200')).toEqual([
       ['G1', 'command'],

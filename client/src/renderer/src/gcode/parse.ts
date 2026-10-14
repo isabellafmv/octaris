@@ -135,8 +135,10 @@ export function parseGcode(
   let relative = false // G91
   let relativeE = false // M83, or G91
   // A nozzle's height is its own axis, but a file that never moves that
-  // axis (an older file for one nozzle) changes layers on Z: fall back to it.
-  const movedAxes = new Set<string>(['Z'])
+  // axis (an older file for one nozzle, or a raw slicer file) changes
+  // layers on Cura's Z: fall back to it, unless the profile's Z is a plunger.
+  const curaZ = nozzles.some((n) => n.plungerAxis === 'Z') ? null : 'Z'
+  const movedAxes = new Set<string>(curaZ ? [curaZ] : [])
   // Travel belongs to the nozzle that last extruded
   let active = 0
 
@@ -145,8 +147,9 @@ export function parseGcode(
   const extruding: number[] = []
 
   const height = (nozzle: number, p: Position): number => {
-    const axis = nozzles[nozzle]?.heightAxis ?? 'Z'
-    return movedAxes.has(axis) ? p[axis] : p.Z
+    const axis = nozzles[nozzle]?.heightAxis
+    if (axis !== undefined && (movedAxes.has(axis) || curaZ === null)) return p[axis]
+    return p.Z
   }
 
   const addSegment = (

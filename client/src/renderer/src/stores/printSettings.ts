@@ -13,10 +13,14 @@ interface PrintSettingsState extends PrintParameters {
   // least one. Kept to the printer profile's nozzles by stores/printer.ts.
   selectedNozzles: string[]
   jogStep: number
+  // The syringes whose heights the jog panel moves, picked by hand; null:
+  // follow selectedNozzles (see components/jogHeights.ts)
+  jogHeightNozzles: string[] | null
   // Gauge of the picked Nordson tip; null once the nozzle diameter is typed by hand
   nordsonGauge: number | null
   selectNordsonTip: (tip: NordsonTip) => void
   setJogStep: (step: number) => void
+  setJogHeightNozzles: (ids: string[]) => void
   setSelectedNozzles: (ids: string[]) => void
   // Select or deselect one; the last selected one can't be deselected
   toggleNozzle: (id: string) => void
@@ -34,10 +38,12 @@ export const usePrintSettings = create<PrintSettingsState>()((set) => ({
   travelRetractMultiplier: '3',
   printSpeed: '300', // mm/min (5 mm/s)
   jogStep: 5,
+  jogHeightNozzles: null,
   nordsonGauge: null,
   selectNordsonTip: (tip) =>
     set({ nordsonGauge: tip.gauge, nozzleDiameter: String(tip.innerDiameterMm) }),
   setJogStep: (jogStep) => set({ jogStep }),
+  setJogHeightNozzles: (jogHeightNozzles) => set({ jogHeightNozzles }),
   setSelectedNozzles: (selectedNozzles) => set({ selectedNozzles }),
   toggleNozzle: (id) =>
     set(({ selectedNozzles }) => {

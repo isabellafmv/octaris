@@ -13,7 +13,7 @@ from typing import TypedDict
 
 from backend.config import PROJECT_ROOT, load_config
 from backend.gcode_processor import MAX_FEED, PRESSURIZE_MM, Nozzles, ProcessedGcode, process_gcode
-from backend.printer import BuildVolume
+from backend.printer import Axes, BuildVolume
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +219,7 @@ async def slice_model(
     max_feed: float = MAX_FEED,
     profile_path: Path | None = None,
     build_volume: BuildVolume | None = None,
+    axes: Axes | None = None,
 ) -> ProcessedGcode:
     """Slice an STL or 3MF file for `nozzles` (a profile's selection) and
     return processed G-code.
@@ -228,7 +229,7 @@ async def slice_model(
     prints are supported with two nozzles selected.
 
     `build_volume` is the printer profile's: Cura's machine size, and the
-    largest model accepted.
+    largest model accepted. `axes` are the profile's (see process_gcode).
 
     `print_speed` (mm/s) sets Cura's speed_print and speed_travel (see
     PRINT_SPEED_SETTINGS); `max_feed` (mm/min) is the cap every feed rate
@@ -370,6 +371,7 @@ async def slice_model(
         flow_multiplier=flow_multiplier or 1.0,
         travel_retract_multiplier=travel_retract_multiplier or 3.0,
         max_feed=max_feed,
+        axes=axes,
     )
 
 

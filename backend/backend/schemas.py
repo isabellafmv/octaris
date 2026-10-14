@@ -11,7 +11,7 @@ from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.printer import PrinterProfile
+from backend.printer import NozzleFields, PrinterProfile
 
 # The worker's print status, plus the upload states the client also shows
 PrintStatus = Literal["idle", "slicing", "ready", "printing", "paused", "stopped", "completed"]
@@ -258,10 +258,20 @@ class CalibrationEvent(Event):
 
 
 class PrinterProfileEvent(Event):
-    """Another printer profile was selected (PUT /printer)."""
+    """Another printer profile was selected (PUT /printer), or the Custom
+    profile in use was saved (PUT /printer/custom)."""
 
     type: Literal["printer_profile"] = "printer_profile"
     printer: PrinterProfile
+
+
+class PrinterProfilesEvent(Event):
+    """The list of printer profiles changed: the Custom profile was saved
+    or reset (PUT/DELETE /printer/custom). Same body as GET /printer/profiles."""
+
+    type: Literal["printer_profiles"] = "printer_profiles"
+    selected: str
+    profiles: list[PrinterProfile]
 
 
 class PrintEndEvent(Event):
@@ -294,6 +304,7 @@ WsEvent = Annotated[
     | PrinterEvent
     | CalibrationEvent
     | PrinterProfileEvent
+    | PrinterProfilesEvent
     | PrintEndEvent
     | PrintResumedEvent,
     Field(discriminator="type"),
@@ -343,7 +354,8 @@ class CalibrationResetResponse(BaseModel):
 
 
 class PrinterProfilesResponse(BaseModel):
-    """Every printer profile (built in or from config.json), and the selected one's id."""
+    """Every printer profile (built in, from config.json, and the Custom
+    profile once one is saved), and the selected one's id."""
 
     selected: str
     profiles: list[PrinterProfile]
@@ -351,6 +363,17 @@ class PrinterProfilesResponse(BaseModel):
 
 class SelectProfileRequest(BaseModel):
     profile: str
+
+
+class CustomProfileRequest(BaseModel):
+    """The Custom profile's nozzles, left to right, as edited on the Setup
+    screen. Its bed, build volume and steps/mm are kept from the Custom
+    profile saved before or, the first time, copied from `base` (the
+    profile being edited; default: the selected one)."""
+
+    nozzles: list[NozzleFields]
+    nozzle_offset_measured: bool = False
+    base: str | None = None
 
 
 class UploadResult(BaseModel):
@@ -423,7 +446,8 @@ class ExtrusionResponse(BaseModel):
 
 class JogResponse(BaseModel):
     status: Literal["ok"]
-    axis: str
+    axis: str  # the first of `axes`
+    axes: list[str]  # every axis moved, in one G1 block
     distance: float
 
 

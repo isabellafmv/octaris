@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
-from backend.printer import HEIGHT_AXES, PLUNGER_AXES, NozzleSpec
+from backend.printer import Axes, NozzleSpec
 
 # Pressurization distance (mm) to prime/deprime the syringe
 PRESSURIZE_MM = 0.2
@@ -32,16 +32,11 @@ class GcodeValidationError(Exception):
     pass
 
 
-# Decimals each axis is written with in the relative output: Cura's own
-# resolution for X/Y/Z (3) and for E (5), which the plungers come from.
-AXIS_DECIMALS = {"X": 3, "Y": 3, **dict.fromkeys(HEIGHT_AXES, 3), **dict.fromkeys(PLUNGER_AXES, 5)}
-AXES = tuple(AXIS_DECIMALS)
-
-
 @dataclass(frozen=True)
 class MachineState:
     """Logical machine state (what M114 reports) between two G-code lines.
 
+    `pos` has the axes that are tracked: a printer profile's (Axes.all).
     An axis is None until the program sets it with an absolute move or G92;
     before that its position depends on where the printer happened to be.
     """
@@ -49,6 +44,11 @@ class MachineState:
     pos: dict[str, float | None]
     relative: bool = False  # G91 in effect
     feed: float | None = None  # modal F
+
+    @classmethod
+    def unknown(cls, axes: Iterable[str], relative: bool = False) -> MachineState:
+        """Every one of `axes` unknown."""
+        return cls(pos=dict.fromkeys(axes), relative=relative)
 
 
 @dataclass
@@ -62,9 +62,9 @@ class ProcessedGcode:
     # Plunger axes this file extrudes with, and its pressurization distance
     extrusion_axes: tuple[str, ...] = ()
     pressurize_mm: float = 0.0
-    # The height motors of the nozzle(s) the print uses (Z left, A right):
-    # what lifts and lowers on a resume or a return after a pause.
-    height_axes: tuple[str, ...] = ("Z",)
+    # The height motors of the nozzle(s) the print uses: what lifts and
+    # lowers on a resume or a return after a pause.
+    height_axes: tuple[str, ...] = ()
     # Where the relative moves assume the print starts: the zero point, for
     # a converted file, which the head travels back to if it isn't there.
     # None: wherever the head is (a lab G91 file, sent as it is).
@@ -89,7 +89,8 @@ def step(state: MachineState, line: str) -> MachineState:
 
     Pure function of (state, line) — used both to plan a file ahead of time
     (simulate_states) and to track what was actually sent to the printer,
-    line by line, as it's sent (see QueueWorker._track_send).
+    line by line, as it's sent (see QueueWorker._track_send). Only the axes
+    of `state` are tracked.
     """
     words = parse_words(line)
     if not words or words[0][0] != "G":
@@ -100,7 +101,7 @@ def step(state: MachineState, line: str) -> MachineState:
     pos = dict(state.pos)
 
     if code in (0, 1):
-        for ax in AXES:
+        for ax in state.pos:
             if ax not in params:
                 continue
             if state.relative:
@@ -114,25 +115,23 @@ def step(state: MachineState, line: str) -> MachineState:
     if code == 91:
         return MachineState(pos, True, state.feed)
     if code == 92:
-        for ax in AXES:
+        for ax in state.pos:
             if ax in params:
                 pos[ax] = params[ax]
         return MachineState(pos, state.relative, state.feed)
     if code == 28:
         # Homed axes end up at the home position, which we don't know
-        homed = [ax for ax in AXES if ax in params] or list(AXES)
+        homed = [ax for ax in state.pos if ax in params] or list(state.pos)
         for ax in homed:
             pos[ax] = None
         return MachineState(pos, state.relative, state.feed)
     return state
 
 
-def simulate_states(
-    lines: list[str], start: MachineState | None = None
-) -> tuple[list[MachineState], list[MachineState]]:
-    """Track G90/G91, G92, F and the X/Y/Z/A/B/C positions through `lines`,
-    from `start` (default: every axis unknown, absolute mode)."""
-    state = start or MachineState(pos={ax: None for ax in AXES})
+def simulate_states(lines: list[str], start: MachineState) -> tuple[list[MachineState], list[MachineState]]:
+    """Track G90/G91, G92, F and the positions of `start`'s axes through
+    `lines`, from `start`."""
+    state = start
     before: list[MachineState] = []
     after: list[MachineState] = []
 
@@ -330,7 +329,9 @@ def map_height_axes(cmds: list[Command], nozzles: Nozzles) -> list[Command]:
     """Cura writes one height axis, Z; each nozzle has its own motor. Every
     Z becomes the nozzles' height axes, with the same value, so they all
     rise together (a lone Z nozzle keeps the file as it is). G92 is mapped
-    the same way, so the coordinates stay consistent."""
+    the same way, so the coordinates stay consistent. Runs before E is
+    substituted, so only Cura's Z is mapped, even when a profile's plunger
+    is called Z."""
     heights = height_axes(nozzles)
     if heights == ("Z",):
         return cmds
@@ -398,27 +399,24 @@ def _mirror_e(cmd: Command, plungers: Sequence[str]) -> Command:
     return renamed.with_words([*renamed.words, *(Word(ax, -e) for ax in plungers[1:])])
 
 
-_PLUNGER_LETTERS = "".join(PLUNGER_AXES)
-
-
-def apply_flow_multiplier(cmds: list[Command], multiplier: float) -> list[Command]:
-    """Scale all plunger extrusion values by the given multiplier."""
+def apply_flow_multiplier(cmds: list[Command], multiplier: float, plungers: Sequence[str]) -> list[Command]:
+    """Scale the `plungers`' extrusion values by the given multiplier."""
     if multiplier == 1.0:
         return cmds
-    return [cmd.map_axis(_PLUNGER_LETTERS, lambda v: v * multiplier) for cmd in cmds]
+    return [cmd.map_axis("".join(plungers), lambda v: v * multiplier) for cmd in cmds]
 
 
-def scale_flow(line: str, multiplier: float) -> str:
+def scale_flow(line: str, multiplier: float, plungers: Sequence[str]) -> str:
     """The runtime flow override, applied to each line as it is sent: a
-    move's plunger distances are scaled (the print is relative, so each
-    plunger value is the distance that move pushes). Other commands are
-    left alone."""
+    move's distances on `plungers` (the profile's) are scaled (the print is
+    relative, so each plunger value is the distance that move pushes).
+    Other commands are left alone."""
     if multiplier == 1.0:
         return line
     cmd = parse_line(line)
     if not cmd.is_move:
         return line
-    return render_line(cmd.map_axis(_PLUNGER_LETTERS, lambda v: v * multiplier))
+    return render_line(cmd.map_axis("".join(plungers), lambda v: v * multiplier))
 
 
 def clamp_feed_rates(cmds: list[Command], max_f: float = MAX_FEED) -> tuple[list[Command], list[str]]:
@@ -488,8 +486,8 @@ def insert_travel_retract(
 
     Retracts before the first G0 of a run of travel moves and primes before
     the next command that isn't one, so material doesn't string between
-    print segments (e.g. star corners). G0 moves with Z/A are layer changes,
-    handled by insert_layer_depressurize.
+    print segments (e.g. star corners). G0 moves with a height axis are
+    layer changes, handled by insert_layer_depressurize.
     """
     axes = _extrusion_axes(nozzles)
     z_axis = _z_axis(nozzles)
@@ -545,31 +543,33 @@ def add_preamble_and_footer(
     return parse(build_preamble(nozzles, pressurize_mm)) + cmds + parse(build_footer(nozzles, pressurize_mm))
 
 
-def start_position(cmds: list[Command]) -> dict[str, float]:
+def start_position(cmds: list[Command], axes: Axes) -> dict[str, float]:
     """Where a print converted by to_relative starts: the zero point, on the
-    stage axes the absolute program puts at a coordinate."""
+    stage axes (X, Y, `axes`' heights) the absolute program puts at a
+    coordinate."""
     relative = False
-    axes: set[str] = set()
+    moved: set[str] = set()
     for cmd in cmds:
         if cmd.code in ("G90", "G91"):
             relative = cmd.code == "G91"
         elif cmd.is_move and not relative:
-            axes.update(w.letter for w in cmd.words if w.letter in ("X", "Y", *HEIGHT_AXES))
-    return {ax: 0.0 for ax in AXES if ax in axes}
+            moved.update(w.letter for w in cmd.words if w.letter in axes.stage)
+    return {ax: 0.0 for ax in axes.all if ax in moved}
 
 
-def _to_units(axis: str, value: float) -> int:
-    return round(value * 10 ** AXIS_DECIMALS[axis])
+def _to_units(axes: Axes, axis: str, value: float) -> int:
+    return round(value * 10 ** axes.decimals(axis))
 
 
-def _units_text(axis: str, units: int) -> str:
-    """`units` (of 10^-AXIS_DECIMALS mm) as exact decimal text, e.g. -1205 on X: "-1.205"."""
-    whole, frac = divmod(abs(units), 10 ** AXIS_DECIMALS[axis])
-    digits = f"{frac:0{AXIS_DECIMALS[axis]}d}".rstrip("0")
+def _units_text(axes: Axes, axis: str, units: int) -> str:
+    """`units` (of 10^-decimals mm) as exact decimal text, e.g. -1205 on X: "-1.205"."""
+    decimals = axes.decimals(axis)
+    whole, frac = divmod(abs(units), 10**decimals)
+    digits = f"{frac:0{decimals}d}".rstrip("0")
     return ("-" if units < 0 else "") + str(whole) + (f".{digits}" if digits else "")
 
 
-def to_relative(cmds: list[Command], start: Mapping[str, float] | None = None) -> list[Command]:
+def to_relative(cmds: list[Command], axes: Axes, start: Mapping[str, float] | None = None) -> list[Command]:
     """Write every move as a relative distance, behind a single G91.
 
     Reads the program as the printer would: G90/G91 set the positioning
@@ -578,17 +578,18 @@ def to_relative(cmds: list[Command], start: Mapping[str, float] | None = None) -
     the coordinates. All of these are taken into account and dropped, so
     nothing after the G91 switches back to absolute (or renumbers an axis).
 
-    Each axis' absolute target is rounded to AXIS_DECIMALS and kept as an
-    integer count of those units; a move is (rounded target − rounded
+    Each axis of `axes` has its absolute target rounded to Axes.decimals
+    and kept as an integer count of those units; a move is (rounded target − rounded
     previous target). The distances so add up exactly to the rounded
     targets, and rounding never accumulates over a long print.
 
     `start` is where the print starts, 0 on any axis it leaves out: the
     zero point the absolute program's coordinates are measured from.
     """
-    pos = {ax: 0.0 for ax in AXES} | dict(start or {})  # exact, in the printer's coordinates
-    shift = {ax: 0.0 for ax in AXES}  # printer minus program coordinate, set by G92
-    units = {ax: _to_units(ax, pos[ax]) for ax in AXES}  # rounded position written so far
+    letters = axes.all
+    pos = {ax: 0.0 for ax in letters} | dict(start or {})  # exact, in the printer's coordinates
+    shift = {ax: 0.0 for ax in letters}  # printer minus program coordinate, set by G92
+    units = {ax: _to_units(axes, ax, pos[ax]) for ax in letters}  # rounded position written so far
     relative = e_relative = False
     result = [parse_line("G91 ; relative positioning for the whole print")]
 
@@ -599,7 +600,7 @@ def to_relative(cmds: list[Command], start: Mapping[str, float] | None = None) -
             e_relative = cmd.code == "M83"
         elif cmd.code == "G92":
             for w in cmd.words:
-                if w.letter in AXES:
+                if w.letter in letters:
                     shift[w.letter] = pos[w.letter] - w.value
         elif cmd.code == "G28":
             raise GcodeValidationError(
@@ -609,17 +610,17 @@ def to_relative(cmds: list[Command], start: Mapping[str, float] | None = None) -
             words = []
             for w in cmd.words:
                 ax = w.letter
-                if ax not in AXES:
+                if ax not in letters:
                     words.append(w)
                     continue
-                if relative or (e_relative and ax in PLUNGER_AXES):
+                if relative or (e_relative and ax in axes.plungers):
                     pos[ax] += w.value
                 else:
                     pos[ax] = w.value + shift[ax]
-                target = _to_units(ax, pos[ax])
+                target = _to_units(axes, ax, pos[ax])
                 delta, units[ax] = target - units[ax], target
                 if delta:
-                    words.append(Word(ax, delta / 10 ** AXIS_DECIMALS[ax], _units_text(ax, delta)))
+                    words.append(Word(ax, delta / 10 ** axes.decimals(ax), _units_text(axes, ax, delta)))
             if words:
                 result.append(cmd.with_words(words))
             elif cmd.comment:
@@ -652,14 +653,15 @@ def validate(cmds: list[Command], max_feed: float = MAX_FEED) -> None:
                 raise GcodeValidationError(f"Line {i + 1}: F value {str(w)[1:]} exceeds {max_feed:g}")
 
 
-def check_as_uploaded(cmds: list[Command], max_feed: float = MAX_FEED) -> list[str]:
-    """Check a file that is sent exactly as uploaded: raise
-    GcodeValidationError if there is nothing to print, and return warnings
-    for what would print differently than intended (nothing is changed)."""
+def check_as_uploaded(cmds: list[Command], axes: Axes, max_feed: float = MAX_FEED) -> list[str]:
+    """Check a file that is sent exactly as uploaded to a printer with
+    `axes`: raise GcodeValidationError if there is nothing to print, and
+    return warnings for what would print differently than intended
+    (nothing is changed)."""
     numbered = [(i, cmd) for i, cmd in enumerate(cmds) if cmd.code]
     if not numbered:
         raise GcodeValidationError("Empty G-code")
-    if not any(cmd.is_move and any(cmd.has(ax) for ax in AXES) for _, cmd in numbered):
+    if not any(cmd.is_move and any(cmd.has(ax) for ax in axes.all) for _, cmd in numbered):
         raise GcodeValidationError("The file has no motion commands (G0/G1 moves)")
 
     warnings = []
@@ -672,9 +674,10 @@ def check_as_uploaded(cmds: list[Command], max_feed: float = MAX_FEED) -> list[s
         )
     with_e = [i for i, cmd in numbered if cmd.has("E")]
     if with_e:
+        plungers = "the plungers are" if len(axes.plungers) > 1 else "the plunger is"
         warnings.append(
-            f"{len(with_e)} line(s) use E (first on line {with_e[0] + 1}); the plungers are "
-            f'B (left) and C (right), so E moves no syringe. Choose "Needs changes" to convert them'
+            f"{len(with_e)} line(s) use E (first on line {with_e[0] + 1}); {plungers} "
+            f'{axes.describe_plungers()}, so E moves no syringe. Choose "Needs changes" to convert them'
         )
     first_move = next((i for i, cmd in numbered if cmd.is_move), len(cmds))
     if not any(cmd.code == "G91" for i, cmd in numbered if i < first_move):
@@ -716,9 +719,11 @@ def build_print(
     preamble, footer and retracts added; process_gcode makes it relative.
     Also returns the feed rate clamping log."""
     cmds = trim_to_print(cmds)
-    cmds = substitute_extrusion(cmds, nozzles)
+    # Cura's Z first: a profile may use the letter Z for a plunger, which E
+    # becomes next
     cmds = map_height_axes(cmds, nozzles)
-    cmds = apply_flow_multiplier(cmds, flow_multiplier)
+    cmds = substitute_extrusion(cmds, nozzles)
+    cmds = apply_flow_multiplier(cmds, flow_multiplier, _extrusion_axes(nozzles))
     cmds = insert_layer_depressurize(cmds, nozzles, pressurize_mm)
     cmds = insert_travel_retract(cmds, nozzles, pressurize_mm * travel_retract_multiplier)
     cmds = add_preamble_and_footer(cmds, nozzles, pressurize_mm)
@@ -726,23 +731,33 @@ def build_print(
     return clamp_feed_rates(cmds, max_feed)
 
 
+def moved_axes(cmds: Iterable[Command], axes: Axes) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The plungers and the height motors of `axes` that a file kept as it
+    is moves. A file that moves no height motor gets the first nozzle's."""
+    moved = {w.letter for c in cmds if c.is_move for w in c.words}
+    plungers = tuple(ax for ax in axes.plungers if ax in moved)
+    heights = tuple(ax for ax in axes.heights if ax in moved) or axes.heights[:1]
+    return plungers, heights
+
+
 def as_uploaded(
-    raw: str, pressurize_mm: float = PRESSURIZE_MM, warnings: list[str] | None = None
+    raw: str, axes: Axes, pressurize_mm: float = PRESSURIZE_MM, warnings: list[str] | None = None
 ) -> ProcessedGcode:
     """The file exactly as it is, starting wherever the head is: its states
-    planned from unknown positions, its plungers and height motors those it
-    moves. `pressurize_mm` is what an e-stop pulls the plungers back."""
+    planned from unknown positions, its plungers and height motors those of
+    `axes` (the printer's) it moves. `pressurize_mm` is what an e-stop pulls
+    the plungers back."""
     lines = raw.splitlines()
-    cmds = parse(lines)
-    state_before, state_after = simulate_states(lines)
+    state_before, state_after = simulate_states(lines, MachineState.unknown(axes.all))
+    plungers, heights = moved_axes(parse(lines), axes)
     return ProcessedGcode(
         lines=lines,
         time_estimate_s=extract_time_metadata(raw),
         state_before=state_before,
         state_after=state_after,
-        extrusion_axes=tuple(ax for ax in PLUNGER_AXES if any(c.is_move and c.has(ax) for c in cmds)),
+        extrusion_axes=plungers,
         pressurize_mm=pressurize_mm,
-        height_axes=tuple(ax for ax in HEIGHT_AXES if any(c.is_move and c.has(ax) for c in cmds)) or ("Z",),
+        height_axes=heights,
         warnings=warnings or [],
     )
 
@@ -754,25 +769,30 @@ def process_gcode(
     flow_multiplier: float = 1.0,
     travel_retract_multiplier: float = TRAVEL_RETRACT_MULTIPLIER,
     max_feed: float = MAX_FEED,
+    axes: Axes | None = None,
 ) -> ProcessedGcode:
     """Turn sliced G-code into the relative (G91) program sent to the printer.
 
     A lab file that is relative already (see is_relative_program) is kept
-    exactly as it is, and starts wherever the head is.
+    exactly as it is, and starts wherever the head is. `axes` are the
+    printer profile's (default: the `nozzles`'), which such a file may move.
     """
+    axes = axes or Axes.of(nozzles)
     cmds = parse(raw.splitlines())
     if is_relative_program(cmds):
-        return as_uploaded(raw, pressurize_mm)
+        return as_uploaded(raw, axes, pressurize_mm)
 
     cmds, feed_log = build_print(
         cmds, nozzles, pressurize_mm, flow_multiplier, travel_retract_multiplier, max_feed
     )
-    start = start_position(cmds)
-    cmds = to_relative(cmds, start)
+    start = start_position(cmds, axes)
+    cmds = to_relative(cmds, axes, start)
     validate(cmds, max_feed)
     lines = render(cmds)
     # The plungers count from 0 at the start, like the other axes the print moves
-    planned_start = MachineState(pos={ax: start.get(ax, 0.0 if ax in PLUNGER_AXES else None) for ax in AXES})
+    planned_start = MachineState(
+        pos={ax: start.get(ax, 0.0 if ax in axes.plungers else None) for ax in axes.all}
+    )
     state_before, state_after = simulate_states(lines, planned_start)
     return ProcessedGcode(
         lines=lines,

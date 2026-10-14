@@ -100,10 +100,12 @@ function SyringeModule({
 
 interface SyringeSelectorProps {
   // The printer profile's nozzles, left to right
-  nozzles: NozzleSpec[]
+  nozzles: Pick<NozzleSpec, 'id' | 'name'>[]
   selected: string[]
   onToggle: (id: string) => void
   compact?: boolean
+  // Drawn under each syringe (the setup editor's fields)
+  below?: (index: number) => React.ReactNode
 }
 
 // The printer's syringes, left to right: tap one to select or deselect it.
@@ -112,25 +114,28 @@ export function SyringeSelector({
   nozzles,
   selected,
   onToggle,
-  compact = false
+  compact = false,
+  below
 }: SyringeSelectorProps): React.JSX.Element {
   if (compact) {
     // Too short for the drawing: one chip per syringe
     return (
-      <div className="flex gap-2 justify-center">
-        {nozzles.map((n) => {
+      <div className={`flex justify-center ${below ? 'gap-3 items-start' : 'gap-2'}`}>
+        {nozzles.map((n, i) => {
           const active = selected.includes(n.id)
           return (
-            <button
-              key={n.id}
-              onClick={() => onToggle(n.id)}
-              aria-pressed={active}
-              className={`px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide uppercase transition-all ${
-                active ? 'bg-primary text-white' : 'bg-border text-text-muted'
-              }`}
-            >
-              {n.name}
-            </button>
+            <div key={n.id} className="flex flex-col items-center gap-2">
+              <button
+                onClick={() => onToggle(n.id)}
+                aria-pressed={active}
+                className={`px-3 py-1 rounded-full text-[10px] font-semibold tracking-wide uppercase transition-all ${
+                  active ? 'bg-primary text-white' : 'bg-border text-text-muted'
+                }`}
+              >
+                {n.name}
+              </button>
+              {below?.(i)}
+            </div>
           )
         })}
       </div>
@@ -139,15 +144,17 @@ export function SyringeSelector({
 
   return (
     <div className="flex flex-col items-center gap-4 w-full">
-      <div className="flex items-end justify-center gap-12">
+      <div className={`flex justify-center ${below ? 'gap-3 items-start' : 'gap-12 items-end'}`}>
         {nozzles.map((n, i) => (
-          <SyringeModule
-            key={n.id}
-            label={n.name}
-            isActive={selected.includes(n.id)}
-            fillLevel={FILL_LEVELS[i % FILL_LEVELS.length]}
-            onToggle={() => onToggle(n.id)}
-          />
+          <div key={n.id} className="flex flex-col items-center gap-3">
+            <SyringeModule
+              label={n.name}
+              isActive={selected.includes(n.id)}
+              fillLevel={FILL_LEVELS[i % FILL_LEVELS.length]}
+              onToggle={() => onToggle(n.id)}
+            />
+            {below?.(i)}
+          </div>
         ))}
       </div>
 

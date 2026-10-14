@@ -16,6 +16,7 @@ import {
   type DecorationSet,
   type ViewUpdate
 } from '@codemirror/view'
+import type { PrinterProfile } from '../types'
 
 export type TokenKind = 'command' | 'axis' | 'param' | 'comment'
 
@@ -25,18 +26,21 @@ export interface Token {
   kind: TokenKind
 }
 
-// The words the printer moves: stage, nozzle heights and plungers (E before
-// it is substituted)
-const AXIS_LETTERS = new Set(['X', 'Y', 'Z', 'A', 'B', 'C', 'E'])
+// The words the printer moves: X/Y, the profile's nozzle heights and
+// plungers, and E (before it is substituted)
+export function axisLetters(profile: PrinterProfile | null): ReadonlySet<string> {
+  const nozzleAxes = (profile?.nozzles ?? []).flatMap((n) => [n.height_axis, n.plunger_axis])
+  return new Set(['X', 'Y', 'E', ...nozzleAxes])
+}
 // A letter and its number, as the backend reads them (parse_words): the
 // number may lack a leading zero ("X-.82")
 const WORD = /([A-Za-z])\s*([-+]?\d*\.?\d+)/g
 
 // The highlighted spans of one line, in order: the first word is the
 // command (G1, M83, T0), after any N line number; later ones axis or
-// other parameter words, and
+// other parameter words (`axes`, see axisLetters, are axis words), and
 // everything from a ; is a comment.
-export function tokenizeGcodeLine(line: string): Token[] {
+export function tokenizeGcodeLine(line: string, axes: ReadonlySet<string>): Token[] {
   const tokens: Token[] = []
   const semicolon = line.indexOf(';')
   const code = semicolon === -1 ? line : line.slice(0, semicolon)
@@ -46,7 +50,7 @@ export function tokenizeGcodeLine(line: string): Token[] {
     const letter = match[1].toUpperCase()
     // A line number (N12 G1 ...) comes before the command
     const isCommand = first && letter !== 'N'
-    const kind: TokenKind = isCommand ? 'command' : AXIS_LETTERS.has(letter) ? 'axis' : 'param'
+    const kind: TokenKind = isCommand ? 'command' : axes.has(letter) ? 'axis' : 'param'
     tokens.push({ from, to: from + match[0].length, kind })
     if (isCommand) first = false
   }
@@ -61,7 +65,7 @@ const TOKEN_MARKS: Record<TokenKind, Decoration> = {
   comment: Decoration.mark({ class: 'cm-gc-comment' })
 }
 
-function highlightVisible(view: EditorView): DecorationSet {
+function highlightVisible(view: EditorView, axes: ReadonlySet<string>): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>()
   const doc = view.state.doc
   let lastLine = 0
@@ -69,7 +73,7 @@ function highlightVisible(view: EditorView): DecorationSet {
     for (let pos = from; pos <= to; ) {
       const line = doc.lineAt(pos)
       if (line.number > lastLine) {
-        for (const t of tokenizeGcodeLine(line.text)) {
+        for (const t of tokenizeGcodeLine(line.text, axes)) {
           builder.add(line.from + t.from, line.from + t.to, TOKEN_MARKS[t.kind])
         }
         lastLine = line.number
@@ -80,20 +84,25 @@ function highlightVisible(view: EditorView): DecorationSet {
   return builder.finish()
 }
 
-export const gcodeHighlight = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet
-    constructor(view: EditorView) {
-      this.decorations = highlightVisible(view)
-    }
-    update(update: ViewUpdate): void {
-      if (update.docChanged || update.viewportChanged) {
-        this.decorations = highlightVisible(update.view)
+// Highlighting for a printer with these axis letters (see axisLetters)
+export function gcodeHighlight(
+  axes: ReadonlySet<string>
+): ViewPlugin<{ decorations: DecorationSet }> {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet
+      constructor(view: EditorView) {
+        this.decorations = highlightVisible(view, axes)
       }
-    }
-  },
-  { decorations: (plugin) => plugin.decorations }
-)
+      update(update: ViewUpdate): void {
+        if (update.docChanged || update.viewportChanged) {
+          this.decorations = highlightVisible(update.view, axes)
+        }
+      }
+    },
+    { decorations: (plugin) => plugin.decorations }
+  )
+}
 
 // The line the backend rejected, marked until the next save attempt
 export const setErrorLine = StateEffect.define<number | null>()

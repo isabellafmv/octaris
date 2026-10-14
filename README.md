@@ -58,9 +58,11 @@ The printer shows up as a COM port. Octaris lists only ports that belong to the 
 
 1. **Connect the printer**: use the port selector in the top-right corner. Click *Connect*.
 
-2. **Select the syringes**: the *Printer* dropdown shows the printer profile (only *Printess 1.0* for now; see [Printer profiles](#printer-profiles)), and the card draws its syringes, left to right. Tap a syringe to select it, tap it again to deselect it: any combination, at least one. Every selected syringe prints the same path, each in place; with two selected, a two-material `.3mf` prints one material from each instead. The selection decides which plunger and height axes receive the print's moves.
+2. **Select the syringes**: the *Printer* dropdown shows the printer profile (*Printess 1.0*, any added in `config.json`, and *Custom* once one is saved; see [Printer profiles](#printer-profiles)), and the card draws its syringes, left to right. Tap a syringe to select it, tap it again to deselect it: any combination, at least one. Every selected syringe prints the same path, each in place; with two selected, a two-material `.3mf` prints one material from each instead. The selection decides which plunger and height axes receive the print's moves.
 
-3. **Calibrate (zero the nozzles)** with the jog panel, which has X/Y and one height control per nozzle (Z for the left, A for the right on the Printess 1.0). X/Y are set at the first (leftmost) selected nozzle over the print's start point; each nozzle's height is set with that nozzle lowered onto the bed. One step per selected nozzle, left to right:
+   **Set up the syringes** (a printer with other axes or more syringes, such as the Printess 2.0): click **Edit setup**. Under each syringe, type its name, its height axis (*H*) and plunger axis (*P*), and its offset from the first syringe in mm (*X*, *Y*). **+ Add syringe** adds one on the right (up to 6, as long as axis letters are left), **Remove** takes one away (at least 1 stays). Tick **Offsets measured** once the offsets are measured: prints with several syringes are refused until then. Each axis is one of Z, A, B, C, I, J, K, U, V, W (not X/Y, the stage, nor E), used once in the setup; a field that breaks this turns red and says why, and **Save** stays off until every field is valid. Saving stores the setup as the *Custom* profile (editing a built-in profile copies it, with its bed and build volume, into *Custom*) and selects it at once, kept across restarts: no `config.json` change or restart needed. **Reset to Printess 1.0** deletes *Custom* and goes back to the Printess 1.0. Saving, resetting or switching the printer resets the calibration and the resume checkpoint and unloads the loaded print, and isn't possible while a print is running or paused.
+
+3. **Calibrate (zero the nozzles)** with the jog panel, which has X/Y and a height column that moves the height axes chosen with its chips: by default those of the selected syringes (Z for the left, A for the right on the Printess 1.0; see *Jog panel* under [Manual control](#manual-control-take-over-screen)). X/Y are set at the first (leftmost) selected nozzle over the print's start point; each nozzle's height is set with that nozzle lowered onto the bed. One step per selected nozzle, left to right:
    - The first: jog it over the start point, lower it onto the bed, click **Zero <nozzle>** (`G92 X0 Y0 <height>0 <plunger>0`).
    - Each further one: lower it onto the bed and click **Zero <nozzle>** (`G92 <height>0 <plunger>0`): its height only, the start point stays where the first set it.
 
@@ -85,7 +87,7 @@ The printer shows up as a COM port. Octaris lists only ports that belong to the 
 
 **Pause and resume.** You can jog or send commands while paused; on resume the head goes back to where it paused and the print continues.
 
-**Stop and resume.** *Stop* sends `M410`, which halts the motors at once, then reads the position back (`M114`) to find the line the printer stopped on. If that works, the stop dialog offers **Resume**: the head returns to the stop point and the print continues from the rest of that line. A stop can't be resumed (the dialog says why) if the USB link dropped, the printer was reconnected, or something changed the coordinates or plungers in the meantime (`G92`, a manual B/C move). *Restart* starts the print from the beginning.
+**Stop and resume.** *Stop* sends `M410`, which halts the motors at once, then reads the position back (`M114`) to find the line the printer stopped on. If that works, the stop dialog offers **Resume**: the head returns to the stop point and the print continues from the rest of that line. A stop can't be resumed (the dialog says why) if the USB link dropped, the printer was reconnected, or something changed the coordinates or plungers in the meantime (`G92`, a manual plunger move). *Restart* starts the print from the beginning.
 
 ### Relative printing
 
@@ -180,7 +182,7 @@ Accessible from the sidebar during a print or when idle:
 - **Serial log** — scrollable view of every command sent to and received from the printer.
 - **G-code input** — type any G-code command and send it directly.
 - **Quick commands** — buttons for common operations (Home, position query, settings, etc.).
-- **Jog panel** — move individual axes by fixed increments (0.1, 1, or 5 mm).
+- **Jog panel** — move the stage and the nozzle heights by a step (0.1, 1 or 5 mm, or a custom one). Next to the X/Y pad is one height column (up/down), with a row of chips above it, one per syringe of the printer profile, labelled with its height axis and name (*Z left*, *A right*). Tap the chips to choose which height axes the buttons move: one, several or all (at least one stays chosen). One press moves every chosen axis together, in one block (`G1 Z1 A1 F300`); once zeroed, each axis is checked against the bed limits, and if one would leave the bed nothing moves. Until a chip is tapped, the chips follow the syringes selected for printing; after that the choice is kept for the session (like the step). `POST /jog` takes `{"axes": ["Z", "A"], "distance": 1}`, or one `"axis"` as before.
 - **Go to Origin** — returns the stage to X0 Y0. *Lower to zero height* (Setup) then lowers the selected nozzles to height 0.
 - **Stop** — sends `M410` and flushes the queue immediately. This is not an emergency stop; use the printer's hardware emergency stop for that.
 
@@ -246,7 +248,7 @@ The Electron app opens automatically. The backend must be running for any printe
 
 ### Without a printer
 
-Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time. With `"protocol": "printess"` in `config.json` it simulates the lab firmware's four heater channels instead of Marlin's heaters: `M104 I<n> T<°C> H` only heats, `C` only cools, `M104 I<n> T0` switches off, and `M105` answers `ok T0:21.30 T1:21.10 T2:20.80 T3:21.60`.
+Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time. It has the selected printer profile's axes: the `M92` sent on connect and on a change of profile names them, and its `M114` reports them all. With `"protocol": "printess"` in `config.json` it simulates the lab firmware's four heater channels instead of Marlin's heaters: `M104 I<n> T<°C> H` only heats, `C` only cools, `M104 I<n> T0` switches off, and `M105` answers `ok T0:21.30 T1:21.10 T2:20.80 T3:21.60`.
 
 ```bash
 OCTARIS_VIRTUAL_PRINTER=1 uvicorn backend.main:app --host 127.0.0.1 --port 8000
@@ -326,7 +328,7 @@ The build bundles CuraEngine from `resources/bin/<target>/` and stops with an er
 |-----|--------|-------------|
 | `target` | `macos` / `windows` / `rpi` | Platform, affects where CuraEngine is looked up. Defaults to the OS it runs on (Linux → `rpi`); set it only to override that. |
 | `baud_rate` | integer | Serial baud rate (default `115200`) |
-| `printer_profile` | profile id | The printer, from `profiles` (default `printess-1`). The *Printer* dropdown on Setup switches it until the backend restarts. |
+| `printer_profile` | profile id | The printer, from `profiles` (default `printess-1`), until one is chosen with the *Printer* dropdown on Setup: that choice is kept in `settings.json` and wins from then on. |
 | `profiles` | `{"<id>": {…}}` | Overrides of the built-in profiles and added ones, see [Printer profiles](#printer-profiles). |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
 | `temperature.protocol` | `marlin` / `printess` | How heaters are set: Marlin's `M104`/`M140`/`M141` (default), or the lab firmware's channels, `M104 I<n> T<°C> H\|C` (see *Lab firmware* above) |
@@ -343,17 +345,22 @@ Slicer settings live in `context/octaris_settings.json` (CuraEngine profile). Cu
 
 ### Printer profiles
 
-A profile describes the printer: its nozzles left to right, where they may move and the slicer's build volume. The built-in *Printess 1.0* (`printess-1`, in `backend/backend/printer.py`) has two nozzles: *left* (height Z, plunger B) and *right* (height A, plunger C, 30 mm in +X from the left). `GET /printer` returns the selected profile, `GET /printer/profiles` all of them, and `PUT /printer {"profile": "<id>"}` switches (which resets the calibration and any resume checkpoint, and unloads the loaded print). The client also gets the profile in the snapshot on connect.
+A profile describes the printer: its nozzles left to right, each with its own height motor and plunger, where they may move and the slicer's build volume. The built-in *Printess 1.0* (`printess-1`, in `backend/backend/printer.py`) has two nozzles: *left* (height Z, plunger B) and *right* (height A, plunger C, 30 mm in +X from the left). `GET /printer` returns the selected profile, `GET /printer/profiles` all of them, and `PUT /printer {"profile": "<id>"}` switches (which resets the calibration and any resume checkpoint, unloads the loaded print and sends a connected printer the profile's `M92`). The choice is kept in `settings.json`. The client also gets the profile in the snapshot on connect.
+
+Nothing in Octaris knows axis letters other than through the selected profile: processing (Cura's Z becomes every selected nozzle's height axis, E each selected plunger, negated), calibration, jogs, *Go to Origin* / *Lower to zero height*, the bed limits (every height axis has the `z` range), the plunger travel check, the position read with `M114`, e-stop resume, the virtual printer, the 3D preview and the jog panel all take them from it. On connect, `M92` sets X, Y and every axis of the profile to its `steps_per_mm`.
+
+The *Custom* profile (`custom`) is the one edited on Setup (see [Setup screen](#setup-screen)). It is saved in `settings.json` in the app data folder, under `"printer"`, not in `config.json`, and is listed after the others once saved. `GET /printer/custom` returns it (`null` until saved), `PUT /printer/custom {"nozzles": [...], "nozzle_offset_measured": bool, "base": "<id>"}` saves and selects it (400 with every problem, one per line, for an invalid setup; 409 during a print), and `DELETE /printer/custom` deletes it and selects `printess-1`. The bed, build volume and steps/mm come from `base`, the profile being edited (default: the Custom profile so far). Other windows follow along through the `printer_profile` and `printer_profiles` events.
 
 | Key | Values | Description |
 |-----|--------|-------------|
 | `name` | text | Shown in the *Printer* dropdown |
-| `nozzles` | list of `{"id", "name", "height_axis", "plunger_axis", "offset_x", "offset_y"}` | Left to right. `offset_x`/`offset_y`: mm from the first nozzle. Height axes are Z or A, plungers B or C (the axis letters the G-code processor knows; a printer with others needs them added to `printer.py`). |
+| `nozzles` | list of `{"id", "name", "height_axis", "plunger_axis", "offset_x", "offset_y"}` | Left to right, 1 to 6. `offset_x`/`offset_y`: mm from the first nozzle. Each axis is one of Z, A, B, C, I, J, K, U, V, W (Marlin's axis names but X/Y/E), used once in the profile, and a nozzle's height and plunger axis differ. Ten letters make 6 nozzles impossible in practice: 5 is the most. |
 | `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the nozzles may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60; every nozzle's height has the `z` range). Jogs (once zeroed) and prints that would leave it are refused. |
 | `build_volume` | `{"x", "y", "z"}` | Cura's machine size in mm (default 60 × 60 × 60). Larger models are refused before slicing. |
 | `nozzle_offset_measured` | `true` / `false` | Set to `true` once the nozzles' `offset_x`/`offset_y` have been measured. Prints with more than one nozzle are refused until then. |
+| `steps_per_mm` | number | Steps/mm of every axis, sent as `M92` on connect and when the profile is selected (default `800`; EEPROM is disabled on the board). |
 
-Under `profiles`, a built-in profile's id overrides only the keys given (nested objects key by key; `nozzles` is replaced as a whole), and any other id adds a profile, which needs `name` and `nozzles`. For example, a 90 mm dish on the Printess 1.0:
+Under `profiles`, a built-in profile's id overrides only the keys given (nested objects key by key; `nozzles` is replaced as a whole), and any other id adds a profile, which needs `name` and `nozzles` (`custom` is kept for the app's Custom profile). For example, a 90 mm dish on the Printess 1.0:
 
 ```json
 "profiles": {

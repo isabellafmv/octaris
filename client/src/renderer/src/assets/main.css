@@ -33,6 +33,8 @@
   --color-nozzle-2: var(--color-warning);
   --color-nozzle-3: var(--color-chart-3);
   --color-nozzle-4: var(--color-chart-4);
+  --color-nozzle-5: var(--color-chart-5);
+  --color-nozzle-6: var(--color-chart-6);
   --color-travel: var(--color-text-subtle);
   /* Chart series, in this fixed order (validated together on the surface
      color for color-blind separation; slot 6 is below 3:1 contrast, so it

@@ -20,6 +20,8 @@ export type NozzleCalibration = Record<string, boolean>
 export type PrinterProfile = Schemas['PrinterProfile']
 export type NozzleSpec = Schemas['NozzleSpec']
 export type PrinterProfilesResponse = Schemas['PrinterProfilesResponse']
+// PUT /printer/custom: the Custom profile's syringes, as edited on Setup
+export type CustomProfileRequest = Schemas['CustomProfileRequest']
 export type CalibrateResponse = Schemas['CalibrateResponse']
 export type PrintSession = Schemas['PrintSession']
 export type SensorInfo = Pick<SensorReading, 'sensor' | 'name' | 'min' | 'max' | 'settable'>
@@ -55,6 +57,8 @@ export type SnapshotEvent = Schemas['SnapshotEvent']
 export type CalibrationEvent = Schemas['CalibrationEvent']
 // Another printer profile was selected
 export type PrinterProfileEvent = Schemas['PrinterProfileEvent']
+// The list of profiles changed (the Custom profile was saved or reset)
+export type PrinterProfilesEvent = Schemas['PrinterProfilesEvent']
 export type PrintEndEvent = Schemas['PrintEndEvent']
 export type PrintResumedEvent = Schemas['PrintResumedEvent']
 export type WsEvent = Schemas['WsEvent']

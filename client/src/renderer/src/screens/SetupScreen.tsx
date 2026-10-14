@@ -91,7 +91,7 @@ export function SetupScreen({
       <div className="flex flex-1 min-h-0 px-8 pb-6 gap-6">
         {/* Left column — syringe viz + parameters + upload */}
         <div className="flex flex-col gap-4 w-[48%]">
-          <SyringeSelectionSection onError={setError} />
+          <SyringeSelectionSection printStatus={printStatus} onError={setError} />
           <PrintParametersSection />
           <UploadSection upload={upload} onError={setError} />
         </div>

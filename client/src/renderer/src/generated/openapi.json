@@ -566,6 +566,7 @@
     "/jog": {
       "post": {
         "summary": "Jog",
+        "description": "Move one axis, or several together (`axes`), by `distance`. Each\naxis is checked against the bed limits once zeroed; 400 if one would\nleave the bed, and then nothing moves.",
         "operationId": "jog_jog_post",
         "requestBody": {
           "content": {
@@ -1196,7 +1197,7 @@
       },
       "put": {
         "summary": "Select Printer",
-        "description": "Select another printer profile, until the backend restarts\n(config.json's printer_profile is the one it starts with). Resets the\ncalibration and any resume checkpoint, and unloads the loaded print.\nRefused during a print.",
+        "description": "Select another printer profile, kept across restarts (settings.json;\nuntil one is chosen in the app, config.json's printer_profile is used).\nResets the calibration and any resume checkpoint, unloads the loaded\nprint, and sends a connected printer the profile's steps/mm (M92).\nRefused during a print.",
         "operationId": "select_printer_printer_put",
         "requestBody": {
           "content": {
@@ -1235,7 +1236,7 @@
     "/printer/profiles": {
       "get": {
         "summary": "List Profiles",
-        "description": "Every printer profile: built in, or added in config.json.",
+        "description": "Every printer profile: built in, added in config.json, and the\nCustom one once saved.",
         "operationId": "list_profiles_printer_profiles_get",
         "responses": {
           "200": {
@@ -1244,6 +1245,87 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PrinterProfilesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/printer/custom": {
+      "get": {
+        "summary": "Get Custom Profile",
+        "description": "The Custom profile edited in the app; null until one is saved.",
+        "operationId": "get_custom_profile_printer_custom_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PrinterProfile"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Custom Profile Printer Custom Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Save Custom Profile",
+        "description": "Save the Custom profile and select it, as PUT /printer does (refused\nduring a print). 400 lists every problem: each axis must be one of Z, A,\nB, C, I, J, K, U, V, W, used once in the profile, and a syringe's height\nand plunger axis must differ; 1 to 6 syringes.",
+        "operationId": "save_custom_profile_printer_custom_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterProfile"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Reset Custom Profile",
+        "description": "Delete the Custom profile and select the Printess 1.0 (refused\nduring a print). Returns the Printess 1.0 profile.",
+        "operationId": "reset_custom_profile_printer_custom_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterProfile"
                 }
               }
             }
@@ -1535,6 +1617,39 @@
         ],
         "title": "ConnectResponse"
       },
+      "CustomProfileRequest": {
+        "properties": {
+          "nozzles": {
+            "items": {
+              "$ref": "#/components/schemas/NozzleFields"
+            },
+            "type": "array",
+            "title": "Nozzles"
+          },
+          "nozzle_offset_measured": {
+            "type": "boolean",
+            "title": "Nozzle Offset Measured",
+            "default": false
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nozzles"
+        ],
+        "title": "CustomProfileRequest",
+        "description": "The Custom profile's nozzles, left to right, as edited on the Setup\nscreen. Its bed, build volume and steps/mm are kept from the Custom\nprofile saved before or, the first time, copied from `base` (the\nprofile being edited; default: the selected one)."
+      },
       "DisconnectResponse": {
         "properties": {
           "status": {
@@ -1807,8 +1922,29 @@
       "JogRequest": {
         "properties": {
           "axis": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Axis"
+          },
+          "axes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axes"
           },
           "distance": {
             "type": "number",
@@ -1822,7 +1958,6 @@
         },
         "type": "object",
         "required": [
-          "axis",
           "distance"
         ],
         "title": "JogRequest"
@@ -1838,6 +1973,13 @@
             "type": "string",
             "title": "Axis"
           },
+          "axes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Axes"
+          },
           "distance": {
             "type": "number",
             "title": "Distance"
@@ -1847,9 +1989,49 @@
         "required": [
           "status",
           "axis",
+          "axes",
           "distance"
         ],
         "title": "JogResponse"
+      },
+      "NozzleFields": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "height_axis": {
+            "type": "string",
+            "title": "Height Axis"
+          },
+          "plunger_axis": {
+            "type": "string",
+            "title": "Plunger Axis"
+          },
+          "offset_x": {
+            "type": "number",
+            "title": "Offset X",
+            "default": 0.0
+          },
+          "offset_y": {
+            "type": "number",
+            "title": "Offset Y",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "height_axis",
+          "plunger_axis"
+        ],
+        "title": "NozzleFields",
+        "description": "A nozzle as the app's editor sends it: checked by save_custom_profile,\nwhich reports every problem in words, rather than by FastAPI."
       },
       "NozzleSpec": {
         "description": "One nozzle: its height motor, its plunger, and where it sits.",
@@ -1860,6 +2042,7 @@
             "type": "string"
           },
           "name": {
+            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
@@ -2226,6 +2409,7 @@
             "items": {
               "$ref": "#/components/schemas/NozzleSpec"
             },
+            "maxItems": 6,
             "minItems": 1,
             "title": "Nozzles",
             "type": "array"
@@ -2259,6 +2443,12 @@
             "default": false,
             "title": "Nozzle Offset Measured",
             "type": "boolean"
+          },
+          "steps_per_mm": {
+            "default": 800.0,
+            "exclusiveMinimum": 0,
+            "title": "Steps Per Mm",
+            "type": "number"
           }
         },
         "required": [
@@ -2289,7 +2479,7 @@
           "profiles"
         ],
         "title": "PrinterProfilesResponse",
-        "description": "Every printer profile (built in or from config.json), and the selected one's id."
+        "description": "Every printer profile (built in, from config.json, and the Custom\nprofile once one is saved), and the selected one's id."
       },
       "ResumeResponse": {
         "properties": {
@@ -3151,7 +3341,7 @@
         "type": "object"
       },
       "PrinterProfileEvent": {
-        "description": "Another printer profile was selected (PUT /printer).",
+        "description": "Another printer profile was selected (PUT /printer), or the Custom\nprofile in use was saved (PUT /printer/custom).",
         "properties": {
           "type": {
             "const": "printer_profile",
@@ -3168,6 +3358,35 @@
           "printer"
         ],
         "title": "PrinterProfileEvent",
+        "type": "object"
+      },
+      "PrinterProfilesEvent": {
+        "description": "The list of printer profiles changed: the Custom profile was saved\nor reset (PUT/DELETE /printer/custom). Same body as GET /printer/profiles.",
+        "properties": {
+          "type": {
+            "const": "printer_profiles",
+            "default": "printer_profiles",
+            "title": "Type",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/PrinterProfile"
+            },
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "selected",
+          "profiles"
+        ],
+        "title": "PrinterProfilesEvent",
         "type": "object"
       },
       "ProgressEvent": {
@@ -3653,6 +3872,7 @@
             "print_resumed": "#/components/schemas/PrintResumedEvent",
             "printer": "#/components/schemas/PrinterEvent",
             "printer_profile": "#/components/schemas/PrinterProfileEvent",
+            "printer_profiles": "#/components/schemas/PrinterProfilesEvent",
             "progress": "#/components/schemas/ProgressEvent",
             "serial_log": "#/components/schemas/SerialLogEvent",
             "settings": "#/components/schemas/SettingsEvent",
@@ -3711,6 +3931,9 @@
           },
           {
             "$ref": "#/components/schemas/PrinterProfileEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrinterProfilesEvent"
           },
           {
             "$ref": "#/components/schemas/PrintEndEvent"

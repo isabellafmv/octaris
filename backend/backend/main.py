@@ -56,6 +56,7 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: Setting
         on_traffic=history.log_traffic,
         temperature_enabled=settings.current.temperature_sensors,
         on_monitor=lambda: temperature.monitor_changed(),
+        axes=config.profile.axes,
     )
     temperature = TemperatureStore(
         db,
@@ -74,6 +75,7 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: Setting
         retract_on_estop=config.retract_on_estop,
         syringe_travel_mm=config.syringe_travel_mm,
         temperature=temperature,
+        axes=config.profile.axes,
     )
     session = PrinterSession(
         config, serial_manager, queue_worker, history, event_bus.publish, temperature, settings
