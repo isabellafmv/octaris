@@ -16,7 +16,8 @@ must stay enabled.
 All of it is off while the temperature_sensors setting is: reports (from a
 manual M105) are ignored, and the state is "off".
 
-With the lab firmware (temperature.protocol "printess") the heaters are
+With the lab firmware (protocol "printess": the temperature_protocol setting,
+or config.json's temperature.protocol until one is chosen) the heaters are
 channels I0-I3: each reads from a configured key of the M105 reply and goes
 by "I<n>" here, and a target goes out as M104 I<n> T<°C> H to heat or C to
 cool. Its reply may not carry the targets, so the store keeps the target and
@@ -54,6 +55,7 @@ from backend.schemas import (
     SensorReading,
     SensorTestReading,
     TemperatureMonitor,
+    TemperatureProtocol,
     TemperatureSeries,
     TemperatureState,
     TemperatureStatus,
@@ -452,6 +454,15 @@ class TemperatureStore:
                 self._start_watchdog()
             else:
                 self._stop_watchdog()
+
+    def protocol_changed(self, protocol: TemperatureProtocol) -> None:
+        """The heater protocol changed (the temperature_protocol setting).
+        The readings and targets sent so far go by the old one's sensor
+        keys: start afresh, as on a connect."""
+        self.config = self.config.model_copy(update={"protocol": protocol})
+        self._sent.clear()
+        self._history.clear()
+        self._reset(connected=self._is_connected())
 
     def enabled_changed(self) -> None:
         """The temperature_sensors setting changed: start afresh, as on a connect."""

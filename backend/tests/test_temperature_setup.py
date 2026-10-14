@@ -54,7 +54,7 @@ async def connect_virtual(client, **options) -> virtual_printer.VirtualPrinter:
 async def set_sensors(client, on: bool) -> None:
     resp = await client.put("/settings", json={"temperature_sensors": on})
     assert resp.status_code == 200
-    assert resp.json() == {"temperature_sensors": on}
+    assert resp.json() == {"temperature_sensors": on, "temperature_protocol": None}
 
 
 def temperature_commands(printer: virtual_printer.VirtualPrinter) -> list[str]:
@@ -69,8 +69,14 @@ def monitor() -> str:
 
 
 async def test_off_by_default_and_kept_across_restarts(client, data_dir):
-    assert (await client.get("/settings")).json() == {"temperature_sensors": False}
-    assert (await client.get("/status")).json()["settings"] == {"temperature_sensors": False}
+    assert (await client.get("/settings")).json() == {
+        "temperature_sensors": False,
+        "temperature_protocol": None,
+    }
+    assert (await client.get("/status")).json()["settings"] == {
+        "temperature_sensors": False,
+        "temperature_protocol": None,
+    }
 
     await set_sensors(client, True)
 
@@ -81,7 +87,10 @@ async def test_off_by_default_and_kept_across_restarts(client, data_dir):
     app.state.history._traffic.stop()
     app.state.db.close()
     wire(app, load_config(), init_db(Path(":memory:")))
-    assert (await client.get("/settings")).json() == {"temperature_sensors": True}
+    assert (await client.get("/settings")).json() == {
+        "temperature_sensors": True,
+        "temperature_protocol": None,
+    }
     assert monitor() == "idle"
 
 
@@ -98,7 +107,7 @@ async def test_change_is_published(client):
     while not events.empty():
         published.append(events.get_nowait())
     app.state.event_bus.unsubscribe(sub_id)
-    assert {"type": "settings", "temperature_sensors": True} in published
+    assert {"type": "settings", "temperature_sensors": True, "temperature_protocol": None} in published
     status = [e for e in published if e["type"] == "temperature_status"][-1]
     assert (status["state"], status["monitor"]) == ("disconnected", "idle")
 

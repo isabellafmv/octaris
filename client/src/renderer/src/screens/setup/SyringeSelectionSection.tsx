@@ -5,15 +5,20 @@ import { usePrinter } from '../../stores/printer'
 import { usePrintSettings } from '../../stores/printSettings'
 import type { PrintStatus, PrinterProfile } from '../../types'
 import {
+  BED_AXES,
   CUSTOM_PROFILE_ID,
   MAX_SYRINGES,
+  bedDraftFrom,
   canAdd,
   draftsFrom,
   isChanged,
   isValid,
   newDraft,
   toRequest,
+  validateBed,
   validateDrafts,
+  type BedDraft,
+  type BedErrors,
   type DraftErrors,
   type DraftField,
   type SyringeDraft
@@ -141,7 +146,7 @@ function ProfileSelect({
   )
 }
 
-// Each syringe's name, axes and offset, typed under it. Saved as the
+// Each syringe's name, axes and offset, typed under it, and the bed limits. Saved as the
 // Custom profile (a built-in profile being edited is copied into it), which
 // is then selected: that resets the calibration and unloads the print.
 function SetupEditor({
@@ -160,12 +165,14 @@ function SetupEditor({
   const profiles = usePrinter((s) => s.profiles)
   const [drafts, setDrafts] = useState<SyringeDraft[]>(() => draftsFrom(profile))
   const [offsetsMeasured, setOffsetsMeasured] = useState(profile.nozzle_offset_measured ?? false)
+  const [bed, setBed] = useState<BedDraft>(() => bedDraftFrom(profile))
   const [saving, setSaving] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
 
   const errors = useMemo(() => validateDrafts(drafts), [drafts])
-  const valid = isValid(drafts, errors)
-  const changed = isChanged(drafts, offsetsMeasured, profile)
+  const bedErrors = useMemo(() => validateBed(bed), [bed])
+  const valid = isValid(drafts, errors) && Object.keys(bedErrors).length === 0
+  const changed = isChanged(drafts, offsetsMeasured, profile, bed)
   const hasCustom =
     profile.id === CUSTOM_PROFILE_ID || profiles.some((p) => p.id === CUSTOM_PROFILE_ID)
 
@@ -177,6 +184,7 @@ function SetupEditor({
     if (changedRef.current) return
     setDrafts(draftsFrom(profile))
     setOffsetsMeasured(profile.nozzle_offset_measured ?? false)
+    setBed(bedDraftFrom(profile))
   }, [profile])
 
   const update = (index: number, field: DraftField, value: string): void =>
@@ -186,7 +194,7 @@ function SetupEditor({
     setSaving(true)
     try {
       // The printer_profile and printer_profiles events update the stores
-      await api.saveCustomProfile(toRequest(drafts, offsetsMeasured, profile.id))
+      await api.saveCustomProfile(toRequest(drafts, offsetsMeasured, profile.id, bed))
       onDone()
     } catch (e) {
       onError(errorMessage(e, 'Could not save the printer setup'))
@@ -258,6 +266,15 @@ function SetupEditor({
           Offsets measured
         </label>
       </div>
+
+      <BedFields
+        bed={bed}
+        errors={bedErrors}
+        disabled={locked}
+        onChange={(axis, end, value) =>
+          setBed((b) => ({ ...b, [axis]: { ...b[axis], [end]: value } }))
+        }
+      />
 
       <p className="text-[10px] text-center text-text-subtle max-w-sm">
         {printing
@@ -376,5 +393,61 @@ function SyringeFields({
         </button>
       )}
     </div>
+  )
+}
+
+// Where the nozzles may go, min and max per axis, in mm from the zero point.
+// Jogs (once zeroed), Go to Origin and prints that would leave it are refused.
+function BedFields({
+  bed,
+  errors,
+  disabled,
+  onChange
+}: {
+  bed: BedDraft
+  errors: BedErrors
+  disabled: boolean
+  onChange: (axis: keyof BedDraft, end: 'min' | 'max', value: string) => void
+}): React.JSX.Element {
+  const messages = [...new Set(Object.values(errors))]
+
+  return (
+    <fieldset className="flex flex-col items-center gap-1.5">
+      <legend className="mb-1.5 text-center text-[10px] font-semibold tracking-widest uppercase text-text-muted">
+        Bed limits (mm)
+      </legend>
+      <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5">
+        {BED_AXES.map((axis) => (
+          <div key={axis} className="flex items-center gap-1 text-[10px] text-text-muted">
+            <span className="w-3 font-semibold">{axis.toUpperCase()}</span>
+            {(['min', 'max'] as const).map((end, i) => (
+              <span key={end} className="flex items-center gap-1">
+                {i === 1 && <span>to</span>}
+                <input
+                  value={bed[axis][end]}
+                  onChange={(e) => onChange(axis, end, e.target.value)}
+                  disabled={disabled}
+                  inputMode="decimal"
+                  aria-label={`Bed ${axis.toUpperCase()} ${end} in mm`}
+                  aria-invalid={errors[axis] !== undefined}
+                  title={errors[axis]}
+                  className={`w-12 px-1.5 py-1 rounded-md text-xs text-center outline-none bg-surface text-text border ${
+                    errors[axis] ? 'border-danger text-danger' : 'border-border'
+                  } disabled:opacity-50`}
+                />
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+      {messages.map((m) => (
+        <p key={m} className="text-[10px] leading-tight text-center text-danger">
+          {m}
+        </p>
+      ))}
+      <p className="text-[10px] text-center text-text-subtle max-w-sm">
+        Relative to where you zero; e.g. −45 to 45 for a 90 mm dish zeroed in the centre.
+      </p>
+    </fieldset>
   )
 }

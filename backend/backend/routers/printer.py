@@ -43,9 +43,12 @@ async def save_custom_profile(body: CustomProfileRequest, session: PrinterSessio
     """Save the Custom profile and select it, as PUT /printer does (refused
     during a print). 400 lists every problem: each axis must be one of Z, A,
     B, C, I, J, K, U, V, W, used once in the profile, and a syringe's height
-    and plunger axis must differ; 1 to 6 syringes."""
+    and plunger axis must differ; 1 to 6 syringes; each bed limit's min
+    below its max."""
     try:
-        return await session.save_custom_profile(body.nozzles, body.nozzle_offset_measured, body.base)
+        return await session.save_custom_profile(
+            body.nozzles, body.nozzle_offset_measured, body.base, body.bed
+        )
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Couldn't save the printer profile: {exc}") from exc
 

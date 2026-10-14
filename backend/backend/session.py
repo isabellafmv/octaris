@@ -53,6 +53,7 @@ from backend.printer import (
     CUSTOM_PROFILE_ID,
     DEFAULT_PROFILE,
     MAX_NOZZLES,
+    BedFields,
     NozzleFields,
     NozzleSpec,
     PrinterProfile,
@@ -124,6 +125,8 @@ def profile_errors(exc: ValidationError) -> str:
         if len(loc) >= 2 and loc[0] == "nozzles" and isinstance(loc[1], int):
             field = f" {loc[2]}" if len(loc) > 2 else ""
             message = f"Syringe {loc[1] + 1}{field}: {message}"
+        elif len(loc) >= 2 and loc[0] == "bed":
+            message = f"Bed {str(loc[1]).upper()}: {message}"
         messages.append(message)
     return "\n".join(messages)
 
@@ -294,12 +297,17 @@ class PrinterSession:
         return profile
 
     async def save_custom_profile(
-        self, nozzles: Sequence[NozzleFields], nozzle_offset_measured: bool = False, base: str | None = None
+        self,
+        nozzles: Sequence[NozzleFields],
+        nozzle_offset_measured: bool = False,
+        base: str | None = None,
+        bed: BedFields | None = None,
     ) -> PrinterProfile:
         """Save the Custom profile with these nozzles (left to right) and
-        select it, kept across restarts. Its bed, build volume and steps/mm
-        are `base`'s (a profile id: the one being edited, copied into Custom)
-        or, without one, the Custom profile's so far (or the selected one's).
+        bed limits and select it, kept across restarts. Its build volume and
+        steps/mm (and its bed, without `bed`) are `base`'s (a profile id: the
+        one being edited, copied into Custom) or, without one, the Custom
+        profile's so far (or the selected one's).
         As when switching profile, the calibration, any resume checkpoint
         and the loaded print are dropped.
 
@@ -314,7 +322,7 @@ class PrinterSession:
             raise NotReady(f"A printer can have at most {MAX_NOZZLES} syringes")
         source = profiles[base] if base is not None else self._custom or self.profile
         try:
-            profile = custom_profile(source, nozzles, nozzle_offset_measured)
+            profile = custom_profile(source, nozzles, nozzle_offset_measured, bed)
         except ValidationError as exc:
             raise NotReady(profile_errors(exc)) from exc
         self._refuse_during_print()
@@ -605,14 +613,24 @@ class PrinterSession:
 
     # --- settings -----------------------------------------------------------------
 
-    def update_settings(self, settings: Settings) -> Settings:
-        """Save `settings` and apply them at once (no reconnect needed).
-        Raises OSError if they can't be saved."""
+    def update_settings(self, changes: Settings) -> Settings:
+        """Save the settings given in `changes` (the others stay as they
+        are) and apply them at once (no reconnect needed).
+
+        Raises Conflict for a change of heater protocol while a print waits
+        for its temperatures, and OSError if they can't be saved."""
         old = self.settings.current
+        settings = old.model_copy(update={name: getattr(changes, name) for name in changes.model_fields_set})
+        protocol = settings.temperature_protocol or self.config.temperature.protocol
+        protocol_changed = protocol != self.temperature.config.protocol
+        if protocol_changed and self.worker.waiting_for_temperature:
+            raise Conflict("Stop the print first: it is waiting for its temperatures")
         self.settings.save(settings)
         if settings.temperature_sensors != old.temperature_sensors:
             self.serial.set_temperature_enabled(settings.temperature_sensors)
             self.temperature.enabled_changed()
+        if protocol_changed:
+            self.temperature.protocol_changed(protocol)
         self._publish(SettingsEvent(**settings.model_dump()))
         return settings
 

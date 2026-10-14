@@ -11,7 +11,7 @@ from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.printer import NozzleFields, PrinterProfile
+from backend.printer import BedFields, NozzleFields, PrinterProfile
 
 # The worker's print status, plus the upload states the client also shows
 PrintStatus = Literal["idle", "slicing", "ready", "printing", "paused", "stopped", "completed"]
@@ -28,7 +28,8 @@ TemperatureState = Literal["off", "disconnected", "waiting", "no_sensors", "ok"]
 # polling stopped until a retry.
 TemperatureMonitor = Literal["off", "idle", "starting", "autoreport", "polling", "paused"]
 HeaterStatus = Literal["heating", "cooling", "at_target", "off"]
-# How the printer's heaters are addressed (config.json temperature.protocol)
+# How the printer's heaters are addressed (the temperature_protocol setting,
+# or config.json's temperature.protocol until one is chosen in the app)
 TemperatureProtocol = Literal["marlin", "printess"]
 # printess: the direction the last target was sent with (H: heat, C: cool)
 HeaterMode = Literal["heat", "cool"]
@@ -122,6 +123,10 @@ class Settings(BaseModel):
     # show and log them, and warn about them. Off: no M155/M105 is ever sent
     # by itself, and every temperature feature is off.
     temperature_sensors: bool = False
+    # How the heaters are addressed: Marlin's M104/M140/M141, or the lab
+    # firmware's channels (M104 I<n> T<°C> H|C). None: config.json's
+    # temperature.protocol, until one is chosen in the app.
+    temperature_protocol: TemperatureProtocol | None = None
 
 
 # Which of the profile's nozzles are zeroed (X/Y and the nozzle's own
@@ -366,14 +371,17 @@ class SelectProfileRequest(BaseModel):
 
 
 class CustomProfileRequest(BaseModel):
-    """The Custom profile's nozzles, left to right, as edited on the Setup
-    screen. Its bed, build volume and steps/mm are kept from the Custom
-    profile saved before or, the first time, copied from `base` (the
-    profile being edited; default: the selected one)."""
+    """The Custom profile's nozzles, left to right, and its bed limits, as
+    edited on the Setup screen. Its build volume and steps/mm (and the bed,
+    without `bed`) are kept from the Custom profile saved before or, the
+    first time, copied from `base` (the profile being edited; default: the
+    selected one)."""
 
     nozzles: list[NozzleFields]
     nozzle_offset_measured: bool = False
     base: str | None = None
+    # In mm relative to the zero point; each min below its max
+    bed: BedFields | None = None
 
 
 class UploadResult(BaseModel):

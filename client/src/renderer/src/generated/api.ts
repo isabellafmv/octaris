@@ -539,9 +539,11 @@ export interface paths {
         get: operations["get_settings_settings_get"];
         /**
          * Put Settings
-         * @description Save the settings; they apply at once and are kept across restarts.
-         *     Turning temperature_sensors on or off starts or stops temperature
-         *     monitoring right away, connected or not.
+         * @description Save the settings given (the others stay as they are); they apply
+         *     at once and are kept across restarts. Turning temperature_sensors on or
+         *     off starts or stops temperature monitoring right away, connected or
+         *     not. A new temperature_protocol forgets the readings and targets of the
+         *     old one; 409 while a print waits for its temperatures.
          */
         put: operations["put_settings_settings_put"];
         post?: never;
@@ -618,7 +620,8 @@ export interface paths {
          * @description Save the Custom profile and select it, as PUT /printer does (refused
          *     during a print). 400 lists every problem: each axis must be one of Z, A,
          *     B, C, I, J, K, U, V, W, used once in the profile, and a syringe's height
-         *     and plunger axis must differ; 1 to 6 syringes.
+         *     and plunger axis must differ; 1 to 6 syringes; each bed limit's min
+         *     below its max.
          */
         put: operations["save_custom_profile_printer_custom_put"];
         post?: never;
@@ -660,6 +663,15 @@ export interface components {
             min: number;
             /** Max */
             max: number;
+        };
+        /**
+         * BedFields
+         * @description Bed limits as the app's editor sends them (see BedLimits).
+         */
+        BedFields: {
+            x: components["schemas"]["RangeFields"];
+            y: components["schemas"]["RangeFields"];
+            z: components["schemas"]["RangeFields"];
         };
         /**
          * BedLimits
@@ -801,10 +813,11 @@ export interface components {
         };
         /**
          * CustomProfileRequest
-         * @description The Custom profile's nozzles, left to right, as edited on the Setup
-         *     screen. Its bed, build volume and steps/mm are kept from the Custom
-         *     profile saved before or, the first time, copied from `base` (the
-         *     profile being edited; default: the selected one).
+         * @description The Custom profile's nozzles, left to right, and its bed limits, as
+         *     edited on the Setup screen. Its build volume and steps/mm (and the bed,
+         *     without `bed`) are kept from the Custom profile saved before or, the
+         *     first time, copied from `base` (the profile being edited; default: the
+         *     selected one).
          */
         CustomProfileRequest: {
             /** Nozzles */
@@ -816,6 +829,7 @@ export interface components {
             nozzle_offset_measured?: boolean;
             /** Base */
             base?: string | null;
+            bed?: components["schemas"]["BedFields"] | null;
         };
         /** DisconnectResponse */
         DisconnectResponse: {
@@ -1181,6 +1195,17 @@ export interface components {
             /** Profiles */
             profiles: components["schemas"]["PrinterProfile"][];
         };
+        /**
+         * RangeFields
+         * @description An axis range as the app's editor sends it, checked (min < max) by
+         *     custom_profile like NozzleFields.
+         */
+        RangeFields: {
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
+        };
         /** ResumeResponse */
         ResumeResponse: {
             /**
@@ -1283,6 +1308,11 @@ export interface components {
              * @default false
              */
             temperature_sensors?: boolean;
+            /**
+             * Temperature Protocol
+             * @default null
+             */
+            temperature_protocol?: ("marlin" | "printess") | null;
         };
         /**
          * Snapshot
@@ -1598,6 +1628,11 @@ export interface components {
              * @default false
              */
             temperature_sensors?: boolean;
+            /**
+             * Temperature Protocol
+             * @default null
+             */
+            temperature_protocol?: ("marlin" | "printess") | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}

@@ -60,7 +60,10 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: Setting
     )
     temperature = TemperatureStore(
         db,
-        config.temperature,
+        # A copy: the protocol chosen in the app replaces config.json's
+        config.temperature.model_copy(
+            update={"protocol": settings.current.temperature_protocol or config.temperature.protocol}
+        ),
         session_id=lambda: history.session_id,
         is_connected=lambda: serial_manager.is_connected,
         is_printing=lambda: queue_worker.print_active and not queue_worker.waiting_for_temperature,

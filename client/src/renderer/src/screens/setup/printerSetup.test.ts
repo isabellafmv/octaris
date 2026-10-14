@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PrinterProfile } from '../../types'
 import {
+  bedDraftFrom,
   canAdd,
   draftsFrom,
   freeLetters,
@@ -8,6 +9,7 @@ import {
   isValid,
   newDraft,
   toRequest,
+  validateBed,
   validateDrafts,
   type SyringeDraft
 } from './printerSetup'
@@ -40,7 +42,9 @@ describe('the printer setup editor', () => {
       offsetY: '0'
     })
     expect(isValid(draftsFrom(PRINTESS_1))).toBe(true)
-    expect(isChanged(draftsFrom(PRINTESS_1), false, PRINTESS_1)).toBe(false)
+    expect(isChanged(draftsFrom(PRINTESS_1), false, PRINTESS_1, bedDraftFrom(PRINTESS_1))).toBe(
+      false
+    )
   })
 
   it('adds syringes with free letters and ids', () => {
@@ -114,7 +118,7 @@ describe('the printer setup editor', () => {
     drafts[2].offsetX = '-12.5'
     drafts[3].heightAxis = 'W'
     drafts[3].plungerAxis = 'k'
-    expect(toRequest(drafts, true, 'printess-1')).toEqual({
+    expect(toRequest(drafts, true, 'printess-1', bedDraftFrom(PRINTESS_1))).toEqual({
       nozzles: [
         { id: 'left', name: 'Left', height_axis: 'Z', plunger_axis: 'B', offset_x: 0, offset_y: 0 },
         {
@@ -143,9 +147,49 @@ describe('the printer setup editor', () => {
         }
       ],
       nozzle_offset_measured: true,
-      base: 'printess-1'
+      base: 'printess-1',
+      bed: { x: { min: -30, max: 30 }, y: { min: -30, max: 30 }, z: { min: 0, max: 60 } }
     })
-    expect(isChanged(drafts, false, PRINTESS_1)).toBe(true)
-    expect(isChanged(draftsFrom(PRINTESS_1), true, PRINTESS_1)).toBe(true)
+    const bed = bedDraftFrom(PRINTESS_1)
+    expect(isChanged(drafts, false, PRINTESS_1, bed)).toBe(true)
+    expect(isChanged(draftsFrom(PRINTESS_1), true, PRINTESS_1, bed)).toBe(true)
+  })
+})
+
+describe('the bed limits', () => {
+  const DISH = { x: { min: -45, max: 45 }, y: { min: -45, max: 45 }, z: { min: 0, max: 20 } }
+
+  it("starts from the profile's bed, or the backend's default", () => {
+    expect(bedDraftFrom({ ...PRINTESS_1, bed: DISH }).x).toEqual({ min: '-45', max: '45' })
+    expect(bedDraftFrom(PRINTESS_1)).toEqual({
+      x: { min: '-30', max: '30' },
+      y: { min: '-30', max: '30' },
+      z: { min: '0', max: '60' }
+    })
+  })
+
+  it('needs numbers, each min below its max', () => {
+    const bed = bedDraftFrom(PRINTESS_1)
+    expect(validateBed(bed)).toEqual({})
+    bed.x = { min: '45', max: '-45' }
+    bed.y = { min: '-', max: '10' }
+    bed.z = { min: '3', max: '3' }
+    expect(validateBed(bed)).toEqual({
+      x: 'X min must be below max',
+      y: 'Enter a number in mm',
+      z: 'Z min must be below max'
+    })
+  })
+
+  it('sends the bed, and a changed bed counts as a change', () => {
+    const profile = { ...PRINTESS_1, bed: DISH }
+    const bed = bedDraftFrom(profile)
+    expect(isChanged(draftsFrom(profile), false, profile, bed)).toBe(false)
+    bed.z = { min: '0', max: '12.5' }
+    expect(isChanged(draftsFrom(profile), false, profile, bed)).toBe(true)
+    expect(toRequest(draftsFrom(profile), false, 'printess-1', bed).bed).toEqual({
+      ...DISH,
+      z: { min: 0, max: 12.5 }
+    })
   })
 })
