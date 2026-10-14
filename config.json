@@ -2,8 +2,8 @@
   "touch_mode": false,
   "baud_rate": 115200,
   "bed": {
-    "x": { "min": -30, "max": 30 },
-    "y": { "min": -30, "max": 30 },
+    "x": { "min": -45, "max": 45 },
+    "y": { "min": -45, "max": 45 },
     "z": { "min": 0, "max": 60 }
   },
   "syringe_travel_mm": 40,

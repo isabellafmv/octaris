@@ -16,9 +16,10 @@ interface CalibrationSectionProps {
   onError: (msg: string) => void
 }
 
-// What to do before each zero, per mode. X/Y are always set at the left
-// nozzle's position over the start point; each nozzle's height (Z left,
-// A right) with that nozzle lowered onto the bed.
+// What to do before each zero, per mode. X/Y are set at the printing nozzle's
+// position over the start point (the right nozzle in right mode, else the
+// left); each nozzle's height (Z left, A right) with that nozzle lowered onto
+// the bed.
 const STEPS: Record<SyringeMode, { nozzle: Nozzle; instruction: string; label: string }[]> = {
   left: [
     {
@@ -30,8 +31,7 @@ const STEPS: Record<SyringeMode, { nozzle: Nozzle; instruction: string; label: s
   right: [
     {
       nozzle: 'right',
-      instruction:
-        'Jog the left nozzle over the start point, then lower the right nozzle onto the bed (A)',
+      instruction: 'Jog the right nozzle over the start point and lower it onto the bed (A)',
       label: 'Zero right'
     }
   ],

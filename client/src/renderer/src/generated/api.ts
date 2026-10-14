@@ -104,17 +104,19 @@ export interface paths {
         put?: never;
         /**
          * Calibrate Zero
-         * @description Zero a nozzle where it is. X/Y are always set at the LEFT nozzle's
-         *     position over the print's start point; each nozzle's height with that
-         *     nozzle lowered onto the bed (about 0.2 mm above the surface).
+         * @description Zero a nozzle where it is. X/Y are set at the printing nozzle's position
+         *     over the print's start point (the left nozzle in left and both mode, the
+         *     right nozzle in right mode); each nozzle's height with that nozzle lowered
+         *     onto the bed (about 0.2 mm above the surface).
          *
          *     - left mode: `nozzle: "left"` → G92 X0 Y0 Z0 B0
-         *     - right mode: `nozzle: "right"` → G92 X0 Y0 A0 C0 (left nozzle over the
-         *       start point, right nozzle on the bed)
+         *     - right mode: `nozzle: "right"` → G92 X0 Y0 A0 C0 (right nozzle over the
+         *       start point and on the bed)
          *     - both mode, two steps: `nozzle: "left"` → G92 X0 Y0 Z0 B0, then lower the
          *       right nozzle onto the bed and `nozzle: "right"` → G92 A0 C0
          *
-         *     The right nozzle's X offset (NOZZLE_OFFSET_X) is applied in post-processing.
+         *     Right-mode prints aren't shifted. Only the right nozzle's sections of a
+         *     two-material 3MF in both mode are shifted by NOZZLE_OFFSET_X.
          */
         post: operations["calibrate_zero_calibration_zero_post"];
         delete?: never;

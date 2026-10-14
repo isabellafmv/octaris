@@ -469,11 +469,9 @@ async def test_low_travel_warning_emitted_once():
 # --- 5. unmeasured nozzle offset ----------------------------------------------
 
 
-@pytest.mark.parametrize("mode", ["right", "both"])
-async def test_right_and_dual_prints_refused_until_offset_measured(client, printer, mode):
+async def test_dual_prints_refused_until_offset_measured(client, printer):
     app.state.config.nozzle_offset_measured = False
-    app.state.config.bed.x.max = 60  # the right nozzle's +30 mm shift
-    assert (await upload_sample(client, mode=mode)).status_code == 200
+    assert (await upload_sample(client, mode="both")).status_code == 200
 
     resp = await client.post("/print/start")
 
@@ -484,9 +482,9 @@ async def test_right_and_dual_prints_refused_until_offset_measured(client, print
     assert "config.json" in detail
 
 
-async def test_right_print_allowed_once_offset_measured(client, printer):
-    app.state.config.nozzle_offset_measured = True
-    app.state.config.bed.x.max = 60  # the right nozzle's +30 mm shift
+async def test_right_print_does_not_need_the_offset(client, printer):
+    # Right mode is zeroed at the right nozzle, so the offset isn't used.
+    app.state.config.nozzle_offset_measured = False
     assert (await upload_sample(client, mode="right")).status_code == 200
 
     assert (await client.post("/print/start")).status_code == 200

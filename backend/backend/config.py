@@ -109,7 +109,7 @@ class Config(BaseModel):
     # uploaded gets a warning above it
     max_feed_mm_min: float = Field(default=MAX_FEED, gt=0)
     # NOZZLE_OFFSET_X in gcode_processor.py is a placeholder until measured.
-    # Right-nozzle and dual prints are refused until this is set to true.
+    # Dual (both-mode) prints are refused until this is set to true.
     nozzle_offset_measured: bool = False
     temperature: TemperatureConfig = TemperatureConfig()
 

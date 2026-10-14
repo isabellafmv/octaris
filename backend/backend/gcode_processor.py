@@ -26,8 +26,9 @@ MAX_FEED = 400.0
 #   right nozzle: height A, plunger C
 # Distance between left (B) and right (C) nozzle tips in mm.
 # The right nozzle is this far in the +X direction from the left nozzle.
-# Always zero/calibrate at the LEFT nozzle — the software applies this offset
-# automatically when using the right nozzle or both nozzles.
+# Right mode zeroes X/Y at the right nozzle, so its prints aren't shifted.
+# The offset only applies to the right nozzle's sections (T1) of a two-material
+# 3MF in both mode, where X/Y are zeroed at the left nozzle.
 NOZZLE_OFFSET_X = 30.0  # measured on the printer
 
 
@@ -291,11 +292,12 @@ def trim_to_print(cmds: list[Command]) -> list[Command]:
 
 def substitute_extrusion(cmds: list[Command], mode: SyringeMode) -> list[Command]:
     """E → plunger axis (B left, C right), negated: the plungers extrude in
-    the negative direction. The right nozzle's X is shifted by
-    NOZZLE_OFFSET_X, since the zero is always set at the left nozzle.
+    the negative direction. Right mode is zeroed at the right nozzle, so its
+    moves are not shifted.
 
     In "both" mode, a file with T0/T1 tool changes (multi-material 3MF) sends
-    each section to its own nozzle. Without them (single STL), every E drives
+    each section to its own nozzle; X/Y are zeroed at the left nozzle there,
+    so the right nozzle's (T1) moves are shifted by NOZZLE_OFFSET_X. Without them (single STL), every E drives
     both plungers, so both syringes print the same path.
     """
     if mode == "both" and not any(c.code in ("T0", "T1") for c in cmds):
@@ -308,7 +310,7 @@ def substitute_extrusion(cmds: list[Command], mode: SyringeMode) -> list[Command
             tool = cmd.code
         else:
             cmd = _rename_e(cmd, "C" if tool == "T1" else "B")
-            if tool == "T1" and cmd.is_move:
+            if mode == "both" and tool == "T1" and cmd.is_move:
                 cmd = cmd.map_axis("X", lambda x: x + NOZZLE_OFFSET_X)
         result.append(cmd)
     return result

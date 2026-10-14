@@ -60,9 +60,9 @@ The printer shows up as a COM port. Octaris lists only ports that belong to the 
 
 2. **Select syringe mode**: choose *Left*, *Right*, or *Both* (both mode is not fully functional yet) syringes. This controls which axes receive extrusion commands.
 
-3. **Calibrate (zero the nozzles)** with the jog panel. X/Y are always set with the *left* nozzle over the print's start point; each nozzle's height (Z for the left, A for the right) is set with that nozzle lowered onto the bed. The right nozzle's X offset is applied automatically.
+3. **Calibrate (zero the nozzles)** with the jog panel. X/Y are set with the printing nozzle over the print's start point (the *left* nozzle in left and both mode, the *right* nozzle in right mode); each nozzle's height (Z for the left, A for the right) is set with that nozzle lowered onto the bed.
    - *Left*: jog the left nozzle over the start point, lower it onto the bed, click **Zero left**.
-   - *Right*: jog the left nozzle over the start point, then lower the right nozzle onto the bed (A), click **Zero right**.
+   - *Right*: jog the right nozzle over the start point, lower it onto the bed (A), click **Zero right**.
    - *Both*, in two steps: first lower the left nozzle onto the bed over the start point and click **Zero left**, then lower the right nozzle onto the bed and click **Zero right**.
 
    Connecting, disconnecting or losing the USB link resets the calibration.
@@ -290,7 +290,7 @@ The build bundles CuraEngine from `resources/bin/<target>/` and stops with an er
 | `baud_rate` | integer | Serial baud rate (default `115200`) |
 | `bed` | `{"x": {"min", "max"}, "y": …, "z": …}` | Where the left nozzle may move, in mm relative to the zero point (default X/Y −30…30, Z 0…60). Jogs (once zeroed) and prints that would leave it are refused. |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
-| `nozzle_offset_measured` | `true` / `false` | Set to `true` once `NOZZLE_OFFSET_X` in `backend/backend/gcode_processor.py` has been measured. Right-nozzle and dual prints are refused until then. |
+| `nozzle_offset_measured` | `true` / `false` | Set to `true` once `NOZZLE_OFFSET_X` in `backend/backend/gcode_processor.py` has been measured. Dual (both-mode) prints are refused until then. |
 | `temperature.sensors` | `{"T0": {"name", "min", "max"}, …}` | A readable name per sensor key the printer reports, and the targets it accepts (besides 0 for off). Unlisted sensors show under their raw key and accept 0–120 °C. |
 | `temperature.retention_days` | number | Logged readings older than this are deleted at startup (default `30`) |
 | `temperature.target_band_c` | number | A sensor counts as at its target within ± this (default `1`) |

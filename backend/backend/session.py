@@ -92,7 +92,7 @@ NOZZLE_HEIGHT_AXIS: dict[Nozzle, str] = {"left": "Z", "right": "A"}
 STEPS_PER_MM = "M92 X800 Y800 Z800 A800 B800 C800"
 
 NOZZLE_OFFSET_UNMEASURED = (
-    f"Right-nozzle and dual prints are disabled: the nozzle offset "
+    f"Dual prints are disabled: the nozzle offset "
     f"(NOZZLE_OFFSET_X = {NOZZLE_OFFSET_X:g} mm) is a placeholder that hasn't been "
     f"measured. Zero at the left nozzle, jog until the right nozzle is over the "
     f"same point, and read the X distance. Set NOZZLE_OFFSET_X in "
@@ -262,10 +262,10 @@ class PrinterSession:
     async def calibrate(self, nozzle: Nozzle | None = None, mode: SyringeMode | None = None) -> str:
         """Zero one nozzle where it is; returns the G92 sent.
 
-        X/Y are always referenced to the LEFT nozzle (its position at the
-        print's start point): the right nozzle's offset (NOZZLE_OFFSET_X) is
-        applied in post-processing. Each nozzle's height is zeroed with that
-        nozzle lowered onto the bed:
+        X/Y are set at the printing nozzle's position over the print's start
+        point: the left nozzle in left and both mode, the right nozzle in
+        right mode. Each nozzle's height is zeroed with that nozzle lowered
+        onto the bed:
           left:          G92 X0 Y0 Z0 B0
           right, right mode: G92 X0 Y0 A0 C0
           right, both mode:  G92 A0 C0 — the second step, after the left
@@ -614,7 +614,7 @@ class PrinterSession:
                 f"({'both steps' if len(missing) == 2 else 'with /calibration/zero'}) first. "
                 f"Jog it to the start point, lower it onto the bed, and zero it."
             )
-        if loaded.mode in ("right", "both") and not self.config.nozzle_offset_measured:
+        if loaded.mode == "both" and not self.config.nozzle_offset_measured:
             raise NotReady(NOZZLE_OFFSET_UNMEASURED)
 
         # The printer's actual position, so relative moves can be checked too.

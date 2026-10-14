@@ -153,7 +153,9 @@ def _find_cura_engine() -> str:
         return found
 
     bundled = next(
-        (p for name in ("UltiMaker-Cura", "CuraEngine") if (p := bin_dir / name).exists()),
+        # CuraEngine first: UltiMaker-Cura is the Cura app's launcher, which
+        # exits without slicing (and without an error message).
+        (p for name in ("CuraEngine", "UltiMaker-Cura") if (p := bin_dir / name).exists()),
         None,
     )
     cura_app_bin = Path("/Applications/UltiMaker Cura.app/Contents/Frameworks/CuraEngine")
@@ -332,7 +334,8 @@ async def slice_model(
             for line in out.splitlines()
             if not any(kw in line for kw in ("version", "Copyright", "GNU", "Free Software", "warranty"))
         )
-        raise SlicingError(f"Slicing failed: {(relevant or out)[:1500]}")
+        detail = (relevant or out)[:1500] or f"CuraEngine exited with code {proc.returncode} and no output"
+        raise SlicingError(f"Slicing failed: {detail}")
 
     raw_gcode = await asyncio.to_thread(output_path.read_text)
     output_path.unlink(missing_ok=True)  # noqa: ASYNC240 - a quick metadata call

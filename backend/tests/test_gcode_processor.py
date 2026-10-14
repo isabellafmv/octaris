@@ -85,10 +85,11 @@ def test_substitute_extrusion_left():
 
 
 def test_substitute_extrusion_right():
-    """Right mode: E values should also be negated for C axis."""
+    """Right mode: E values negated for the C axis. X is not shifted: right
+    mode is zeroed at the right nozzle."""
     lines = ["G1 X10 E0.5 F200"]
     result = run(substitute_extrusion, lines, "right")
-    assert result[0] == "G1 X40 C-0.5 F200"  # X10 + 30 mm nozzle offset
+    assert result[0] == "G1 X10 C-0.5 F200"
 
 
 def test_substitute_extrusion_both():
@@ -411,7 +412,10 @@ def test_insert_travel_retract_both():
 def test_numbers_without_leading_zero():
     """Cura writes e.g. "X-.5" and "E.01234"; both must be converted."""
     result = run(substitute_extrusion, ["G1 X-.5 Y1 E.01234 F200"], "right")
-    assert result == ["G1 X29.5 Y1 C-0.01234 F200"]
+    assert result == ["G1 X-.5 Y1 C-0.01234 F200"]
+    # A shifted X (the right nozzle's section of a two-material file) is parsed too
+    result = run(substitute_extrusion, ["T1", "G1 X-.5 Y1 E.01234 F200"], "both")
+    assert result[-1] == "G1 X29.5 Y1 C-0.01234 F200"
     with pytest.raises(GcodeValidationError, match="Unsubstituted E"):
         validate(parse(["G91", "G1 X1 E.5"]))
 
@@ -537,11 +541,12 @@ def test_relative_extrusion_file_converts_like_absolute_one():
     assert process_gcode("\n".join(relative_lines), "left").lines == process_gcode(absolute, "left").lines
 
 
-def test_right_nozzle_offset_is_in_the_first_move():
+def test_right_nozzle_prints_from_its_own_zero():
     result = process_gcode((FIXTURES / "raw_sample.gcode").read_text(), "right")
     first_move = next(line for line in result.lines if line.startswith("G0"))
-    # X10 + the 30 mm offset, from the zero point, on the right nozzle's height motor
-    assert first_move == "G0 F400 X40 Y10 A0.3"
+    # X10 from the zero point (set at the right nozzle, no offset), on the
+    # right nozzle's height motor
+    assert first_move == "G0 F400 X10 Y10 A0.3"
     assert result.start_position == {"X": 0, "Y": 0, "A": 0}
 
 

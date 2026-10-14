@@ -100,7 +100,7 @@ async def printer(client):
     printer = make_printer()
     attach(app.state.serial_manager, printer)
     app.state.config.nozzle_offset_measured = True
-    # Room for the sample on the right nozzle: NOZZLE_OFFSET_X takes it to X41
+    # Room for the sample, as in the other height-axis tests
     app.state.config.bed = BedLimits(x=AxisRange(min=-30, max=60))
     return printer
 

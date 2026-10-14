@@ -119,7 +119,7 @@
     "/calibration/zero": {
       "post": {
         "summary": "Calibrate Zero",
-        "description": "Zero a nozzle where it is. X/Y are always set at the LEFT nozzle's\nposition over the print's start point; each nozzle's height with that\nnozzle lowered onto the bed (about 0.2 mm above the surface).\n\n- left mode: `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0\n- right mode: `nozzle: \"right\"` \u2192 G92 X0 Y0 A0 C0 (left nozzle over the\n  start point, right nozzle on the bed)\n- both mode, two steps: `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0, then lower the\n  right nozzle onto the bed and `nozzle: \"right\"` \u2192 G92 A0 C0\n\nThe right nozzle's X offset (NOZZLE_OFFSET_X) is applied in post-processing.",
+        "description": "Zero a nozzle where it is. X/Y are set at the printing nozzle's position\nover the print's start point (the left nozzle in left and both mode, the\nright nozzle in right mode); each nozzle's height with that nozzle lowered\nonto the bed (about 0.2 mm above the surface).\n\n- left mode: `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0\n- right mode: `nozzle: \"right\"` \u2192 G92 X0 Y0 A0 C0 (right nozzle over the\n  start point and on the bed)\n- both mode, two steps: `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0, then lower the\n  right nozzle onto the bed and `nozzle: \"right\"` \u2192 G92 A0 C0\n\nRight-mode prints aren't shifted. Only the right nozzle's sections of a\ntwo-material 3MF in both mode are shifted by NOZZLE_OFFSET_X.",
         "operationId": "calibrate_zero_calibration_zero_post",
         "requestBody": {
           "content": {
