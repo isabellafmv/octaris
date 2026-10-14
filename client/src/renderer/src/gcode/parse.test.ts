@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { groupByCategory } from './categories'
-import { EXTRUDE, NOZZLE_RIGHT, TRAVEL, parseGcode } from './parse'
+import { EXTRUDE, NOZZLE_RIGHT, RIGHT_NOZZLE_OFFSET_X, TRAVEL, parseGcode } from './parse'
 
 // The parsed segments as plain objects, for readable assertions
 function segments(text: string): {
@@ -76,9 +76,12 @@ describe('absolute (G90)', () => {
     ])
   })
 
-  it('draws a move that drives both plungers once per nozzle', () => {
+  it('draws a move that drives both plungers once per nozzle, the right copy beside the left', () => {
     const result = segments(gcode('G1 X10 B-1 C-1'))
     expect(result.map((s) => s.nozzle)).toEqual(['left', 'right'])
+    const xs = (i: number): number[] => [result[i].from[0], result[i].to[0]]
+    expect(xs(0)).toEqual([0, 10])
+    expect(xs(1)).toEqual([RIGHT_NOZZLE_OFFSET_X, 10 + RIGHT_NOZZLE_OFFSET_X])
   })
 
   it('takes the right nozzle height from A once the file moves A', () => {

@@ -263,14 +263,16 @@ async def test_print_speed_is_passed_to_the_slicer(client, tmp_path):
     assert kwargs["max_feed"] == 400
 
 
-@pytest.mark.parametrize("speed, ok", [(6.5, True), (6.67, False), (10, False)])
+# 400 / 60: the client's conversion of a typed 400 mm/min must pass
+@pytest.mark.parametrize("speed, ok", [(6.5, True), (400 / 60, True), (6.67, False), (10, False)])
 async def test_print_speed_is_checked_against_the_cap(client, tmp_path, speed, ok):
     resp, sliced = await upload_stl(client, tmp_path, print_speed=speed)
     if ok:
         assert resp.status_code == 200
     else:
         assert resp.status_code == 400
-        assert "above the limit of 6.66667 mm/s (400 mm/min" in resp.json()["detail"]
+        assert "mm/min" in resp.json()["detail"]
+        assert "above the limit of 400 mm/min" in resp.json()["detail"]
         sliced.assert_not_awaited()
 
 

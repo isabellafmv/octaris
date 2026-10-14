@@ -63,11 +63,13 @@ async def upload_model(
     }
     _check_positive(**settings)
     max_feed = session.config.max_feed_mm_min
-    if print_speed is not None and print_speed * 60 > max_feed:
+    # The client sends the feed rate typed in mm/min divided by 60, so allow
+    # for rounding (400 mm/min must not come back as 400.00000000000006)
+    if print_speed is not None and print_speed * 60 > max_feed + 1e-6:
         raise HTTPException(
             status_code=400,
-            detail=f"Print speed {print_speed:g} mm/s is above the limit of {max_feed / 60:g} mm/s "
-            f"({max_feed:g} mm/min, max_feed_mm_min in config.json)",
+            detail=f"Feed rate {print_speed * 60:g} mm/min ({print_speed:g} mm/s) is above the limit of "
+            f"{max_feed:g} mm/min (max_feed_mm_min in config.json)",
         )
 
     try:

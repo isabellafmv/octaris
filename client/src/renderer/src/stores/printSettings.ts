@@ -4,6 +4,7 @@ import type { SyringeMode } from '../types'
 import type { NordsonTip } from '../data/nordsonTips'
 
 // Numeric fields are kept as the raw input text; empty means "backend default".
+// printSpeed is typed as a G-code feed rate (mm/min) and sent in mm/s.
 export type PrintParameter = keyof SliceOptions
 
 type PrintParameters = Record<PrintParameter, string>
@@ -28,7 +29,7 @@ export const usePrintSettings = create<PrintSettingsState>()((set) => ({
   pressurizeMm: '',
   flowMultiplier: '',
   travelRetractMultiplier: '3',
-  printSpeed: '5',
+  printSpeed: '300', // mm/min (5 mm/s)
   jogStep: 5,
   nordsonGauge: null,
   selectNordsonTip: (tip) =>
@@ -51,6 +52,7 @@ export function sliceOptions(settings: PrintParameters): SliceOptions {
     pressurizeMm: num(settings.pressurizeMm),
     flowMultiplier: num(settings.flowMultiplier),
     travelRetractMultiplier: num(settings.travelRetractMultiplier),
-    printSpeed: num(settings.printSpeed)
+    // Typed in mm/min like a G-code F value; the backend takes mm/s
+    printSpeed: settings.printSpeed ? parseFloat(settings.printSpeed) / 60 : undefined
   }
 }

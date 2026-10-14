@@ -32,6 +32,13 @@ const PLUNGERS = [
   { axis: 'E', nozzle: NOZZLE_LEFT, sign: 1 }
 ] as const
 
+// How far the right nozzle sits from the left one in +X, in mm
+// (NOZZLE_OFFSET_X in backend/backend/gcode_processor.py). When one move
+// drives both plungers, both nozzles print the same path side by side, so
+// the right nozzle's copy is drawn this far over instead of on top of the
+// left one.
+export const RIGHT_NOZZLE_OFFSET_X = 30
+
 // Smaller plunger or position changes are float noise
 const EPSILON = 1e-6
 // Heights closer than this are the same layer
@@ -124,7 +131,13 @@ export function parseGcode(text: string, onProgress?: (fraction: number) => void
   const height = (nozzle: Nozzle, p: Position): number =>
     nozzle === NOZZLE_RIGHT && usesA ? p.A : p.Z
 
-  const addSegment = (from: Position, to: Position, kind: SegmentKind, nozzle: Nozzle): void => {
+  const addSegment = (
+    from: Position,
+    to: Position,
+    kind: SegmentKind,
+    nozzle: Nozzle,
+    dx = 0
+  ): void => {
     const z0 = height(nozzle, from)
     const z1 = height(nozzle, to)
     if (
@@ -134,10 +147,10 @@ export function parseGcode(text: string, onProgress?: (fraction: number) => void
     ) {
       return // a plunger-only move
     }
-    positions.push(from.X)
+    positions.push(from.X + dx)
     positions.push(from.Y)
     positions.push(z0)
-    positions.push(to.X)
+    positions.push(to.X + dx)
     positions.push(to.Y)
     positions.push(z1)
     kinds.push(kind)
@@ -197,9 +210,15 @@ export function parseGcode(text: string, onProgress?: (fraction: number) => void
           extruding.push(nozzle)
         }
       }
-      if (extruding.length > 0) {
-        active = extruding[extruding.length - 1]
-        for (const nozzle of extruding) addSegment(from, pos, EXTRUDE, nozzle)
+      if (extruding.length > 1) {
+        // Both nozzles at once: the right one prints its copy beside the
+        // left; travel is drawn as the left nozzle's (the head's) path
+        active = NOZZLE_LEFT
+        addSegment(from, pos, EXTRUDE, NOZZLE_LEFT)
+        addSegment(from, pos, EXTRUDE, NOZZLE_RIGHT, RIGHT_NOZZLE_OFFSET_X)
+      } else if (extruding.length > 0) {
+        active = extruding[0]
+        addSegment(from, pos, EXTRUDE, active)
       } else {
         addSegment(from, pos, TRAVEL, active)
       }
