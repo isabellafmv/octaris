@@ -20,7 +20,7 @@ from backend.config import Config
 from backend.database import init_db
 from backend.gcode_processor import process_gcode
 from backend.main import app, wire
-from backend.printer import PrinterProfile, custom_profile
+from backend.printer import AxisRange, PrinterProfile, custom_profile
 from backend.queue_worker import PrintStatus
 from backend.settings import SettingsStore
 from backend.virtual_printer import VirtualPrinter
@@ -450,6 +450,8 @@ async def test_stop_and_resume_a_syringe_on_its_own_axes(client, four_printer):
 
 async def test_all_four_print_to_the_end(client, four_printer):
     all_four = ["s1", "s2", "s3", "s4"]
+    # Room for every copy of the sample (X 0 to 22): the last is 45 mm over
+    app.state.session.profile.bed.x = AxisRange(min=-30, max=70)
     await zero(client, all_four)
     await upload(client, all_four)
 

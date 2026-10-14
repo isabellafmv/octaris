@@ -24,8 +24,9 @@ MAX_FEED = 400.0
 # the head: see printer.py. The processing steps take the nozzles a print
 # uses (a profile's selection, left to right): X/Y are zeroed at the first,
 # so a print isn't shifted by the nozzles' offsets, and several nozzles all
-# print the same path, each in place. The offsets only apply to the second
-# nozzle's sections (T1) of a two-material 3MF, see substitute_extrusion.
+# print the same path, each in place (each one's copy is checked against
+# the bed, see limits.check_path). There are no multi-material prints: a
+# file with tool changes is refused, see check_tool_changes.
 
 
 class GcodeValidationError(Exception):
@@ -288,41 +289,39 @@ def trim_to_print(cmds: list[Command]) -> list[Command]:
     return [positioning, extrusion, *cmds[first : max(first, last) + 1]]
 
 
-# The tool changes of a two-material 3MF, sliced with one extruder per nozzle
-_TOOLS = ("T0", "T1")
+_TOOL = re.compile(r"T\d+")
+
+
+def tool_changes(cmds: Sequence[Command]) -> list[tuple[int, str]]:
+    """The tool selections (T0, T1, …) of a file that uses more than one
+    tool, as (0-based index, code); [] for a file with one tool or none
+    (Cura writes a lone T0 for a single extruder)."""
+    tools = [(i, cmd.code) for i, cmd in enumerate(cmds) if _TOOL.fullmatch(cmd.code)]
+    return tools if len({code for _, code in tools}) > 1 else []
+
+
+def check_tool_changes(cmds: Sequence[Command]) -> None:
+    """Raise GcodeValidationError for a file with tool changes: a
+    multi-material file, which Octaris doesn't print (every selected
+    nozzle prints the same path)."""
+    tools = tool_changes(cmds)
+    if tools:
+        first, (i, code) = tools[0], next(t for t in tools if t[1] != tools[0][1])
+        raise GcodeValidationError(
+            f"Line {i + 1}: {code} changes tool (the file starts with {first[1]} on line "
+            f"{first[0] + 1}). Multi-material files aren't supported: every selected syringe "
+            f"prints the same path. Slice the model for one extruder."
+        )
 
 
 def substitute_extrusion(cmds: list[Command], nozzles: Nozzles) -> list[Command]:
     """E → the nozzle's plunger axis, negated: the plungers extrude in the
-    negative direction. X/Y are zeroed at the first nozzle, so its moves
-    are not shifted.
-
-    With two nozzles, a file with T0/T1 tool changes (multi-material 3MF)
-    sends each section to its own nozzle; the second nozzle's (T1) moves
-    are shifted by its offset from the first. Otherwise (a single STL, or
-    any other number of nozzles), every E drives every nozzle's plunger, so
-    all the syringes print the same path.
-    """
+    negative direction. With several nozzles every E drives every nozzle's
+    plunger, so all the syringes print the same path, each in place."""
     plungers = _extrusion_axes(nozzles)
-    two_tools = len(nozzles) == 2 and any(c.code in _TOOLS for c in cmds)
-    if len(nozzles) > 1 and not two_tools:
+    if len(nozzles) > 1:
         return [_mirror_e(c, plungers) for c in cmds]
-
-    first, second = nozzles[0], nozzles[-1]
-    dx, dy = second.offset_x - first.offset_x, second.offset_y - first.offset_y
-    tool = "T0"
-    result = []
-    for cmd in cmds:
-        if two_tools and cmd.code in _TOOLS:
-            tool = cmd.code
-        else:
-            cmd = _rename_e(cmd, (second if tool == "T1" else first).plunger_axis)
-            if tool == "T1" and cmd.is_move:
-                cmd = cmd.map_axis("X", lambda x: x + dx)
-                if dy:
-                    cmd = cmd.map_axis("Y", lambda y: y + dy)
-        result.append(cmd)
-    return result
+    return [_rename_e(c, plungers[0]) for c in cmds]
 
 
 def map_height_axes(cmds: list[Command], nozzles: Nozzles) -> list[Command]:
@@ -634,6 +633,7 @@ def validate(cmds: list[Command], max_feed: float = MAX_FEED) -> None:
     numbered = [(i, cmd) for i, cmd in enumerate(cmds) if cmd.code]
     if not numbered:
         raise GcodeValidationError("Empty G-code")
+    check_tool_changes(cmds)
 
     if numbered[0][1].code != "G91":
         raise GcodeValidationError("G-code must start with G91 relative positioning")
@@ -678,6 +678,14 @@ def check_as_uploaded(cmds: list[Command], axes: Axes, max_feed: float = MAX_FEE
         warnings.append(
             f"{len(with_e)} line(s) use E (first on line {with_e[0] + 1}); {plungers} "
             f'{axes.describe_plungers()}, so E moves no syringe. Choose "Needs changes" to convert them'
+        )
+    tools = tool_changes(cmds)
+    if tools:
+        codes = ", ".join(dict.fromkeys(code for _, code in tools))
+        warnings.append(
+            f"{len(tools)} line(s) select a tool ({codes}; first on line {tools[0][0] + 1}). "
+            f"Multi-material files aren't supported: every selected syringe prints every "
+            f"section, and the tool changes are sent unchanged"
         )
     first_move = next((i for i, cmd in numbered if cmd.is_move), len(cmds))
     if not any(cmd.code == "G91" for i, cmd in numbered if i < first_move):
@@ -772,6 +780,8 @@ def process_gcode(
     axes: Axes | None = None,
 ) -> ProcessedGcode:
     """Turn sliced G-code into the relative (G91) program sent to the printer.
+    Raises GcodeValidationError for a file with tool changes (see
+    check_tool_changes).
 
     A lab file that is relative already (see is_relative_program) is kept
     exactly as it is, and starts wherever the head is. `axes` are the
@@ -779,6 +789,7 @@ def process_gcode(
     """
     axes = axes or Axes.of(nozzles)
     cmds = parse(raw.splitlines())
+    check_tool_changes(cmds)
     if is_relative_program(cmds):
         return as_uploaded(raw, axes, pressurize_mm)
 

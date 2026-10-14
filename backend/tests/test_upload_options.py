@@ -289,12 +289,13 @@ async def test_print_speed_must_be_positive(client, tmp_path):
     assert resp.json()["detail"] == "print_speed must be positive"
 
 
-@pytest.mark.parametrize("suffix, dual", [(".stl", False), (".3mf", True)])
-async def test_slicer_sets_cura_speeds(tmp_path, monkeypatch, suffix, dual):
-    model = tmp_path / f"cube{suffix}"
+@pytest.mark.parametrize("nozzles", [LEFT, BOTH])
+async def test_slicer_sets_cura_speeds(tmp_path, monkeypatch, nozzles):
+    """One extruder, however many nozzles: the extrusion is copied to each
+    plunger after slicing."""
+    model = tmp_path / "cube.stl"
     model.write_bytes(b"")
     monkeypatch.setattr(slicer, "_check_stl_dimensions", lambda path, volume: None)
-    monkeypatch.setattr(slicer, "_check_3mf", lambda path: None)
     monkeypatch.setattr(slicer, "_find_cura_engine", lambda: "CuraEngine")
 
     async def fake_exec(*cmd, **kwargs):
@@ -306,12 +307,15 @@ async def test_slicer_sets_cura_speeds(tmp_path, monkeypatch, suffix, dual):
 
     calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", fake_exec)
-    await slicer.slice_model(model, BOTH if dual else LEFT, print_speed=3.5, max_feed=300)
+    await slicer.slice_model(model, nozzles, print_speed=3.5, max_feed=300)
 
     [cmd] = calls
     settings = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-s"]
     for name in ("speed_print", "speed_travel", "speed_wall_0", "speed_infill", "speed_layer_0"):
-        assert settings.count(f"{name}=3.5") == (2 if dual else 1)
+        assert settings.count(f"{name}=3.5") == 1
+    assert "machine_extruder_count=1" in settings
+    assert "-e1" not in cmd
+    assert not any("octaris_extruder" in arg for arg in cmd)
 
     calls.clear()
     await slicer.slice_model(model, LEFT)

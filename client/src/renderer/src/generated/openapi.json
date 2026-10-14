@@ -119,7 +119,7 @@
     "/calibration/zero": {
       "post": {
         "summary": "Calibrate Zero",
-        "description": "Zero one of the selected nozzles where it is. X/Y are set at the first\n(leftmost) selected nozzle, over the print's start point; each nozzle's\nheight with that nozzle lowered onto the bed (about 0.2 mm above the\nsurface). Printess 1.0:\n\n- `nozzles: [\"left\"]`, `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0\n- `nozzles: [\"right\"]`, `nozzle: \"right\"` \u2192 G92 X0 Y0 A0 C0 (right nozzle\n  over the start point and on the bed)\n- `nozzles: [\"left\", \"right\"]`, two steps: `nozzle: \"left\"` \u2192 G92 X0 Y0\n  Z0 B0, then lower the right nozzle onto the bed and `nozzle: \"right\"`\n  \u2192 G92 A0 C0\n\nPrints aren't shifted by the nozzle offsets: each nozzle prints in place.\nOnly the second nozzle's sections of a two-material 3MF printed with two\nnozzles are shifted by its offset.",
+        "description": "Zero one of the selected nozzles where it is. X/Y are set at the first\n(leftmost) selected nozzle, over the print's start point; each nozzle's\nheight with that nozzle lowered onto the bed (about 0.2 mm above the\nsurface). Printess 1.0:\n\n- `nozzles: [\"left\"]`, `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0\n- `nozzles: [\"right\"]`, `nozzle: \"right\"` \u2192 G92 X0 Y0 A0 C0 (right nozzle\n  over the start point and on the bed)\n- `nozzles: [\"left\", \"right\"]`, two steps: `nozzle: \"left\"` \u2192 G92 X0 Y0\n  Z0 B0, then lower the right nozzle onto the bed and `nozzle: \"right\"`\n  \u2192 G92 A0 C0\n\nPrints aren't shifted by the nozzle offsets: each nozzle prints its own\ncopy of the same path, in place.",
         "operationId": "calibrate_zero_calibration_zero_post",
         "requestBody": {
           "content": {

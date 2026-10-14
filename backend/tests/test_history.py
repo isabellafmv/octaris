@@ -58,7 +58,8 @@ async def printer(client):
 
 
 async def upload_stl(client, tmp_path, n_lines: int, **params):
-    result = ProcessedGcode(lines=[f"G1 X{i % 20} B0.01 F300" for i in range(n_lines)])
+    # X 0 to -19: the right syringe's copy, 30 mm over, stays on the bed
+    result = ProcessedGcode(lines=[f"G1 X{-(i % 20)} B0.01 F300" for i in range(n_lines)])
     with (
         patch("backend.session.slice_model", AsyncMock(return_value=result)),
         patch("backend.session.DATA_DIR", tmp_path),

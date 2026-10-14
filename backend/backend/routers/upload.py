@@ -9,7 +9,7 @@ from backend.slicer import PrintSettings, SlicingError
 
 router = APIRouter()
 
-ACCEPTED_MODEL_EXTENSIONS = (".stl", ".3mf")
+ACCEPTED_MODEL_EXTENSIONS = (".stl",)
 # Plain text G-code (.txt) is read exactly like .gcode
 ACCEPTED_GCODE_EXTENSIONS = (".gcode", ".gco", ".txt")
 # The nozzles to print with, by id (repeat the parameter for several:
@@ -49,7 +49,7 @@ async def upload_model(
     session: PrinterSession = Depends(get_session),
 ):
     if not file.filename or not file.filename.lower().endswith(ACCEPTED_MODEL_EXTENSIONS):
-        raise HTTPException(status_code=400, detail="Only .stl and .3mf files are accepted")
+        raise HTTPException(status_code=400, detail="Only .stl files are accepted")
     ids = session.select_nozzles(nozzles)
     settings: PrintSettings = {
         "nozzle_diameter": nozzle_diameter,

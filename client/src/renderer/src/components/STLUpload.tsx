@@ -4,30 +4,30 @@ interface STLUploadProps {
   file: File | null
   onFile: (f: File) => void
   onError: (msg: string) => void
-  /** When true, shows hint that 3MF is needed for multi-material. */
-  dualMode?: boolean
+  /** Several syringes selected: each prints its own copy of the model. */
+  severalSyringes?: boolean
 }
 
-const ACCEPTED_EXTENSIONS = ['.stl', '.3mf']
-
-export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps): React.JSX.Element {
+export function STLUpload({
+  file,
+  onFile,
+  onError,
+  severalSyringes
+}: STLUploadProps): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
-
-  const is3mf = file?.name.toLowerCase().endsWith('.3mf')
 
   return (
     <>
       <input
         ref={inputRef}
         type="file"
-        accept=".stl,.3mf"
+        accept=".stl"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0]
           if (!f) return
-          const ext = f.name.toLowerCase()
-          if (!ACCEPTED_EXTENSIONS.some((e) => ext.endsWith(e))) {
-            onError('Only .stl and .3mf files are accepted')
+          if (!f.name.toLowerCase().endsWith('.stl')) {
+            onError('Only .stl files are accepted')
             return
           }
           onFile(f)
@@ -38,11 +38,7 @@ export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps): 
         onClick={() => inputRef.current?.click()}
         className="w-full flex items-center gap-4 px-5 py-4 rounded-2xl bg-white transition-all active:scale-[0.98] group shadow-[0_1px_4px_rgba(0,0,0,0.07)]"
       >
-        <div
-          className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-            is3mf ? 'bg-primary-muted' : 'bg-surface-card'
-          }`}
-        >
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-surface-card">
           <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.6" className="w-5 h-5 stroke-primary">
             <path
               strokeLinecap="round"
@@ -66,16 +62,10 @@ export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps): 
           <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
         </svg>
       </button>
-      {dualMode && !file && (
-        <p className="text-[9px] mt-1.5 text-text-tinted">
-          Upload a .3mf file for multi-material printing (different material per syringe). A single
-          .stl will extrude from both syringes simultaneously.
-        </p>
-      )}
-      {dualMode && file && !is3mf && (
+      {severalSyringes && (
         <p className="text-[9px] mt-1.5 text-text-muted">
-          Both syringes will extrude the same path. Use a .3mf file to assign different regions to
-          each syringe.
+          Each selected syringe prints its own copy of the model, as far over as it sits on the
+          head. Every copy has to fit on the bed.
         </p>
       )}
     </>

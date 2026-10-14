@@ -116,9 +116,8 @@ export interface paths {
          *       Z0 B0, then lower the right nozzle onto the bed and `nozzle: "right"`
          *       → G92 A0 C0
          *
-         *     Prints aren't shifted by the nozzle offsets: each nozzle prints in place.
-         *     Only the second nozzle's sections of a two-material 3MF printed with two
-         *     nozzles are shifted by its offset.
+         *     Prints aren't shifted by the nozzle offsets: each nozzle prints its own
+         *     copy of the same path, in place.
          */
         post: operations["calibrate_zero_calibration_zero_post"];
         delete?: never;

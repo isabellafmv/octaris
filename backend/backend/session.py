@@ -40,11 +40,13 @@ from backend.gcode_processor import (
 )
 from backend.history import PrintHistory
 from backend.limits import (
+    Copy,
     LimitError,
     check_jog,
     check_move_to,
     check_path,
     check_plunger_travel,
+    copies_of,
     plunger_step,
     plunger_travel_needed,
     start_state,
@@ -507,7 +509,8 @@ class PrinterSession:
     async def _check_jog_limits(self, axis: str, distance: float) -> None:
         """Only once that axis is zeroed: before the G92 zero the bed's
         position is unknown, and the nozzle has to be jogged freely to find
-        it. Every nozzle's height has the bed's z limits."""
+        it. Every nozzle's height has the bed's z limits; with several
+        nozzles selected, X/Y are checked for each one's place."""
         if axis not in ("X", "Y", *self._height_axes()) or axis not in self.zeroed:
             return
         current = self.serial.position.get(axis)
@@ -516,7 +519,12 @@ class PrinterSession:
             current = self.serial.position.get(axis)
         if current is None:
             raise SerialError(f"Couldn't read the printer's {axis} position to check the bed limits")
-        check_jog(self.profile.bed, self._height_axes(), axis, current, distance)
+        check_jog(self.profile.bed, self._height_axes(), axis, current, distance, self._copies())
+
+    def _copies(self, nozzle_ids: Sequence[str] | None = None) -> tuple[Copy, ...]:
+        """The copies of the print `nozzle_ids` (default: the selected
+        nozzles) make, for the bed checks: see limits.copies_of."""
+        return copies_of(self.profile.select(nozzle_ids or self.selected_nozzles))
 
     async def go_to_origin(self, lower: bool = False) -> list[str]:
         """Travel to X0 Y0 at the current height and, with `lower`, then
@@ -533,10 +541,12 @@ class PrinterSession:
         heights = self._height_axes(self.selected_nozzles)
         if lower and not set(heights) <= self.zeroed:
             raise NotReady("Zero the nozzle height first: lowering to an unset zero could crash the nozzle")
-        # As for jogs, the bed limits only apply once an axis is zeroed
+        # As for jogs, the bed limits only apply once an axis is zeroed, and
+        # X/Y are checked for every selected nozzle's place
+        copies = self._copies()
         for axis in ["X", "Y", *(heights if lower else [])]:
             if axis in self.zeroed:
-                check_move_to(self.profile.bed, heights, axis, 0.0)
+                check_move_to(self.profile.bed, heights, axis, 0.0, copies)
 
         self.worker.manual_command()
         lines = ["G90", f"G1 X0 Y0 F{TRAVEL_FEED}"]
@@ -636,13 +646,15 @@ class PrinterSession:
     async def load_model(
         self, filename: str, content: bytes, nozzles: Sequence[str] | None, settings: PrintSettings
     ) -> ProcessedGcode:
-        """Slice an STL/3MF model for the `nozzles` (ids) and load the result.
+        """Slice an STL model for the `nozzles` (ids) and load the result.
 
         Raises NotReady for an unknown nozzle, SlicingError or
-        GcodeValidationError if slicing fails, and LimitError if the print
-        would leave the bed.
+        GcodeValidationError if slicing fails, and LimitError if the model
+        can't fit on the bed with these nozzles (before slicing) or a
+        nozzle's copy of the print would leave it.
         """
         ids = self.select_nozzles(nozzles)
+        selected = self.profile.select(ids)
         axes = self.profile.axes
         self._publish(StatusEvent(value="slicing"))
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -651,14 +663,15 @@ class PrinterSession:
         try:
             gcode = await slice_model(
                 model_path,
-                self.profile.select(ids),
+                selected,
                 **settings,
                 max_feed=self.config.max_feed_mm_min,
                 build_volume=self.profile.build_volume,
                 axes=axes,
+                bed=self.profile.bed,
             )
             start = start_state(gcode.start_position, axes.all)
-            check_path(self.profile.bed, gcode.lines, start, gcode.height_axes)
+            check_path(self.profile.bed, gcode.lines, start, gcode.height_axes, copies_of(selected))
         except Exception:
             self._publish(StatusEvent(value="idle"))
             raise
@@ -673,7 +686,8 @@ class PrinterSession:
         for what may print differently than intended.
 
         Raises NotReady for an unknown nozzle, and GcodeValidationError or
-        LimitError if it can't be printed.
+        LimitError if it can't be printed: converted, a file with tool
+        changes (T0/T1) is refused; sent as uploaded, it gets a warning.
         """
         ids = self.select_nozzles(nozzles)
         selected = self.profile.select(ids)
@@ -697,7 +711,7 @@ class PrinterSession:
         # A converted print is checked from the zero point it starts at; a
         # lab file starts wherever the head is, so only at print start.
         start = start_state(gcode.start_position, axes.all)
-        check_path(self.profile.bed, gcode.lines, start, gcode.height_axes)
+        check_path(self.profile.bed, gcode.lines, start, gcode.height_axes, copies_of(selected))
         self._load(LoadedPrint(gcode, filename, ids, "gcode", as_uploaded=not needs_changes))
         return gcode
 
@@ -776,9 +790,9 @@ class PrinterSession:
 
         start = start_state(gcode.start_position, axes.all)
         try:
-            check_path(self.profile.bed, lines, start, gcode.height_axes)
+            check_path(self.profile.bed, lines, start, gcode.height_axes, self._copies(loaded.nozzles))
         except LimitError as exc:
-            raise GcodeEditError(str(exc), _line_in(str(exc))) from exc
+            raise GcodeEditError(str(exc), exc.line) from exc
 
         # Each plunger counts from where it is, a full syringe
         full = {**(gcode.start_position or {}), **dict.fromkeys(axes.plungers, 0.0)}
@@ -847,15 +861,18 @@ class PrinterSession:
                     "Zero the nozzle first."
                 )
             target = dict.fromkeys(origin_axes, 0.0)
+        # Each selected nozzle's copy of the path is checked, from where
+        # the printer actually is
+        copies = copies_of(selected)
         travel: list[str] = []
         if target is not None:
             if moved(position, target):
                 travel = travel_moves(position, target)
-                check_path(self.profile.bed, travel, start_state(position, axes.all), heights)
+                check_path(self.profile.bed, travel, start_state(position, axes.all), heights, copies)
             position = {**position, **target}
 
         # Checked before load_gcode, which would drop a resumable checkpoint.
-        check_path(self.profile.bed, gcode.lines, start_state(position, axes.all), heights)
+        check_path(self.profile.bed, gcode.lines, start_state(position, axes.all), heights, copies)
         # As it will be sent: the flow override scales every plunger's values.
         lines = [scale_flow(line, worker.flow_rate / 100.0, axes.plungers) for line in gcode.lines]
         needed = plunger_travel_needed(lines, start_state(position, axes.all), axes.plungers)
@@ -920,7 +937,7 @@ def split_lines(text: str) -> list[str]:
     return re.split(r"\r\n|\r|\n", text)
 
 
-# How check_path ("line 12 (...)") and validate ("Line 12: ...") name the line
+# How validate names the line ("Line 12: ...")
 _LINE_NUMBER = re.compile(r"\b[Ll]ine (\d+)\b")
 
 

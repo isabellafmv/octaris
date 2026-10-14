@@ -5,6 +5,8 @@ fixtures/legacy_modes.json was recorded from the code before printer
 profiles (commit cc115ca), with the inputs it was recorded for: processed
 G-code, uploads (converted and as uploaded, with mirroring), the G92 of
 each calibration step, Go to Origin / Lower to zero height, and the slicer.
+Its two-material cases (a 3MF, G-code with T0/T1 tool changes) were removed
+with multi-material printing; every other case is as recorded.
 """
 
 from __future__ import annotations
@@ -142,7 +144,6 @@ async def test_slicer_matches_the_old_mode(tmp_path, monkeypatch, key):
         return proc
 
     monkeypatch.setattr(slicer, "_check_stl_dimensions", lambda path, volume: None)
-    monkeypatch.setattr(slicer, "_check_3mf", lambda path: None)
     monkeypatch.setattr(slicer, "_find_cura_engine", lambda: "CuraEngine")
     monkeypatch.setattr(slicer.asyncio, "create_subprocess_exec", fake_exec)
     profile = Config().profile
@@ -161,9 +162,7 @@ async def test_slicer_matches_the_old_mode(tmp_path, monkeypatch, key):
     # The machine size now comes from the profile: the 60 mm the old code
     # left to octaris_settings.json
     size = ["-s", "machine_width=60", "-s", "machine_depth=60", "-s", "machine_height=60"]
-    at = args.index(
-        "machine_extruder_count=1" if suffix == ".stl" or mode != "both" else "machine_extruder_count=2"
-    )
+    at = args.index("machine_extruder_count=1")
     assert args[at + 1 : at + 7] == size
     del args[at + 1 : at + 7]
     assert args == GOLDEN["slicer"][key]["args"]

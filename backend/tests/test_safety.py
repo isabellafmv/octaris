@@ -22,6 +22,7 @@ from backend.limits import (
     start_state,
 )
 from backend.main import app
+from backend.printer import AxisRange
 from backend.queue_worker import CONNECTION_LOST, PrintState, PrintStatus, QueueWorker
 from backend.serial_manager import SerialError, SerialManager, _open_port
 from backend.session import LoadedPrint
@@ -472,6 +473,8 @@ async def test_low_travel_warning_emitted_once():
 
 async def test_dual_prints_refused_until_offset_measured(client, printer):
     app.state.session.profile.nozzle_offset_measured = False
+    # Room for the right syringe's copy, 30 mm to the right of the sample
+    app.state.session.profile.bed.x = AxisRange(min=-30, max=60)
     assert (await upload_sample(client, nozzles=("left", "right"))).status_code == 200
 
     resp = await client.post("/print/start")

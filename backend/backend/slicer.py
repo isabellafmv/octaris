@@ -7,13 +7,13 @@ import re
 import shutil
 import struct
 import tempfile
-import zipfile
 from pathlib import Path
 from typing import TypedDict
 
 from backend.config import PROJECT_ROOT, load_config
 from backend.gcode_processor import MAX_FEED, PRESSURIZE_MM, Nozzles, ProcessedGcode, process_gcode
-from backend.printer import Axes, BuildVolume
+from backend.limits import check_fits_bed
+from backend.printer import Axes, BedLimits, BuildVolume
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +58,9 @@ class SlicingError(Exception):
     pass
 
 
-def _check_stl_dimensions(stl_path: Path, volume: BuildVolume) -> None:
-    """Raise SlicingError if the STL bounding box exceeds the build volume."""
+def _check_stl_dimensions(stl_path: Path, volume: BuildVolume) -> tuple[float, float, float]:
+    """Raise SlicingError if the STL bounding box exceeds the build volume;
+    returns its size (X, Y, Z) in mm."""
     data = stl_path.read_bytes()
 
     vertices: list[tuple[float, float, float]] = []
@@ -108,16 +109,7 @@ def _check_stl_dimensions(stl_path: Path, volume: BuildVolume) -> None:
                 f"{label} dimension is {dim:.1f} mm (limit {limit:.0f} mm). "
                 f"Print bed is {limits[0]:.0f} × {limits[1]:.0f} × {limits[2]:.0f} mm."
             )
-
-
-def _check_3mf(path: Path) -> None:
-    """Validate that the file is a readable 3MF archive with a model inside."""
-    if not zipfile.is_zipfile(path):
-        raise SlicingError("File is not a valid 3MF archive.")
-    with zipfile.ZipFile(path) as zf:
-        names = zf.namelist()
-        if not any(n.endswith(".model") for n in names):
-            raise SlicingError("3MF archive does not contain a 3D model file.")
+    return dims
 
 
 def _windows_cura_installs() -> list[Path]:
@@ -220,16 +212,17 @@ async def slice_model(
     profile_path: Path | None = None,
     build_volume: BuildVolume | None = None,
     axes: Axes | None = None,
+    bed: BedLimits | None = None,
 ) -> ProcessedGcode:
-    """Slice an STL or 3MF file for `nozzles` (a profile's selection) and
-    return processed G-code.
-
-    Accepts both .stl and .3mf inputs.  For 3MF files the extruder-to-mesh
-    mapping embedded in the archive is used by CuraEngine, so multi-material
-    prints are supported with two nozzles selected.
+    """Slice an STL file for `nozzles` (a profile's selection) and return
+    processed G-code. It is sliced for one extruder; with several nozzles,
+    process_gcode drives every nozzle's plunger with it.
 
     `build_volume` is the printer profile's: Cura's machine size, and the
-    largest model accepted. `axes` are the profile's (see process_gcode).
+    largest model accepted. `bed` is the profile's: with several nozzles,
+    the model plus the spread of their offsets has to fit on it, checked
+    before slicing (raises LimitError). `axes` are the profile's (see
+    process_gcode).
 
     `print_speed` (mm/s) sets Cura's speed_print and speed_travel (see
     PRINT_SPEED_SETTINGS); `max_feed` (mm/min) is the cap every feed rate
@@ -245,12 +238,9 @@ async def slice_model(
     if not profile_path.exists():
         raise SlicingError(f"Slicer profile not found: {profile_path}")
 
-    is_3mf = model_path.suffix.lower() == ".3mf"
-
-    if is_3mf:
-        _check_3mf(model_path)
-    else:
-        _check_stl_dimensions(model_path, volume)
+    size = _check_stl_dimensions(model_path, volume)
+    if bed is not None:
+        check_fits_bed(size[:2], nozzles, bed)
 
     cura_bin = _find_cura_engine()
 
@@ -261,23 +251,13 @@ async def slice_model(
     if nozzle_diameter is not None and layer_height is None:
         layer_height = round(nozzle_diameter * DEFAULT_LAYER_HEIGHT_RATIO, 3)
 
-    # Only use dual-extruder slicing for 3MF files (which carry material
-    # assignments), with two nozzles.  A single STL for several nozzles is
-    # sliced as single-extruder; gcode_processor mirrors the extrusion to
-    # every nozzle's plunger in post-processing.
-    dual = is_3mf and len(nozzles) == 2
-    extruder_count = 2 if dual else 1
-
-    extruder_left_path = profile_path.parent / "octaris_extruder_left.def.json"
-    extruder_right_path = profile_path.parent / "octaris_extruder_right.def.json"
-
     cmd = [
         cura_bin,
         "slice",
         "-j",
         str(profile_path),
         "-s",
-        f"machine_extruder_count={extruder_count}",
+        "machine_extruder_count=1",
         "-s",
         f"machine_width={volume.x:g}",
         "-s",
@@ -288,8 +268,6 @@ async def slice_model(
 
     # Extruder 0 settings
     cmd.append("-e0")
-    if dual and extruder_left_path.exists():
-        cmd.extend(["-j", str(extruder_left_path)])
 
     # Override nozzle/layer settings on the command line so the static
     # profile doesn't need to be regenerated for each nozzle tip.
@@ -305,24 +283,6 @@ async def slice_model(
     if print_speed is not None:
         for setting in PRINT_SPEED_SETTINGS:
             cmd.extend(["-s", f"{setting}={print_speed}"])
-
-    if dual:
-        # Extruder 1 with its definition and same settings
-        cmd.append("-e1")
-        if extruder_right_path.exists():
-            cmd.extend(["-j", str(extruder_right_path)])
-        if nozzle_diameter is not None:
-            cmd.extend(["-s", f"machine_nozzle_size={nozzle_diameter}"])
-            cmd.extend(["-s", f"line_width={nozzle_diameter}"])
-        if syringe_diameter is not None:
-            cmd.extend(["-s", f"material_diameter={syringe_diameter}"])
-            cmd.extend(["-s", "material_flow=100"])
-        if layer_height is not None:
-            cmd.extend(["-s", f"layer_height={layer_height}"])
-            cmd.extend(["-s", f"layer_height_0={layer_height}"])
-        if print_speed is not None:
-            for setting in PRINT_SPEED_SETTINGS:
-                cmd.extend(["-s", f"{setting}={print_speed}"])
 
     cmd.extend(["-o", str(output_path), "-l", str(model_path)])
 

@@ -41,9 +41,8 @@ async def calibrate_zero(
       Z0 B0, then lower the right nozzle onto the bed and `nozzle: "right"`
       → G92 A0 C0
 
-    Prints aren't shifted by the nozzle offsets: each nozzle prints in place.
-    Only the second nozzle's sections of a two-material 3MF printed with two
-    nozzles are shifted by its offset.
+    Prints aren't shifted by the nozzle offsets: each nozzle prints its own
+    copy of the same path, in place.
     """
     body = body or CalibrateRequest()
     command = await session.calibrate(body.nozzle, body.nozzles)

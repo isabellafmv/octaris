@@ -107,6 +107,38 @@ describe('absolute (G90)', () => {
     expect(xs(1)).toEqual([RIGHT_OFFSET_X, 10 + RIGHT_OFFSET_X])
   })
 
+  it('draws a copy per selected syringe at its offset, unshifted moves and no tool changes', () => {
+    // Four syringes on a 20 mm grid, all driven by one converted move
+    const grid: PreviewNozzle[] = [
+      { heightAxis: 'Z', plungerAxis: 'B', offsetX: 0, offsetY: 0 },
+      { heightAxis: 'A', plungerAxis: 'C', offsetX: 20, offsetY: 0 },
+      { heightAxis: 'U', plungerAxis: 'V', offsetX: 0, offsetY: 20 },
+      { heightAxis: 'W', plungerAxis: 'K', offsetX: 20, offsetY: 20 }
+    ]
+    const p = parseGcode(gcode('G91', 'G1 X10 B-1 C-1 V-1 K-1'), grid)
+    const copies = Array.from(p.nozzles).map((n, i) => [
+      n,
+      ...p.positions.subarray(i * 6, i * 6 + 6)
+    ])
+    expect(copies).toEqual([
+      [0, 0, 0, 0, 10, 0, 0],
+      [1, 20, 0, 0, 30, 0, 0],
+      [2, 0, 20, 0, 10, 20, 0],
+      [3, 20, 20, 0, 30, 20, 0]
+    ])
+    // Only the selected syringes print, X/Y zeroed at the first of them:
+    // here the back two, the right one 20 mm over
+    const back = parseGcode(gcode('G91', 'G1 X10 V-1 K-1'), grid)
+    expect(Array.from(back.nozzles)).toEqual([2, 3])
+    expect(Array.from(back.positions.subarray(0, 12))).toEqual([
+      0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0
+    ])
+    // T0/T1 mean nothing: a T line neither switches nor shifts anything
+    const tools = parseGcode(gcode('G91', 'T1', 'G1 X10 B-1 C-1'), grid)
+    expect(Array.from(tools.nozzles)).toEqual([0, 1])
+    expect(Array.from(tools.positions.subarray(0, 6))).toEqual([0, 0, 0, 10, 0, 0])
+  })
+
   it("takes the nozzles' offsets and axes from the profile", () => {
     const moved: PreviewNozzle[] = [NOZZLES[0], { ...NOZZLES[1], offsetX: 25, offsetY: -4 }]
     const result = segments(gcode('G1 X10 B-1 C-1'), moved)
@@ -312,7 +344,7 @@ describe('groupByCategory', () => {
   })
 
   it('keeps file order within a layer when layers are revisited', () => {
-    // Two nozzles with tool changes can go back down to an earlier height
+    // A hand-written file can go back down to an earlier height
     const p = parseGcode(
       gcode('G0 Z0.4', 'G1 X1 B-1', 'G0 Z0.2', 'G1 X2 B-2', 'G0 Z0.4', 'G1 X3 B-3'),
       NOZZLES

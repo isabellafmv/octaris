@@ -355,21 +355,27 @@ def test_substitute_both_mirror():
     assert result[1] == "G0 X20 Y20 F300"
 
 
-def test_substitute_both_multi():
-    """3MF multi-material: T0→B, T1→C with X offset."""
-    lines = [
-        "T0",
-        "G1 X10 E0.5 F200",
-        "T1",
-        "G1 X10 E0.3 F200",
-    ]
-    result = run(substitute_extrusion, lines, BOTH)
-    # T0 section → B axis, no X offset
-    assert "B-0.5" in result[1]
-    assert "X10" in result[1]
-    # T1 section → C axis, X shifted by the right nozzle's offset_x
-    assert "C-0.3" in result[3]
-    assert "X40" in result[3]  # 10 + 30 mm offset
+def test_tool_changes_are_refused():
+    """No multi-material: a file that switches tools can't be converted."""
+    raw = "T0\nG0 X0 Y0 Z0.2\nG1 X10 E0.5 F200\nT1\nG1 X10 E0.3 F200"
+    for nozzles in (LEFT, BOTH):
+        with pytest.raises(GcodeValidationError) as exc:
+            process_gcode(raw, nozzles)
+        assert str(exc.value) == (
+            "Line 4: T1 changes tool (the file starts with T0 on line 1). Multi-material files "
+            "aren't supported: every selected syringe prints the same path. Slice the model for "
+            "one extruder."
+        )
+    with pytest.raises(GcodeValidationError, match="Line 3: T1 changes tool"):
+        validate(parse(["G91", "T0", "T1", "G1 X1"]))
+
+
+def test_one_tool_is_not_a_tool_change():
+    """Cura writes a lone T0 for one extruder: no change, and E still
+    drives every selected plunger, unshifted."""
+    result = run(substitute_extrusion, ["T0", "G1 X10 E0.5 F200"], BOTH)
+    assert result == ["T0", "G1 X10 B-0.5 F200 C-0.5"]
+    process_gcode("T0\nG0 X0 Y0 Z0.2\nG1 X10 E0.5 F200\nT0", BOTH)
 
 
 def test_build_preamble_both():
@@ -414,9 +420,6 @@ def test_numbers_without_leading_zero():
     """Cura writes e.g. "X-.5" and "E.01234"; both must be converted."""
     result = run(substitute_extrusion, ["G1 X-.5 Y1 E.01234 F200"], RIGHT)
     assert result == ["G1 X-.5 Y1 C-0.01234 F200"]
-    # A shifted X (the right nozzle's section of a two-material file) is parsed too
-    result = run(substitute_extrusion, ["T1", "G1 X-.5 Y1 E.01234 F200"], BOTH)
-    assert result[-1] == "G1 X29.5 Y1 C-0.01234 F200"
     with pytest.raises(GcodeValidationError, match="Unsubstituted E"):
         validate(parse(["G91", "G1 X1 E.5"]))
 
