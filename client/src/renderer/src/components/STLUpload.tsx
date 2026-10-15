@@ -4,30 +4,30 @@ interface STLUploadProps {
   file: File | null
   onFile: (f: File) => void
   onError: (msg: string) => void
-  /** When true, shows hint that 3MF is needed for multi-material. */
-  dualMode?: boolean
+  /** Several syringes selected: each prints its own copy of the model. */
+  severalSyringes?: boolean
 }
 
-const ACCEPTED_EXTENSIONS = ['.stl', '.3mf']
-
-export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps) {
+export function STLUpload({
+  file,
+  onFile,
+  onError,
+  severalSyringes
+}: STLUploadProps): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
-
-  const is3mf = file?.name.toLowerCase().endsWith('.3mf')
 
   return (
     <>
       <input
         ref={inputRef}
         type="file"
-        accept=".stl,.3mf"
+        accept=".stl"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0]
           if (!f) return
-          const ext = f.name.toLowerCase()
-          if (!ACCEPTED_EXTENSIONS.some((e) => ext.endsWith(e))) {
-            onError('Only .stl and .3mf files are accepted')
+          if (!f.name.toLowerCase().endsWith('.stl')) {
+            onError('Only .stl files are accepted')
             return
           }
           onFile(f)
@@ -36,14 +36,10 @@ export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps) {
       />
       <button
         onClick={() => inputRef.current?.click()}
-        className="w-full flex items-center gap-4 px-5 py-4 rounded-2xl bg-white transition-all active:scale-[0.98] group"
-        style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}
+        className="w-full flex items-center gap-4 px-5 py-4 rounded-2xl bg-white transition-all active:scale-[0.98] group shadow-[0_1px_4px_rgba(0,0,0,0.07)]"
       >
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-          style={{ backgroundColor: is3mf ? '#D4EAE9' : '#EDE9DC' }}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="#1A8B8D" strokeWidth="1.6" className="w-5 h-5">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-surface-card">
+          <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.6" className="w-5 h-5 stroke-primary">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -52,33 +48,24 @@ export function STLUpload({ file, onFile, onError, dualMode }: STLUploadProps) {
           </svg>
         </div>
         <div className="flex-1 text-left">
-          <p className="font-semibold text-sm" style={{ color: '#2D3333' }}>
-            {file ? file.name : 'Upload Model'}
-          </p>
-          <p className="text-xs mt-0.5" style={{ color: '#8B9090' }}>
-            {file ? 'Click to replace file' : 'Select a .stl or .3mf file'}
+          <p className="font-semibold text-sm text-text">{file ? file.name : 'Upload Model'}</p>
+          <p className="text-xs mt-0.5 text-text-muted">
+            {file ? 'Click to replace file' : 'Select a .stl file'}
           </p>
         </div>
         <svg
           viewBox="0 0 24 24"
           fill="none"
-          stroke="#B8B3A8"
           strokeWidth="2"
-          className="w-4 h-4 shrink-0 group-hover:translate-x-0.5 transition-transform"
+          className="w-4 h-4 shrink-0 group-hover:translate-x-0.5 transition-transform stroke-[#B8B3A8]"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
         </svg>
       </button>
-      {dualMode && !file && (
-        <p className="text-[9px] mt-1.5" style={{ color: '#5A7070' }}>
-          Upload a .3mf file for multi-material printing (different material per syringe).
-          A single .stl will extrude from both syringes simultaneously.
-        </p>
-      )}
-      {dualMode && file && !is3mf && (
-        <p className="text-[9px] mt-1.5" style={{ color: '#8B9090' }}>
-          Both syringes will extrude the same path. Use a .3mf file to assign
-          different regions to each syringe.
+      {severalSyringes && (
+        <p className="text-[9px] mt-1.5 text-text-muted">
+          Each selected syringe prints its own copy of the model, as far over as it sits on the
+          head. Every copy has to fit on the bed.
         </p>
       )}
     </>

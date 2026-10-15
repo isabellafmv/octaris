@@ -3,29 +3,39 @@ import time
 from unittest.mock import patch
 
 from backend.serial_manager import SerialManager
+from tests.serial_fakes import attach
 
 
 class FakeSerial:
     """Mimics serial.Serial, recording write/read order with artificial
-    delays so concurrent callers would interleave if not properly locked."""
+    delays so concurrent callers would interleave if not properly locked.
+    Each write is answered with one "ok"."""
 
     def __init__(self, delay: float = 0.02):
         self.is_open = True
         self.delay = delay
         self.log: list[tuple[str, str]] = []
+        self._unanswered = 0
 
     def write(self, data: bytes) -> None:
         content = data.decode().strip()
         self.log.append(("write", content))
         time.sleep(self.delay)
+        self._unanswered += 1
 
     def flush(self) -> None:
         pass
 
     def readline(self) -> bytes:
-        time.sleep(self.delay)
+        time.sleep(self.delay or 0.001)
+        if not self._unanswered:
+            return b""
+        self._unanswered -= 1
         self.log.append(("read", "ok"))
         return b"ok\n"
+
+    def open(self) -> None:
+        self.is_open = True
 
     def close(self) -> None:
         self.is_open = False
@@ -33,9 +43,7 @@ class FakeSerial:
 
 def _make_connected_manager(fake_serial: FakeSerial) -> SerialManager:
     manager = SerialManager()
-    manager._serial = fake_serial
-    manager._port = "/dev/fake"
-    manager._baud_rate = 115200
+    attach(manager, fake_serial)
     return manager
 
 
@@ -44,8 +52,8 @@ async def test_concurrent_send_line_calls_do_not_interleave():
     manager = _make_connected_manager(fake)
 
     await asyncio.gather(
-        manager.send_line("G1 X10"),
-        manager.send_line("G1 Y10"),
+        manager.send("G1 X10"),
+        manager.send("G1 Y10"),
     )
 
     assert len(fake.log) == 4
@@ -62,12 +70,19 @@ async def test_send_lines_is_atomic_against_concurrent_send_line():
 
     await asyncio.gather(
         manager.send_lines(["G91", "G1 X5", "G90"]),
-        manager.send_line("M114"),
+        manager.send("M114"),
     )
 
     assert len(fake.log) == 8
     assert [entry[0] for entry in fake.log] == [
-        "write", "read", "write", "read", "write", "read", "write", "read",
+        "write",
+        "read",
+        "write",
+        "read",
+        "write",
+        "read",
+        "write",
+        "read",
     ]
 
     lines_in_order = [entry[1] for entry in fake.log if entry[0] == "write"]
@@ -91,35 +106,49 @@ async def test_send_line_reconnect_does_not_deadlock():
     manager._serial = None  # force the reconnect path
 
     with patch("backend.serial_manager.serial.Serial", return_value=fake):
-        response = await asyncio.wait_for(manager.send_line("G28"), timeout=2)
+        response = await asyncio.wait_for(manager.send("G28"), timeout=2)
 
     assert response == "ok"
     assert manager.is_connected
-    assert fake.log == [("write", "G28"), ("read", "ok")]
+    # (The temperature monitor's M155 queues up behind it.)
+    assert fake.log[:2] == [("write", "G28"), ("read", "ok")]
+    await manager.disconnect()
 
 
-async def test_on_connect_fires_after_automatic_reconnect():
+def connection_events(ports: list[str]):
+    """An on_event handler that records the port of each "printer connected" event."""
+
+    def on_event(event: dict) -> None:
+        if event["type"] == "printer" and event["connected"]:
+            ports.append(event["port"])
+
+    return on_event
+
+
+async def test_printer_event_after_automatic_reconnect():
     fake = FakeSerial(delay=0.0)
     connected_ports: list[str] = []
-    manager = SerialManager(on_connect=connected_ports.append)
+    manager = SerialManager(on_event=connection_events(connected_ports))
     manager._port = "/dev/fake"
     manager._baud_rate = 115200
     manager._serial = None  # force the reconnect path
 
     with patch("backend.serial_manager.serial.Serial", return_value=fake):
-        await manager.send_line("G28")
+        await manager.send("G28")
 
     assert connected_ports == ["/dev/fake"]
+    await manager.disconnect()
 
 
-async def test_on_connect_not_called_for_manual_connect():
-    """Manual connect() is reported by the caller (the /connect router), not
-    from within SerialManager — on_connect is only for automatic reconnects."""
+async def test_no_printer_event_for_manual_connect():
+    """Manual connect() is reported by the caller (PrinterSession.connect),
+    not from within SerialManager, which reports automatic reconnects only."""
     fake = FakeSerial(delay=0.0)
     connected_ports: list[str] = []
-    manager = SerialManager(on_connect=connected_ports.append)
+    manager = SerialManager(on_event=connection_events(connected_ports))
 
     with patch("backend.serial_manager.serial.Serial", return_value=fake):
         await manager.connect("/dev/fake", 115200)
 
     assert connected_ports == []
+    await manager.disconnect()

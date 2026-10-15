@@ -1,0 +1,1907 @@
+{
+ "inputs": {
+  "process": {
+   "raw": ";FLAVOR:Marlin\n;TIME:847\n;Filament used: 1.234m\n;Layer height: 0.2\n;MINX:10.0\n;MINY:10.0\n;Generated with Cura_SteamEngine\nM82 ;absolute extrusion mode\nG28 ;Home\nG92 E0\nG0 F600 X10 Y10 Z0.3\nG1 F200 X20 Y10 E0.5\nG1 F200 X20 Y20 E1.0\nG1 F200 X10 Y20 E1.5\nG1 F200 X10 Y10 E2.0\nG0 F600 X10 Y10 Z0.5\nG1 F200 X22 Y10 E2.5\nG1 F1200 X22 Y22 E3.0\nG1 F200 X10 Y22 E3.5\nG1 F200 X10 Y10 E4.0\nM107\nM104 S0\nM140 S0\n;Retract the filament\nG92 E1\nG1 E-1 F300\nG28 X0 Y0\nM84\nM82 ;absolute extrusion mode\nM104 S0\n;End of Gcode\n",
+   "m83": ";FLAVOR:Marlin\n;TIME:847\n;Filament used: 1.234m\n;Layer height: 0.2\n;MINX:10.0\n;MINY:10.0\n;Generated with Cura_SteamEngine\nM83 ;relative extrusion mode\nG28 ;Home\nG92 E0\nG0 F600 X10 Y10 Z0.3\nG1 F200 X20 Y10 E0.5\nG1 F200 X20 Y20 E0.5\nG1 F200 X10 Y20 E0.5\nG1 F200 X10 Y10 E2.0\nG0 F600 X10 Y10 Z0.5\nG1 F200 X22 Y10 E2.5\nG1 F1200 X22 Y22 E3.0\nG1 F200 X10 Y22 E3.5\nG1 F200 X10 Y10 E4.0\nM107\nM104 S0\nM140 S0\n;Retract the filament\nG92 E1\nG1 E-1 F300\nG28 X0 Y0\nM84\nM83 ;relative extrusion mode\nM104 S0\n;End of Gcode\n"
+  },
+  "params": {
+   "default": {},
+   "tuned": {
+    "pressurize_mm": 0.5,
+    "flow_multiplier": 1.2,
+    "travel_retract_multiplier": 2.0,
+    "max_feed": 300
+   }
+  },
+  "load": {
+   "raw": ";FLAVOR:Marlin\n;TIME:847\n;Filament used: 1.234m\n;Layer height: 0.2\n;MINX:10.0\n;MINY:10.0\n;Generated with Cura_SteamEngine\nM82 ;absolute extrusion mode\nG28 ;Home\nG92 E0\nG0 F600 X10 Y10 Z0.3\nG1 F200 X20 Y10 E0.5\nG1 F200 X20 Y20 E1.0\nG1 F200 X10 Y20 E1.5\nG1 F200 X10 Y10 E2.0\nG0 F600 X10 Y10 Z0.5\nG1 F200 X22 Y10 E2.5\nG1 F1200 X22 Y22 E3.0\nG1 F200 X10 Y22 E3.5\nG1 F200 X10 Y10 E4.0\nM107\nM104 S0\nM140 S0\n;Retract the filament\nG92 E1\nG1 E-1 F300\nG28 X0 Y0\nM84\nM82 ;absolute extrusion mode\nM104 S0\n;End of Gcode\n",
+   "lab_left": "; for the left nozzle\nG91\nG92 B0\nG0 Z1 F300 ; lift\nG1 X10 B-0.1 F300\nG1 Y5 B-0.2 F150\nG0 Z-1\nG4 P300",
+   "lab_right": "G91\nG0 A1 F300\nG1 X10 C-0.1 F300\nG1 Y-5 C-0.2\nG0 A-1",
+   "lab_dual": "G91\nG0 Z1 A1 F300\nG1 X10 B-0.1 C-0.1\nG0 Z-1 A-1",
+   "lab_height_both": "G91\nG0 Z1 A1\nG1 X10 B-0.1",
+   "absolute_e": "G90\nG1 X10 Y0 E1 F300\nG1 X0 Y0 E2"
+  }
+ },
+ "process": {
+  "raw/default/left": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G0 F400 X10 Y10 Z0.3",
+    "G1 F200 X10 B-0.5",
+    "G1 F200 Y10 B-0.5",
+    "G1 F200 X-10 B-0.5",
+    "G1 F200 Y-10 B-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G0 F400 Z0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 F200 X12 B-0.5",
+    "G1 F400 Y12 B-0.5",
+    "G1 F200 X-12 B-0.5",
+    "G1 F200 Y-12 B-0.5",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 Z5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 7: F600 clamped to F400",
+    "Line 16: F600 clamped to F400",
+    "Line 22: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/default/right": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 A0.3",
+    "G1 F200 X10 C-0.5",
+    "G1 F200 Y10 C-0.5",
+    "G1 F200 X-10 C-0.5",
+    "G1 F200 Y-10 C-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 C0.2 F400",
+    "G0 F400 A0.2",
+    "; repressurize",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 C-0.5",
+    "G1 F400 Y12 C-0.5",
+    "G1 F200 X-12 C-0.5",
+    "G1 F200 Y-12 C-0.5",
+    "; Octaris \u2014 footer",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 7: F600 clamped to F400",
+    "Line 16: F600 clamped to F400",
+    "Line 22: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/default/both": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 Z0.3 A0.3",
+    "G1 F200 X10 B-0.5 C-0.5",
+    "G1 F200 Y10 B-0.5 C-0.5",
+    "G1 F200 X-10 B-0.5 C-0.5",
+    "G1 F200 Y-10 B-0.5 C-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G1 C0.2 F400",
+    "G0 F400 Z0.2 A0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 B-0.5 C-0.5",
+    "G1 F400 Y12 B-0.5 C-0.5",
+    "G1 F200 X-12 B-0.5 C-0.5",
+    "G1 F200 Y-12 B-0.5 C-0.5",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 Z5 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 9: F600 clamped to F400",
+    "Line 19: F600 clamped to F400",
+    "Line 26: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/tuned/left": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.5 F300 ; pressurize B",
+    "G0 F300 X10 Y10 Z0.3",
+    "G1 F200 X10 B-0.6",
+    "G1 F200 Y10 B-0.6",
+    "G1 F200 X-10 B-0.6",
+    "G1 F200 Y-10 B-0.6",
+    "; layer change \u2014 depressurize",
+    "G1 B0.5 F300",
+    "G0 F300 Z0.2",
+    "; repressurize",
+    "G1 B-0.5 F300",
+    "G1 F200 X12 B-0.6",
+    "G1 F300 Y12 B-0.6",
+    "G1 F200 X-12 B-0.6",
+    "G1 F200 Y-12 B-0.6",
+    "; Octaris \u2014 footer",
+    "G1 B0.5 F300 ; depressurize B",
+    "G1 Z5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 3: F400 clamped to F300",
+    "Line 7: F600 clamped to F300",
+    "Line 14: F400 clamped to F300",
+    "Line 16: F600 clamped to F300",
+    "Line 19: F400 clamped to F300",
+    "Line 22: F1200 clamped to F300",
+    "Line 27: F400 clamped to F300"
+   ],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "pressurize_mm": 0.5,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/tuned/right": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 C-0.5 F300 ; pressurize C",
+    "G0 F300 X10 Y10 A0.3",
+    "G1 F200 X10 C-0.6",
+    "G1 F200 Y10 C-0.6",
+    "G1 F200 X-10 C-0.6",
+    "G1 F200 Y-10 C-0.6",
+    "; layer change \u2014 depressurize",
+    "G1 C0.5 F300",
+    "G0 F300 A0.2",
+    "; repressurize",
+    "G1 C-0.5 F300",
+    "G1 F200 X12 C-0.6",
+    "G1 F300 Y12 C-0.6",
+    "G1 F200 X-12 C-0.6",
+    "G1 F200 Y-12 C-0.6",
+    "; Octaris \u2014 footer",
+    "G1 C0.5 F300 ; depressurize C",
+    "G1 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 3: F400 clamped to F300",
+    "Line 7: F600 clamped to F300",
+    "Line 14: F400 clamped to F300",
+    "Line 16: F600 clamped to F300",
+    "Line 19: F400 clamped to F300",
+    "Line 22: F1200 clamped to F300",
+    "Line 27: F400 clamped to F300"
+   ],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.5,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/tuned/both": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.5 F300 ; pressurize B",
+    "G1 C-0.5 F300 ; pressurize C",
+    "G0 F300 X10 Y10 Z0.3 A0.3",
+    "G1 F200 X10 B-0.6 C-0.6",
+    "G1 F200 Y10 B-0.6 C-0.6",
+    "G1 F200 X-10 B-0.6 C-0.6",
+    "G1 F200 Y-10 B-0.6 C-0.6",
+    "; layer change \u2014 depressurize",
+    "G1 B0.5 F300",
+    "G1 C0.5 F300",
+    "G0 F300 Z0.2 A0.2",
+    "; repressurize",
+    "G1 B-0.5 F300",
+    "G1 C-0.5 F300",
+    "G1 F200 X12 B-0.6 C-0.6",
+    "G1 F300 Y12 B-0.6 C-0.6",
+    "G1 F200 X-12 B-0.6 C-0.6",
+    "G1 F200 Y-12 B-0.6 C-0.6",
+    "; Octaris \u2014 footer",
+    "G1 B0.5 F300 ; depressurize B",
+    "G1 C0.5 F300 ; depressurize C",
+    "G1 Z5 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 3: F400 clamped to F300",
+    "Line 5: F400 clamped to F300",
+    "Line 9: F600 clamped to F300",
+    "Line 16: F400 clamped to F300",
+    "Line 17: F400 clamped to F300",
+    "Line 19: F600 clamped to F300",
+    "Line 22: F400 clamped to F300",
+    "Line 23: F400 clamped to F300",
+    "Line 26: F1200 clamped to F300",
+    "Line 31: F400 clamped to F300",
+    "Line 32: F400 clamped to F300"
+   ],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.5,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "m83/default/left": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G0 F400 X10 Y10 Z0.3",
+    "G1 F200 X10 B-0.5",
+    "G1 F200 Y10 B-0.5",
+    "G1 F200 X-10 B-0.5",
+    "G1 F200 Y-10 B-2",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G0 F400 Z0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 F200 X12 B-2.5",
+    "G1 F400 Y12 B-3",
+    "G1 F200 X-12 B-3.5",
+    "G1 F200 Y-12 B-4",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 Z5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 7: F600 clamped to F400",
+    "Line 16: F600 clamped to F400",
+    "Line 22: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "m83/default/right": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 A0.3",
+    "G1 F200 X10 C-0.5",
+    "G1 F200 Y10 C-0.5",
+    "G1 F200 X-10 C-0.5",
+    "G1 F200 Y-10 C-2",
+    "; layer change \u2014 depressurize",
+    "G1 C0.2 F400",
+    "G0 F400 A0.2",
+    "; repressurize",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 C-2.5",
+    "G1 F400 Y12 C-3",
+    "G1 F200 X-12 C-3.5",
+    "G1 F200 Y-12 C-4",
+    "; Octaris \u2014 footer",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 7: F600 clamped to F400",
+    "Line 16: F600 clamped to F400",
+    "Line 22: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "m83/default/both": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 Z0.3 A0.3",
+    "G1 F200 X10 B-0.5 C-0.5",
+    "G1 F200 Y10 B-0.5 C-0.5",
+    "G1 F200 X-10 B-0.5 C-0.5",
+    "G1 F200 Y-10 B-2 C-2",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G1 C0.2 F400",
+    "G0 F400 Z0.2 A0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 B-2.5 C-2.5",
+    "G1 F400 Y12 B-3 C-3",
+    "G1 F200 X-12 B-3.5 C-3.5",
+    "G1 F200 Y-12 B-4 C-4",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 Z5 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 9: F600 clamped to F400",
+    "Line 19: F600 clamped to F400",
+    "Line 26: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "m83/tuned/left": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.5 F300 ; pressurize B",
+    "G0 F300 X10 Y10 Z0.3",
+    "G1 F200 X10 B-0.6",
+    "G1 F200 Y10 B-0.6",
+    "G1 F200 X-10 B-0.6",
+    "G1 F200 Y-10 B-2.4",
+    "; layer change \u2014 depressurize",
+    "G1 B0.5 F300",
+    "G0 F300 Z0.2",
+    "; repressurize",
+    "G1 B-0.5 F300",
+    "G1 F200 X12 B-3",
+    "G1 F300 Y12 B-3.6",
+    "G1 F200 X-12 B-4.2",
+    "G1 F200 Y-12 B-4.8",
+    "; Octaris \u2014 footer",
+    "G1 B0.5 F300 ; depressurize B",
+    "G1 Z5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 3: F400 clamped to F300",
+    "Line 7: F600 clamped to F300",
+    "Line 14: F400 clamped to F300",
+    "Line 16: F600 clamped to F300",
+    "Line 19: F400 clamped to F300",
+    "Line 22: F1200 clamped to F300",
+    "Line 27: F400 clamped to F300"
+   ],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "pressurize_mm": 0.5,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "m83/tuned/right": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 C-0.5 F300 ; pressurize C",
+    "G0 F300 X10 Y10 A0.3",
+    "G1 F200 X10 C-0.6",
+    "G1 F200 Y10 C-0.6",
+    "G1 F200 X-10 C-0.6",
+    "G1 F200 Y-10 C-2.4",
+    "; layer change \u2014 depressurize",
+    "G1 C0.5 F300",
+    "G0 F300 A0.2",
+    "; repressurize",
+    "G1 C-0.5 F300",
+    "G1 F200 X12 C-3",
+    "G1 F300 Y12 C-3.6",
+    "G1 F200 X-12 C-4.2",
+    "G1 F200 Y-12 C-4.8",
+    "; Octaris \u2014 footer",
+    "G1 C0.5 F300 ; depressurize C",
+    "G1 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 3: F400 clamped to F300",
+    "Line 7: F600 clamped to F300",
+    "Line 14: F400 clamped to F300",
+    "Line 16: F600 clamped to F300",
+    "Line 19: F400 clamped to F300",
+    "Line 22: F1200 clamped to F300",
+    "Line 27: F400 clamped to F300"
+   ],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.5,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "m83/tuned/both": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.5 F300 ; pressurize B",
+    "G1 C-0.5 F300 ; pressurize C",
+    "G0 F300 X10 Y10 Z0.3 A0.3",
+    "G1 F200 X10 B-0.6 C-0.6",
+    "G1 F200 Y10 B-0.6 C-0.6",
+    "G1 F200 X-10 B-0.6 C-0.6",
+    "G1 F200 Y-10 B-2.4 C-2.4",
+    "; layer change \u2014 depressurize",
+    "G1 B0.5 F300",
+    "G1 C0.5 F300",
+    "G0 F300 Z0.2 A0.2",
+    "; repressurize",
+    "G1 B-0.5 F300",
+    "G1 C-0.5 F300",
+    "G1 F200 X12 B-3 C-3",
+    "G1 F300 Y12 B-3.6 C-3.6",
+    "G1 F200 X-12 B-4.2 C-4.2",
+    "G1 F200 Y-12 B-4.8 C-4.8",
+    "; Octaris \u2014 footer",
+    "G1 B0.5 F300 ; depressurize B",
+    "G1 C0.5 F300 ; depressurize C",
+    "G1 Z5 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 3: F400 clamped to F300",
+    "Line 5: F400 clamped to F300",
+    "Line 9: F600 clamped to F300",
+    "Line 16: F400 clamped to F300",
+    "Line 17: F400 clamped to F300",
+    "Line 19: F600 clamped to F300",
+    "Line 22: F400 clamped to F300",
+    "Line 23: F400 clamped to F300",
+    "Line 26: F1200 clamped to F300",
+    "Line 31: F400 clamped to F300",
+    "Line 32: F400 clamped to F300"
+   ],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.5,
+   "warnings": [],
+   "time_estimate_s": 847
+  }
+ },
+ "load": {
+  "raw/True/left": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G0 F400 X10 Y10 Z0.3",
+    "G1 F200 X10 B-0.5",
+    "G1 F200 Y10 B-0.5",
+    "G1 F200 X-10 B-0.5",
+    "G1 F200 Y-10 B-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G0 F400 Z0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 F200 X12 B-0.5",
+    "G1 F400 Y12 B-0.5",
+    "G1 F200 X-12 B-0.5",
+    "G1 F200 Y-12 B-0.5",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 Z5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 7: F600 clamped to F400",
+    "Line 16: F600 clamped to F400",
+    "Line 22: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/True/right": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 A0.3",
+    "G1 F200 X10 C-0.5",
+    "G1 F200 Y10 C-0.5",
+    "G1 F200 X-10 C-0.5",
+    "G1 F200 Y-10 C-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 C0.2 F400",
+    "G0 F400 A0.2",
+    "; repressurize",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 C-0.5",
+    "G1 F400 Y12 C-0.5",
+    "G1 F200 X-12 C-0.5",
+    "G1 F200 Y-12 C-0.5",
+    "; Octaris \u2014 footer",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 7: F600 clamped to F400",
+    "Line 16: F600 clamped to F400",
+    "Line 22: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/True/both": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 Z0.3 A0.3",
+    "G1 F200 X10 B-0.5 C-0.5",
+    "G1 F200 Y10 B-0.5 C-0.5",
+    "G1 F200 X-10 B-0.5 C-0.5",
+    "G1 F200 Y-10 B-0.5 C-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G1 C0.2 F400",
+    "G0 F400 Z0.2 A0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 B-0.5 C-0.5",
+    "G1 F400 Y12 B-0.5 C-0.5",
+    "G1 F200 X-12 B-0.5 C-0.5",
+    "G1 F200 Y-12 B-0.5 C-0.5",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 Z5 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ],
+   "feed_log": [
+    "Line 9: F600 clamped to F400",
+    "Line 19: F600 clamped to F400",
+    "Line 26: F1200 clamped to F400"
+   ],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "A": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": 847
+  },
+  "raw/False/left": {
+   "lines": [
+    ";FLAVOR:Marlin",
+    ";TIME:847",
+    ";Filament used: 1.234m",
+    ";Layer height: 0.2",
+    ";MINX:10.0",
+    ";MINY:10.0",
+    ";Generated with Cura_SteamEngine",
+    "M82 ;absolute extrusion mode",
+    "G28 ;Home",
+    "G92 E0",
+    "G0 F600 X10 Y10 Z0.3",
+    "G1 F200 X20 Y10 E0.5",
+    "G1 F200 X20 Y20 E1.0",
+    "G1 F200 X10 Y20 E1.5",
+    "G1 F200 X10 Y10 E2.0",
+    "G0 F600 X10 Y10 Z0.5",
+    "G1 F200 X22 Y10 E2.5",
+    "G1 F1200 X22 Y22 E3.0",
+    "G1 F200 X10 Y22 E3.5",
+    "G1 F200 X10 Y10 E4.0",
+    "M107",
+    "M104 S0",
+    "M140 S0",
+    ";Retract the filament",
+    "G92 E1",
+    "G1 E-1 F300",
+    "G28 X0 Y0",
+    "M84",
+    "M82 ;absolute extrusion mode",
+    "M104 S0",
+    ";End of Gcode"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "3 line(s) set a feed rate above the 400 mm/min limit (first on line 11, up to F1200); they are sent unchanged",
+    "11 line(s) use E (first on line 10); the plungers are B (left) and C (right), so E moves no syringe. Choose \"Needs changes\" to convert them",
+    "No G91 before the first move: this is an absolute file, so its moves go to coordinates from the zero point instead of distances from where the head is"
+   ],
+   "time_estimate_s": 847
+  },
+  "raw/False/right": {
+   "lines": [
+    ";FLAVOR:Marlin",
+    ";TIME:847",
+    ";Filament used: 1.234m",
+    ";Layer height: 0.2",
+    ";MINX:10.0",
+    ";MINY:10.0",
+    ";Generated with Cura_SteamEngine",
+    "M82 ;absolute extrusion mode",
+    "G28 ;Home",
+    "G92 E0",
+    "G0 F600 X10 Y10 Z0.3",
+    "G1 F200 X20 Y10 E0.5",
+    "G1 F200 X20 Y20 E1.0",
+    "G1 F200 X10 Y20 E1.5",
+    "G1 F200 X10 Y10 E2.0",
+    "G0 F600 X10 Y10 Z0.5",
+    "G1 F200 X22 Y10 E2.5",
+    "G1 F1200 X22 Y22 E3.0",
+    "G1 F200 X10 Y22 E3.5",
+    "G1 F200 X10 Y10 E4.0",
+    "M107",
+    "M104 S0",
+    "M140 S0",
+    ";Retract the filament",
+    "G92 E1",
+    "G1 E-1 F300",
+    "G28 X0 Y0",
+    "M84",
+    "M82 ;absolute extrusion mode",
+    "M104 S0",
+    ";End of Gcode"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "3 line(s) set a feed rate above the 400 mm/min limit (first on line 11, up to F1200); they are sent unchanged",
+    "11 line(s) use E (first on line 10); the plungers are B (left) and C (right), so E moves no syringe. Choose \"Needs changes\" to convert them",
+    "No G91 before the first move: this is an absolute file, so its moves go to coordinates from the zero point instead of distances from where the head is"
+   ],
+   "time_estimate_s": 847
+  },
+  "raw/False/both": {
+   "lines": [
+    ";FLAVOR:Marlin",
+    ";TIME:847",
+    ";Filament used: 1.234m",
+    ";Layer height: 0.2",
+    ";MINX:10.0",
+    ";MINY:10.0",
+    ";Generated with Cura_SteamEngine",
+    "M82 ;absolute extrusion mode",
+    "G28 ;Home",
+    "G92 E0",
+    "G0 F600 X10 Y10 Z0.3",
+    "G1 F200 X20 Y10 E0.5",
+    "G1 F200 X20 Y20 E1.0",
+    "G1 F200 X10 Y20 E1.5",
+    "G1 F200 X10 Y10 E2.0",
+    "G0 F600 X10 Y10 Z0.5",
+    "G1 F200 X22 Y10 E2.5",
+    "G1 F1200 X22 Y22 E3.0",
+    "G1 F200 X10 Y22 E3.5",
+    "G1 F200 X10 Y10 E4.0",
+    "M107",
+    "M104 S0",
+    "M140 S0",
+    ";Retract the filament",
+    "G92 E1",
+    "G1 E-1 F300",
+    "G28 X0 Y0",
+    "M84",
+    "M82 ;absolute extrusion mode",
+    "M104 S0",
+    ";End of Gcode"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "3 line(s) set a feed rate above the 400 mm/min limit (first on line 11, up to F1200); they are sent unchanged",
+    "11 line(s) use E (first on line 10); the plungers are B (left) and C (right), so E moves no syringe. Choose \"Needs changes\" to convert them",
+    "No G91 before the first move: this is an absolute file, so its moves go to coordinates from the zero point instead of distances from where the head is"
+   ],
+   "time_estimate_s": 847
+  },
+  "lab_left/True/left": {
+   "lines": [
+    "; for the left nozzle",
+    "G91",
+    "G92 B0",
+    "G0 Z1 F300 ; lift",
+    "G1 X10 B-0.1 F300",
+    "G1 Y5 B-0.2 F150",
+    "G0 Z-1",
+    "G4 P300"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_left/True/right": {
+   "lines": [
+    "; for the left nozzle",
+    "G91",
+    "G92 B0",
+    "G0 Z1 F300 ; lift",
+    "G1 X10 B-0.1 F300",
+    "G1 Y5 B-0.2 F150",
+    "G0 Z-1",
+    "G4 P300"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_left/True/both": {
+   "lines": [
+    "; for the left nozzle",
+    "G91",
+    "G92 B0 C0",
+    "G0 Z1 A1 F300 ; lift",
+    "G1 X10 B-0.1 C-0.1 F300",
+    "G1 Y5 B-0.2 C-0.2 F150",
+    "G0 Z-1 A-1",
+    "G4 P300"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "Both mode: copied B to C and Z to A on every line, so both nozzles print the same path"
+   ],
+   "time_estimate_s": null
+  },
+  "lab_left/False/left": {
+   "lines": [
+    "; for the left nozzle",
+    "G91",
+    "G92 B0",
+    "G0 Z1 F300 ; lift",
+    "G1 X10 B-0.1 F300",
+    "G1 Y5 B-0.2 F150",
+    "G0 Z-1",
+    "G4 P300"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_left/False/right": {
+   "lines": [
+    "; for the left nozzle",
+    "G91",
+    "G92 B0",
+    "G0 Z1 F300 ; lift",
+    "G1 X10 B-0.1 F300",
+    "G1 Y5 B-0.2 F150",
+    "G0 Z-1",
+    "G4 P300"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_left/False/both": {
+   "lines": [
+    "; for the left nozzle",
+    "G91",
+    "G92 B0 C0",
+    "G0 Z1 A1 F300 ; lift",
+    "G1 X10 B-0.1 C-0.1 F300",
+    "G1 Y5 B-0.2 C-0.2 F150",
+    "G0 Z-1 A-1",
+    "G4 P300"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "Both mode: copied B to C and Z to A on every line, so both nozzles print the same path"
+   ],
+   "time_estimate_s": null
+  },
+  "lab_right/True/left": {
+   "lines": [
+    "G91",
+    "G0 A1 F300",
+    "G1 X10 C-0.1 F300",
+    "G1 Y-5 C-0.2",
+    "G0 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_right/True/right": {
+   "lines": [
+    "G91",
+    "G0 A1 F300",
+    "G1 X10 C-0.1 F300",
+    "G1 Y-5 C-0.2",
+    "G0 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_right/True/both": {
+   "lines": [
+    "G91",
+    "G0 A1 Z1 F300",
+    "G1 X10 C-0.1 B-0.1 F300",
+    "G1 Y-5 C-0.2 B-0.2",
+    "G0 A-1 Z-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "Both mode: copied C to B and A to Z on every line, so both nozzles print the same path"
+   ],
+   "time_estimate_s": null
+  },
+  "lab_right/False/left": {
+   "lines": [
+    "G91",
+    "G0 A1 F300",
+    "G1 X10 C-0.1 F300",
+    "G1 Y-5 C-0.2",
+    "G0 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_right/False/right": {
+   "lines": [
+    "G91",
+    "G0 A1 F300",
+    "G1 X10 C-0.1 F300",
+    "G1 Y-5 C-0.2",
+    "G0 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_right/False/both": {
+   "lines": [
+    "G91",
+    "G0 A1 Z1 F300",
+    "G1 X10 C-0.1 B-0.1 F300",
+    "G1 Y-5 C-0.2 B-0.2",
+    "G0 A-1 Z-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "Both mode: copied C to B and A to Z on every line, so both nozzles print the same path"
+   ],
+   "time_estimate_s": null
+  },
+  "lab_dual/True/left": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1 F300",
+    "G1 X10 B-0.1 C-0.1",
+    "G0 Z-1 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_dual/True/right": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1 F300",
+    "G1 X10 B-0.1 C-0.1",
+    "G0 Z-1 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_dual/True/both": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1 F300",
+    "G1 X10 B-0.1 C-0.1",
+    "G0 Z-1 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_dual/False/left": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1 F300",
+    "G1 X10 B-0.1 C-0.1",
+    "G0 Z-1 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_dual/False/right": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1 F300",
+    "G1 X10 B-0.1 C-0.1",
+    "G0 Z-1 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_dual/False/both": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1 F300",
+    "G1 X10 B-0.1 C-0.1",
+    "G0 Z-1 A-1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_height_both/True/left": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1",
+    "G1 X10 B-0.1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_height_both/True/right": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1",
+    "G1 X10 B-0.1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_height_both/True/both": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1",
+    "G1 X10 B-0.1 C-0.1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "Both mode: copied B to C on every line, so both nozzles print the same path"
+   ],
+   "time_estimate_s": null
+  },
+  "lab_height_both/False/left": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1",
+    "G1 X10 B-0.1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_height_both/False/right": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1",
+    "G1 X10 B-0.1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "lab_height_both/False/both": {
+   "lines": [
+    "G91",
+    "G0 Z1 A1",
+    "G1 X10 B-0.1 C-0.1"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "Both mode: copied B to C on every line, so both nozzles print the same path"
+   ],
+   "time_estimate_s": null
+  },
+  "absolute_e/True/left": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G1 X10 B-1 F300",
+    "G1 X-10 B-1",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 Z5 F300 ; raise nozzle",
+    "G1 F300 ; return to origin"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B"
+   ],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "absolute_e/True/right": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G1 X10 C-1 F300",
+    "G1 X-10 C-1",
+    "; Octaris \u2014 footer",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 A5 F300 ; raise nozzle",
+    "G1 F300 ; return to origin"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "C"
+   ],
+   "height_axes": [
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "absolute_e/True/both": {
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G1 X10 B-1 F300 C-1",
+    "G1 X-10 B-1 C-1",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 Z5 A5 F300 ; raise nozzle",
+    "G1 F300 ; return to origin"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [
+    "B",
+    "C"
+   ],
+   "height_axes": [
+    "Z",
+    "A"
+   ],
+   "start_position": {
+    "X": 0.0,
+    "Y": 0.0
+   },
+   "pressurize_mm": 0.2,
+   "warnings": [],
+   "time_estimate_s": null
+  },
+  "absolute_e/False/left": {
+   "lines": [
+    "G90",
+    "G1 X10 Y0 E1 F300",
+    "G1 X0 Y0 E2"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "2 line(s) use E (first on line 2); the plungers are B (left) and C (right), so E moves no syringe. Choose \"Needs changes\" to convert them",
+    "No G91 before the first move: this is an absolute file, so its moves go to coordinates from the zero point instead of distances from where the head is"
+   ],
+   "time_estimate_s": null
+  },
+  "absolute_e/False/right": {
+   "lines": [
+    "G90",
+    "G1 X10 Y0 E1 F300",
+    "G1 X0 Y0 E2"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "2 line(s) use E (first on line 2); the plungers are B (left) and C (right), so E moves no syringe. Choose \"Needs changes\" to convert them",
+    "No G91 before the first move: this is an absolute file, so its moves go to coordinates from the zero point instead of distances from where the head is"
+   ],
+   "time_estimate_s": null
+  },
+  "absolute_e/False/both": {
+   "lines": [
+    "G90",
+    "G1 X10 Y0 E1 F300",
+    "G1 X0 Y0 E2"
+   ],
+   "feed_log": [],
+   "extrusion_axes": [],
+   "height_axes": [
+    "Z"
+   ],
+   "start_position": null,
+   "pressurize_mm": 0.2,
+   "warnings": [
+    "2 line(s) use E (first on line 2); the plungers are B (left) and C (right), so E moves no syringe. Choose \"Needs changes\" to convert them",
+    "No G91 before the first move: this is an absolute file, so its moves go to coordinates from the zero point instead of distances from where the head is"
+   ],
+   "time_estimate_s": null
+  }
+ },
+ "calibrate": {
+  "left": {
+   "sent": [
+    "G92 X0 Y0 Z0 B0"
+   ],
+   "calibrated_after_each": [
+    true
+   ]
+  },
+  "right": {
+   "sent": [
+    "G92 X0 Y0 A0 C0"
+   ],
+   "calibrated_after_each": [
+    true
+   ]
+  },
+  "both": {
+   "sent": [
+    "G92 X0 Y0 Z0 B0",
+    "G92 A0 C0"
+   ],
+   "calibrated_after_each": [
+    false,
+    true
+   ]
+  }
+ },
+ "origin": {
+  "left/False": [
+   "G90",
+   "G1 X0 Y0 F300"
+  ],
+  "left/True": [
+   "G90",
+   "G1 X0 Y0 F300",
+   "G1 Z0 F300"
+  ],
+  "right/False": [
+   "G90",
+   "G1 X0 Y0 F300"
+  ],
+  "right/True": [
+   "G90",
+   "G1 X0 Y0 F300",
+   "G1 A0 F300"
+  ],
+  "both/False": [
+   "G90",
+   "G1 X0 Y0 F300"
+  ],
+  "both/True": [
+   "G90",
+   "G1 X0 Y0 F300",
+   "G1 Z0 A0 F300"
+  ]
+ },
+ "slicer": {
+  ".stl/left": {
+   "args": [
+    "CuraEngine",
+    "slice",
+    "-j",
+    "octaris_settings.json",
+    "-s",
+    "machine_extruder_count=1",
+    "-e0",
+    "-s",
+    "machine_nozzle_size=0.4",
+    "-s",
+    "line_width=0.4",
+    "-s",
+    "layer_height=0.32",
+    "-s",
+    "layer_height_0=0.32",
+    "-s",
+    "speed_print=3.5",
+    "-s",
+    "speed_travel=3.5",
+    "-s",
+    "speed_infill=3.5",
+    "-s",
+    "speed_wall=3.5",
+    "-s",
+    "speed_wall_0=3.5",
+    "-s",
+    "speed_wall_x=3.5",
+    "-s",
+    "speed_wall_0_roofing=3.5",
+    "-s",
+    "speed_wall_x_roofing=3.5",
+    "-s",
+    "speed_wall_0_flooring=3.5",
+    "-s",
+    "speed_wall_x_flooring=3.5",
+    "-s",
+    "speed_topbottom=3.5",
+    "-s",
+    "speed_roofing=3.5",
+    "-s",
+    "speed_flooring=3.5",
+    "-s",
+    "speed_support=3.5",
+    "-s",
+    "speed_support_infill=3.5",
+    "-s",
+    "speed_support_interface=3.5",
+    "-s",
+    "speed_support_roof=3.5",
+    "-s",
+    "speed_support_bottom=3.5",
+    "-s",
+    "speed_prime_tower=3.5",
+    "-s",
+    "speed_ironing=3.5",
+    "-s",
+    "speed_layer_0=3.5",
+    "-s",
+    "speed_print_layer_0=3.5",
+    "-s",
+    "speed_travel_layer_0=3.5",
+    "-s",
+    "skirt_brim_speed=3.5",
+    "-o",
+    "<out>",
+    "-l",
+    "model.stl"
+   ],
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G0 F400 X10 Y10 Z0.3",
+    "G1 F200 X10 B-0.5",
+    "G1 F200 Y10 B-0.5",
+    "G1 F200 X-10 B-0.5",
+    "G1 F200 Y-10 B-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G0 F400 Z0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 F200 X12 B-0.5",
+    "G1 F400 Y12 B-0.5",
+    "G1 F200 X-12 B-0.5",
+    "G1 F200 Y-12 B-0.5",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 Z5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ]
+  },
+  ".stl/right": {
+   "args": [
+    "CuraEngine",
+    "slice",
+    "-j",
+    "octaris_settings.json",
+    "-s",
+    "machine_extruder_count=1",
+    "-e0",
+    "-s",
+    "machine_nozzle_size=0.4",
+    "-s",
+    "line_width=0.4",
+    "-s",
+    "layer_height=0.32",
+    "-s",
+    "layer_height_0=0.32",
+    "-s",
+    "speed_print=3.5",
+    "-s",
+    "speed_travel=3.5",
+    "-s",
+    "speed_infill=3.5",
+    "-s",
+    "speed_wall=3.5",
+    "-s",
+    "speed_wall_0=3.5",
+    "-s",
+    "speed_wall_x=3.5",
+    "-s",
+    "speed_wall_0_roofing=3.5",
+    "-s",
+    "speed_wall_x_roofing=3.5",
+    "-s",
+    "speed_wall_0_flooring=3.5",
+    "-s",
+    "speed_wall_x_flooring=3.5",
+    "-s",
+    "speed_topbottom=3.5",
+    "-s",
+    "speed_roofing=3.5",
+    "-s",
+    "speed_flooring=3.5",
+    "-s",
+    "speed_support=3.5",
+    "-s",
+    "speed_support_infill=3.5",
+    "-s",
+    "speed_support_interface=3.5",
+    "-s",
+    "speed_support_roof=3.5",
+    "-s",
+    "speed_support_bottom=3.5",
+    "-s",
+    "speed_prime_tower=3.5",
+    "-s",
+    "speed_ironing=3.5",
+    "-s",
+    "speed_layer_0=3.5",
+    "-s",
+    "speed_print_layer_0=3.5",
+    "-s",
+    "speed_travel_layer_0=3.5",
+    "-s",
+    "skirt_brim_speed=3.5",
+    "-o",
+    "<out>",
+    "-l",
+    "model.stl"
+   ],
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 A0.3",
+    "G1 F200 X10 C-0.5",
+    "G1 F200 Y10 C-0.5",
+    "G1 F200 X-10 C-0.5",
+    "G1 F200 Y-10 C-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 C0.2 F400",
+    "G0 F400 A0.2",
+    "; repressurize",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 C-0.5",
+    "G1 F400 Y12 C-0.5",
+    "G1 F200 X-12 C-0.5",
+    "G1 F200 Y-12 C-0.5",
+    "; Octaris \u2014 footer",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ]
+  },
+  ".stl/both": {
+   "args": [
+    "CuraEngine",
+    "slice",
+    "-j",
+    "octaris_settings.json",
+    "-s",
+    "machine_extruder_count=1",
+    "-e0",
+    "-s",
+    "machine_nozzle_size=0.4",
+    "-s",
+    "line_width=0.4",
+    "-s",
+    "layer_height=0.32",
+    "-s",
+    "layer_height_0=0.32",
+    "-s",
+    "speed_print=3.5",
+    "-s",
+    "speed_travel=3.5",
+    "-s",
+    "speed_infill=3.5",
+    "-s",
+    "speed_wall=3.5",
+    "-s",
+    "speed_wall_0=3.5",
+    "-s",
+    "speed_wall_x=3.5",
+    "-s",
+    "speed_wall_0_roofing=3.5",
+    "-s",
+    "speed_wall_x_roofing=3.5",
+    "-s",
+    "speed_wall_0_flooring=3.5",
+    "-s",
+    "speed_wall_x_flooring=3.5",
+    "-s",
+    "speed_topbottom=3.5",
+    "-s",
+    "speed_roofing=3.5",
+    "-s",
+    "speed_flooring=3.5",
+    "-s",
+    "speed_support=3.5",
+    "-s",
+    "speed_support_infill=3.5",
+    "-s",
+    "speed_support_interface=3.5",
+    "-s",
+    "speed_support_roof=3.5",
+    "-s",
+    "speed_support_bottom=3.5",
+    "-s",
+    "speed_prime_tower=3.5",
+    "-s",
+    "speed_ironing=3.5",
+    "-s",
+    "speed_layer_0=3.5",
+    "-s",
+    "speed_print_layer_0=3.5",
+    "-s",
+    "speed_travel_layer_0=3.5",
+    "-s",
+    "skirt_brim_speed=3.5",
+    "-o",
+    "<out>",
+    "-l",
+    "model.stl"
+   ],
+   "lines": [
+    "G91 ; relative positioning for the whole print",
+    "; Octaris \u2014 preamble",
+    "G1 B-0.2 F400 ; pressurize B",
+    "G1 C-0.2 F400 ; pressurize C",
+    "G0 F400 X10 Y10 Z0.3 A0.3",
+    "G1 F200 X10 B-0.5 C-0.5",
+    "G1 F200 Y10 B-0.5 C-0.5",
+    "G1 F200 X-10 B-0.5 C-0.5",
+    "G1 F200 Y-10 B-0.5 C-0.5",
+    "; layer change \u2014 depressurize",
+    "G1 B0.2 F400",
+    "G1 C0.2 F400",
+    "G0 F400 Z0.2 A0.2",
+    "; repressurize",
+    "G1 B-0.2 F400",
+    "G1 C-0.2 F400",
+    "G1 F200 X12 B-0.5 C-0.5",
+    "G1 F400 Y12 B-0.5 C-0.5",
+    "G1 F200 X-12 B-0.5 C-0.5",
+    "G1 F200 Y-12 B-0.5 C-0.5",
+    "; Octaris \u2014 footer",
+    "G1 B0.2 F400 ; depressurize B",
+    "G1 C0.2 F400 ; depressurize C",
+    "G1 Z5 A5 F300 ; raise nozzle",
+    "G1 X-10 Y-10 F300 ; return to origin"
+   ]
+  }
+ }
+}

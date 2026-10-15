@@ -22,7 +22,8 @@ const AUTH_TOKEN = randomBytes(32).toString('hex')
 function getBackendPath(): string {
   // In production the backend binary is bundled as an extraResource
   const resourcesPath = process.resourcesPath
-  return join(resourcesPath, 'backend', 'octaris-backend', 'octaris-backend')
+  const executable = process.platform === 'win32' ? 'octaris-backend.exe' : 'octaris-backend'
+  return join(resourcesPath, 'backend', 'octaris-backend', executable)
 }
 
 function startBackend(): void {
@@ -37,6 +38,8 @@ function startBackend(): void {
 
   backendProcess = spawn(backendPath, [], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    // The backend is a console program; don't open a console window on Windows
+    windowsHide: true,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', OCTARIS_TOKEN: AUTH_TOKEN }
   })
 
@@ -54,22 +57,37 @@ function startBackend(): void {
   })
 }
 
-function stopBackend(): void {
-  if (!backendProcess) return
+// How long the backend gets to exit after POST /shutdown before it is killed
+const SHUTDOWN_TIMEOUT_MS = 5000
+
+/**
+ * Ask the backend to close the serial port, stop CuraEngine and exit, and kill
+ * it if it hasn't within SHUTDOWN_TIMEOUT_MS. A request rather than a signal
+ * because Windows can't ask a process to stop: kill() there terminates it
+ * outright, without the backend's cleanup.
+ */
+async function stopBackend(): Promise<void> {
+  const proc = backendProcess
+  if (!proc) return
   console.log('[main] Stopping backend...')
-  backendProcess.kill('SIGTERM')
+  const exited = new Promise<boolean>((resolve) => proc.once('exit', () => resolve(true)))
 
-  // Force kill after 3 seconds if it doesn't exit gracefully
-  const forceKillTimeout = setTimeout(() => {
-    if (backendProcess) {
-      console.log('[main] Force killing backend')
-      backendProcess.kill('SIGKILL')
-    }
-  }, 3000)
+  try {
+    await backendRequest('/shutdown', { method: 'POST' }, 2000)
+  } catch (err) {
+    console.error('[main] Shutdown request failed:', err)
+  }
 
-  backendProcess.on('exit', () => {
-    clearTimeout(forceKillTimeout)
+  let timer: NodeJS.Timeout | undefined
+  const timedOut = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), SHUTDOWN_TIMEOUT_MS)
   })
+  const exitedInTime = await Promise.race([exited, timedOut])
+  clearTimeout(timer)
+  if (!exitedInTime) {
+    console.log('[main] Backend did not exit in time, killing it')
+    proc.kill('SIGKILL')
+  }
 }
 
 async function waitForBackend(timeoutMs = 15000): Promise<boolean> {
@@ -213,6 +231,84 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('will-quit', () => {
-  stopBackend()
+// ---------------------------------------------------------------------------
+// Quitting mid-print
+// ---------------------------------------------------------------------------
+
+let quitConfirmed = false
+let quitCheckInProgress = false
+
+async function backendRequest(
+  path: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  return fetch(`${BACKEND_URL}${path}`, {
+    ...init,
+    headers: { 'X-Octaris-Token': AUTH_TOKEN },
+    signal: AbortSignal.timeout(timeoutMs)
+  })
+}
+
+async function printIsRunning(): Promise<boolean> {
+  try {
+    const response = await backendRequest('/status', {}, 2000)
+    if (!response.ok) return false
+    const status: { print_status?: string } = await response.json()
+    return status.print_status === 'printing' || status.print_status === 'paused'
+  } catch {
+    return false // backend not reachable: nothing to protect
+  }
+}
+
+async function confirmQuit(): Promise<void> {
+  if (await printIsRunning()) {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const options: Electron.MessageBoxOptions = {
+      type: 'warning',
+      title: 'Print Running',
+      message: 'A print is running. Quit anyway?',
+      detail:
+        'Quitting ends the print. Octaris stops it first and records the line it ' +
+        'stopped on in the print history. It cannot be resumed after quitting.',
+      buttons: ['Keep Printing', 'Stop Print and Quit'],
+      defaultId: 0,
+      cancelId: 0
+    }
+    const { response } = window
+      ? await dialog.showMessageBox(window, options)
+      : await dialog.showMessageBox(options)
+    if (response === 0) return
+
+    try {
+      // Takes the resume checkpoint before the backend goes away.
+      await backendRequest('/print/stop', { method: 'POST' }, 30000)
+    } catch (err) {
+      console.error('[main] Stopping the print before quit failed:', err)
+    }
+  }
+  quitConfirmed = true
+  app.quit()
+}
+
+app.on('before-quit', (event) => {
+  if (quitConfirmed) return
+  event.preventDefault()
+  if (quitCheckInProgress) return
+  quitCheckInProgress = true
+  confirmQuit().finally(() => {
+    quitCheckInProgress = false
+  })
+})
+
+let backendStopped = false
+
+app.on('will-quit', (event) => {
+  if (backendStopped || !backendProcess) return
+  // Hold the quit until the backend has shut down, then quit for real
+  event.preventDefault()
+  stopBackend().finally(() => {
+    backendStopped = true
+    app.quit()
+  })
 })

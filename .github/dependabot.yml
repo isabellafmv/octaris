@@ -1,0 +1,33 @@
+# Weekly dependency updates as pull requests, so CI checks them before they
+# land. Minor and patch updates come grouped in one PR per ecosystem; major
+# updates come one PR each.
+version: 2
+updates:
+  # Bumps the pins in backend/requirements-dev.txt (what CI installs).
+  # pyproject.toml's ranges only change when a new version falls outside them.
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    versioning-strategy: increase-if-necessary
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /client
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,145 +1,100 @@
-import tempfile
-from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile
-
-from backend.gcode_processor import GcodeValidationError, SyringeMode, process_gcode
-from backend.slicer import SlicingError, slice_model
+from backend.gcode_processor import GcodeValidationError, ProcessedGcode
+from backend.limits import LimitError
+from backend.routers import get_session
+from backend.schemas import UploadResult
+from backend.session import PrinterSession
+from backend.slicer import PrintSettings, SlicingError
 
 router = APIRouter()
 
-# Store processed gcode in app state for print start
-DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
+ACCEPTED_MODEL_EXTENSIONS = (".stl",)
+# Plain text G-code (.txt) is read exactly like .gcode
+ACCEPTED_GCODE_EXTENSIONS = (".gcode", ".gco", ".txt")
+# The nozzles to print with, by id (repeat the parameter for several:
+# ?nozzles=left&nozzles=right). Default: the printer profile's first.
+NozzlesParam = Query(None, description="Ids of the nozzles to print with; default: the profile's first")
 
 
-ACCEPTED_MODEL_EXTENSIONS = (".stl", ".3mf")
+def _check_positive(**values: float | None) -> None:
+    for name, value in values.items():
+        if value is not None and value <= 0:
+            raise HTTPException(status_code=400, detail=f"{name} must be positive")
 
 
-@router.post("/upload")
+def _upload_result(filename: str, gcode: ProcessedGcode) -> UploadResult:
+    return UploadResult(
+        status="ready",
+        filename=filename,
+        lines_total=len(gcode.lines),
+        time_estimate_s=gcode.time_estimate_s,
+        feed_log_entries=len(gcode.feed_log),
+        preview_lines=gcode.lines[:40],
+        warnings=gcode.warnings,
+    )
+
+
+@router.post("/upload", response_model=UploadResult)
 async def upload_model(
-    request: Request,
     file: UploadFile,
-    syringe_mode: str = "left",
+    nozzles: list[str] | None = NozzlesParam,
     nozzle_diameter: float | None = None,
     syringe_diameter: float | None = None,
     layer_height: float | None = None,
     pressurize_mm: float | None = None,
     flow_multiplier: float | None = None,
     travel_retract_multiplier: float | None = None,
+    print_speed: float | None = None,
+    session: PrinterSession = Depends(get_session),
 ):
     if not file.filename or not file.filename.lower().endswith(ACCEPTED_MODEL_EXTENSIONS):
-        raise HTTPException(
-            status_code=400,
-            detail="Only .stl and .3mf files are accepted",
-        )
-
-    if syringe_mode not in ("left", "right", "both"):
-        raise HTTPException(status_code=400, detail="Invalid syringe_mode")
-
-    if nozzle_diameter is not None and nozzle_diameter <= 0:
-        raise HTTPException(status_code=400, detail="nozzle_diameter must be positive")
-
-    if syringe_diameter is not None and syringe_diameter <= 0:
-        raise HTTPException(status_code=400, detail="syringe_diameter must be positive")
-
-    if layer_height is not None and layer_height <= 0:
-        raise HTTPException(status_code=400, detail="layer_height must be positive")
-
-    if pressurize_mm is not None and pressurize_mm <= 0:
-        raise HTTPException(status_code=400, detail="pressurize_mm must be positive")
-
-    if flow_multiplier is not None and flow_multiplier <= 0:
-        raise HTTPException(status_code=400, detail="flow_multiplier must be positive")
-
-    if travel_retract_multiplier is not None and travel_retract_multiplier <= 0:
-        raise HTTPException(
-            status_code=400, detail="travel_retract_multiplier must be positive"
-        )
-
-    mode: SyringeMode = syringe_mode  # type: ignore
-
-    event_bus = request.app.state.event_bus
-    event_bus.publish({"type": "status", "value": "slicing"})
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = DATA_DIR / file.filename
-    content = await file.read()
-    model_path.write_bytes(content)
-
-    try:
-        result = await slice_model(
-            model_path, mode,
-            nozzle_diameter=nozzle_diameter,
-            syringe_diameter=syringe_diameter,
-            layer_height=layer_height,
-            pressurize_mm=pressurize_mm,
-            flow_multiplier=flow_multiplier,
-            travel_retract_multiplier=travel_retract_multiplier,
-        )
-    except (SlicingError, GcodeValidationError) as exc:
-        event_bus.publish({"type": "status", "value": "idle"})
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    # Store processed gcode, and the settings it was made with, for print start
-    request.app.state.queue_worker.invalidate_checkpoint("A new file was loaded")
-    request.app.state.processed_gcode = result
-    request.app.state.current_filename = file.filename
-    request.app.state.current_syringe_mode = mode
-    request.app.state.print_source = "stl"
-    request.app.state.print_settings = {
+        raise HTTPException(status_code=400, detail="Only .stl files are accepted")
+    ids = session.select_nozzles(nozzles)
+    settings: PrintSettings = {
         "nozzle_diameter": nozzle_diameter,
         "syringe_diameter": syringe_diameter,
         "layer_height": layer_height,
         "pressurize_mm": pressurize_mm,
         "flow_multiplier": flow_multiplier,
         "travel_retract_multiplier": travel_retract_multiplier,
+        "print_speed": print_speed,
     }
-
-    event_bus.publish({"type": "status", "value": "ready"})
-
-    return {
-        "status": "ready",
-        "filename": file.filename,
-        "lines_total": len(result.lines),
-        "time_estimate_s": result.time_estimate_s,
-        "feed_log_entries": len(result.feed_log),
-        "preview_lines": result.lines[:40],
-    }
-
-
-@router.post("/upload/gcode")
-async def upload_gcode(request: Request, file: UploadFile, syringe_mode: str = "left"):
-    if not file.filename or not file.filename.lower().endswith((".gcode", ".gco")):
-        raise HTTPException(status_code=400, detail="Only .gcode files are accepted")
-
-    if syringe_mode not in ("left", "right", "both"):
-        raise HTTPException(status_code=400, detail="Invalid syringe_mode")
-
-    mode: SyringeMode = syringe_mode  # type: ignore
-
-    content = await file.read()
-    raw_gcode = content.decode("utf-8", errors="replace")
+    _check_positive(**settings)
+    max_feed = session.config.max_feed_mm_min
+    # The client sends the feed rate typed in mm/min divided by 60, so allow
+    # for rounding (400 mm/min must not come back as 400.00000000000006)
+    if print_speed is not None and print_speed * 60 > max_feed + 1e-6:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feed rate {print_speed * 60:g} mm/min ({print_speed:g} mm/s) is above the limit of "
+            f"{max_feed:g} mm/min (max_feed_mm_min in config.json)",
+        )
 
     try:
-        result = process_gcode(raw_gcode, mode)
-    except GcodeValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        gcode = await session.load_model(file.filename, await file.read(), ids, settings)
+    except (SlicingError, GcodeValidationError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except LimitError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _upload_result(file.filename, gcode)
 
-    request.app.state.queue_worker.invalidate_checkpoint("A new file was loaded")
-    request.app.state.processed_gcode = result
-    request.app.state.current_filename = file.filename
-    request.app.state.current_syringe_mode = mode
-    request.app.state.print_source = "gcode"
-    request.app.state.print_settings = {}
 
-    event_bus = request.app.state.event_bus
-    event_bus.publish({"type": "status", "value": "ready"})
+@router.post("/upload/gcode", response_model=UploadResult)
+async def upload_gcode(
+    file: UploadFile,
+    nozzles: list[str] | None = NozzlesParam,
+    # False: sent exactly as uploaded, only checked (see check_as_uploaded)
+    needs_changes: bool = True,
+    session: PrinterSession = Depends(get_session),
+):
+    if not file.filename or not file.filename.lower().endswith(ACCEPTED_GCODE_EXTENSIONS):
+        raise HTTPException(status_code=400, detail="Only .gcode and .txt files are accepted")
+    ids = session.select_nozzles(nozzles)
 
-    return {
-        "status": "ready",
-        "filename": file.filename,
-        "lines_total": len(result.lines),
-        "time_estimate_s": result.time_estimate_s,
-        "feed_log_entries": len(result.feed_log),
-        "preview_lines": result.lines[:40],
-    }
+    raw = (await file.read()).decode("utf-8", errors="replace")
+    try:
+        gcode = session.load_gcode(file.filename, raw, ids, needs_changes)
+    except (GcodeValidationError, LimitError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _upload_result(file.filename, gcode)

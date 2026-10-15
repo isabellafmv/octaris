@@ -9,49 +9,64 @@ from backend.gcode_processor import ProcessedGcode
 from backend.main import app
 from backend.queue_worker import PrintStatus, QueueWorker
 from backend.serial_manager import SerialError
+from tests.serial_fakes import attach, unframe
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeSerial:
     """Answers every command with "ok" after a short delay, so a print of a
-    few hundred lines is still running while the test talks to the API."""
+    few hundred lines is still running while the test talks to the API.
+    M114 reports the origin, except after M400 (the position read after a
+    stop), so stops are never resumable here."""
 
     def __init__(self, delay: float = 0.005):
         self.is_open = True
         self.delay = delay
         self.written: list[str] = []
+        self._pending: list[bytes] = []
 
     def write(self, data: bytes) -> None:
-        self.written.append(data.decode().strip())
+        _, line = unframe(data.decode().strip())
+        self.written.append(line)
+        if line == "M114" and self.written[-2:-1] != ["M400"]:
+            self._pending += [b"X:0.00 Y:0.00 Z:0.00 A:0.00 B:0.00 C:0.00 Count X:0\n", b"ok\n"]
+        else:
+            self._pending += [b"ok\n"]
 
     def flush(self) -> None:
         pass
 
     def readline(self) -> bytes:
         time.sleep(self.delay)
-        return b"ok\n"
+        if self._pending:
+            return self._pending.pop(0)
+        return b""
 
     def close(self) -> None:
         self.is_open = False
 
 
 @pytest.fixture
-def printer(client):
+async def printer(client):
     fake = FakeSerial()
-    app.state.serial_manager._serial = fake
-    app.state.serial_manager._port = "/dev/fake"
-    app.state.is_calibrated = True
+    attach(app.state.serial_manager, fake)
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
+    # The synthetic prints below use both syringes
+    app.state.session.profile.nozzle_offset_measured = True
     return fake
 
 
 async def upload_stl(client, tmp_path, n_lines: int, **params):
-    result = ProcessedGcode(lines=[f"G1 X{i} B0.01 F300" for i in range(n_lines)])
-    with patch("backend.routers.upload.slice_model", AsyncMock(return_value=result)), \
-         patch("backend.routers.upload.DATA_DIR", tmp_path):
+    # X 0 to -19: the right syringe's copy, 30 mm over, stays on the bed
+    result = ProcessedGcode(lines=[f"G1 X{-(i % 20)} B0.01 F300" for i in range(n_lines)])
+    with (
+        patch("backend.session.slice_model", AsyncMock(return_value=result)),
+        patch("backend.session.DATA_DIR", tmp_path),
+    ):
         resp = await client.post(
             "/upload",
-            params={"syringe_mode": "both", **params},
+            params={"nozzles": list(("left", "right")), **params},
             files={"file": ("cube.stl", b"solid cube", "application/octet-stream")},
         )
     assert resp.status_code == 200, resp.text
@@ -72,9 +87,15 @@ async def get_sessions(client) -> list[dict]:
 
 async def test_start_change_flow_stop_records_history(client, printer, tmp_path):
     await upload_stl(
-        client, tmp_path, 400,
-        nozzle_diameter=0.41, syringe_diameter=4.6, layer_height=0.3,
-        pressurize_mm=0.5, flow_multiplier=1.1, travel_retract_multiplier=0.8,
+        client,
+        tmp_path,
+        400,
+        nozzle_diameter=0.41,
+        syringe_diameter=4.6,
+        layer_height=0.3,
+        pressurize_mm=0.5,
+        flow_multiplier=1.1,
+        travel_retract_multiplier=0.8,
     )
     worker = app.state.queue_worker
 
@@ -97,7 +118,7 @@ async def test_start_change_flow_stop_records_history(client, printer, tmp_path)
 
     [session] = await get_sessions(client)
     assert session["filename"] == "cube.stl"
-    assert session["syringe_config"] == "both"
+    assert session["syringe_config"] == "left,right"
     assert session["total_lines"] == 400
     assert session["source"] == "stl"
     assert session["nozzle_diameter"] == 0.41
@@ -137,10 +158,10 @@ async def test_estop_records_history(client, printer, tmp_path):
 
     await client.post("/print/start")
     await wait_for(lambda: worker.lines_sent >= 5)
-    await client.post("/print/estop")
+    await client.post("/print/stop")
 
     [session] = await get_sessions(client)
-    assert session["end_reason"] == "estop"
+    assert session["end_reason"] == "stopped"
     assert "M410" in printer.written
 
 
@@ -148,7 +169,7 @@ async def test_gcode_upload_is_recorded_as_gcode_source(client, printer):
     raw = (FIXTURES / "raw_sample.gcode").read_bytes()
     resp = await client.post(
         "/upload/gcode",
-        params={"syringe_mode": "left"},
+        params={"nozzles": list(("left",))},
         files={"file": ("sample.gcode", raw, "text/plain")},
     )
     assert resp.status_code == 200, resp.text
@@ -177,16 +198,21 @@ async def test_history_limit(client, printer, tmp_path):
 # --- QueueWorker end-reason callback --------------------------------------
 
 
-def make_worker(send_line):
+def make_worker(send):
     serial = MagicMock()
-    serial.send_line = AsyncMock(side_effect=send_line)
+    serial.send = AsyncMock(side_effect=send)
     serial.emergency_write = AsyncMock()
     reasons: list[str] = []
-    return QueueWorker(serial, on_print_end=lambda reason, line: reasons.append(reason)), reasons
+
+    def on_event(event: dict) -> None:
+        if event["type"] == "print_end":
+            reasons.append(event["reason"])
+
+    return QueueWorker(serial, on_event=on_event), reasons
 
 
 async def test_worker_reports_error_on_serial_failure():
-    async def fail_on_third(line):
+    async def fail_on_third(line, numbered=False):
         if line == "G1 X2":
             raise SerialError("Send failed")
         return "ok"
@@ -201,7 +227,7 @@ async def test_worker_reports_error_on_serial_failure():
 
 
 async def test_worker_reports_each_print_end_once():
-    async def ok(line):
+    async def ok(line, numbered=False):
         return "ok"
 
     worker, reasons = make_worker(ok)
@@ -215,10 +241,30 @@ async def test_worker_reports_each_print_end_once():
 
 
 async def test_estop_without_print_reports_nothing():
-    async def ok(line):
+    async def ok(line, numbered=False):
         return "ok"
 
     worker, reasons = make_worker(ok)
     await worker.estop()
 
     assert reasons == []
+
+
+def test_history_follows_print_events_on_the_bus():
+    from backend.database import init_db
+    from backend.events import EventBus
+    from backend.history import PrintHistory
+
+    bus = EventBus()
+    history = PrintHistory(init_db(Path(":memory:")))
+    bus.listen(history.on_event)
+
+    session_id = history.start("a.gcode", "left", 10, source="gcode", settings={})
+    bus.publish({"type": "print_end", "reason": "stopped", "resume_line": 4})
+    assert history.session_id is None
+    bus.publish({"type": "print_resumed"})
+    assert history.session_id == session_id
+    bus.publish({"type": "print_end", "reason": "completed", "resume_line": None})
+
+    [row] = history.list(10)
+    assert (row["end_reason"], row["completed"], row["resume_line"]) == ("completed", True, None)

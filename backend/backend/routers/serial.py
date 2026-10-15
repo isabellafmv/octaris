@@ -1,62 +1,38 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.routers.ws import build_status_snapshot
+from backend.routers import get_session
+from backend.schemas import ConnectResponse, DisconnectResponse, PortsResponse, Snapshot
 from backend.serial_manager import SerialError
+from backend.session import PrinterSession
 
 router = APIRouter()
 
 
-@router.get("/status")
-async def status(request: Request):
-    return build_status_snapshot(request.app)
+@router.get("/status", response_model=Snapshot)
+async def status(session: PrinterSession = Depends(get_session)):
+    return session.snapshot()
 
 
 class ConnectRequest(BaseModel):
     port: str
 
 
-@router.get("/ports")
-async def list_ports(request: Request):
-    from backend.serial_manager import SerialManager
-
-    manager: SerialManager = request.app.state.serial_manager
-    ports = manager.list_ports()
-    return {"ports": ports}
+@router.get("/ports", response_model=PortsResponse)
+async def list_ports(session: PrinterSession = Depends(get_session)):
+    return {"ports": session.list_ports()}
 
 
-@router.post("/connect")
-async def connect(request: Request, body: ConnectRequest):
-    from backend.serial_manager import SerialManager
-
-    manager: SerialManager = request.app.state.serial_manager
-    config = request.app.state.config
+@router.post("/connect", response_model=ConnectResponse)
+async def connect(body: ConnectRequest, session: PrinterSession = Depends(get_session)):
     try:
-        await manager.connect(body.port, config.baud_rate)
+        await session.connect(body.port)
     except SerialError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    request.app.state.queue_worker.invalidate_checkpoint("The printer was reconnected")
-
-    # Auto-send steps/mm calibration (EEPROM disabled on this board)
-    try:
-        await manager.send_line("M92 X800 Y800 Z800 A800 B800 C800")
-    except SerialError:
-        pass  # non-fatal — printer still usable
-
-    request.app.state.event_bus.publish(
-        {"type": "printer", "connected": True, "port": body.port}
-    )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "connected", "port": body.port}
 
 
-@router.post("/disconnect")
-async def disconnect(request: Request):
-    from backend.serial_manager import SerialManager
-
-    manager: SerialManager = request.app.state.serial_manager
-    await manager.disconnect()
-    request.app.state.queue_worker.invalidate_checkpoint("The printer disconnected")
-    request.app.state.event_bus.publish(
-        {"type": "printer", "connected": False, "port": None}
-    )
+@router.post("/disconnect", response_model=DisconnectResponse)
+async def disconnect(session: PrinterSession = Depends(get_session)):
+    await session.disconnect()
     return {"status": "disconnected"}

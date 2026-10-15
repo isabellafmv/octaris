@@ -1,0 +1,4044 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Octaris Bioprinter",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/status": {
+      "get": {
+        "summary": "Status",
+        "operationId": "status_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ports": {
+      "get": {
+        "summary": "List Ports",
+        "operationId": "list_ports_ports_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/connect": {
+      "post": {
+        "summary": "Connect",
+        "operationId": "connect_connect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/disconnect": {
+      "post": {
+        "summary": "Disconnect",
+        "operationId": "disconnect_disconnect_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisconnectResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calibration/status": {
+      "get": {
+        "summary": "Calibration Status",
+        "description": "Whether every selected nozzle is zeroed, and which of the profile's\nnozzles are.",
+        "operationId": "calibration_status_calibration_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calibration/zero": {
+      "post": {
+        "summary": "Calibrate Zero",
+        "description": "Zero one of the selected nozzles where it is. X/Y are set at the first\n(leftmost) selected nozzle, over the print's start point; each nozzle's\nheight with that nozzle lowered onto the bed (about 0.2 mm above the\nsurface). Printess 1.0:\n\n- `nozzles: [\"left\"]`, `nozzle: \"left\"` \u2192 G92 X0 Y0 Z0 B0\n- `nozzles: [\"right\"]`, `nozzle: \"right\"` \u2192 G92 X0 Y0 A0 C0 (right nozzle\n  over the start point and on the bed)\n- `nozzles: [\"left\", \"right\"]`, two steps: `nozzle: \"left\"` \u2192 G92 X0 Y0\n  Z0 B0, then lower the right nozzle onto the bed and `nozzle: \"right\"`\n  \u2192 G92 A0 C0\n\nPrints aren't shifted by the nozzle offsets: each nozzle prints its own\ncopy of the same path, in place.",
+        "operationId": "calibrate_zero_calibration_zero_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CalibrateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calibration/reset": {
+      "post": {
+        "summary": "Reset Calibration",
+        "description": "Mark calibration as invalid (e.g. after a disconnect or power cycle).",
+        "operationId": "reset_calibration_calibration_reset_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationResetResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/upload": {
+      "post": {
+        "summary": "Upload Model",
+        "operationId": "upload_model_upload_post",
+        "parameters": [
+          {
+            "name": "nozzles",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ids of the nozzles to print with; default: the profile's first",
+              "title": "Nozzles"
+            },
+            "description": "Ids of the nozzles to print with; default: the profile's first"
+          },
+          {
+            "name": "nozzle_diameter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Nozzle Diameter"
+            }
+          },
+          {
+            "name": "syringe_diameter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Syringe Diameter"
+            }
+          },
+          {
+            "name": "layer_height",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Layer Height"
+            }
+          },
+          {
+            "name": "pressurize_mm",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pressurize Mm"
+            }
+          },
+          {
+            "name": "flow_multiplier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Flow Multiplier"
+            }
+          },
+          {
+            "name": "travel_retract_multiplier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Travel Retract Multiplier"
+            }
+          },
+          {
+            "name": "print_speed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Print Speed"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_model_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/upload/gcode": {
+      "post": {
+        "summary": "Upload Gcode",
+        "operationId": "upload_gcode_upload_gcode_post",
+        "parameters": [
+          {
+            "name": "nozzles",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Ids of the nozzles to print with; default: the profile's first",
+              "title": "Nozzles"
+            },
+            "description": "Ids of the nozzles to print with; default: the profile's first"
+          },
+          {
+            "name": "needs_changes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Needs Changes"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_gcode_upload_gcode_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/start": {
+      "post": {
+        "summary": "Start Print",
+        "operationId": "start_print_print_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PrintStartRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/stop": {
+      "post": {
+        "summary": "Stop Print",
+        "description": "Stop at once: M410 goes straight to the printer, then the stop point\nis located so the print can be resumed from there.",
+        "operationId": "stop_print_print_stop_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/pause": {
+      "post": {
+        "summary": "Pause Print",
+        "operationId": "pause_print_print_pause_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/print/resume": {
+      "post": {
+        "summary": "Resume Print",
+        "operationId": "resume_print_print_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/extrusion": {
+      "post": {
+        "summary": "Set Extrusion Rate",
+        "operationId": "set_extrusion_rate_extrusion_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtrusionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtrusionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jog": {
+      "post": {
+        "summary": "Jog",
+        "description": "Move one axis, or several together (`axes`), by `distance`. Each\naxis is checked against the bed limits once zeroed; 400 if one would\nleave the bed, and then nothing moves.",
+        "operationId": "jog_jog_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jog/origin": {
+      "post": {
+        "summary": "Go To Origin",
+        "operationId": "go_to_origin_jog_origin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OriginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OriginResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gcode/send": {
+      "post": {
+        "summary": "Send Gcode",
+        "description": "Send a raw G-code line to the printer and return its response.",
+        "operationId": "send_gcode_gcode_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GcodeSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcodeSendResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gcode/log": {
+      "get": {
+        "summary": "Get Serial Log",
+        "description": "Return the most recent serial log entries.",
+        "operationId": "get_serial_log_gcode_log_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SerialLogResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gcode/loaded": {
+      "get": {
+        "summary": "Get Loaded Gcode",
+        "description": "The loaded print's processed G-code, one line per line, as sent to\nthe printer (before flow scaling). Its ETag is the program id, which\nchanges on every load and edit.",
+        "operationId": "get_loaded_gcode_gcode_loaded_get",
+        "parameters": [
+          {
+            "name": "if-none-match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "G-code",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the ETag in If-None-Match"
+          },
+          "404": {
+            "description": "No print loaded"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace Loaded Gcode",
+        "description": "Replace the loaded print's lines with the request body (text/plain,\none G-code line per line, as GET /gcode/loaded sends them).\n\nThe edit is validated, simulated and checked against the bed limits and\nthe syringe travel; if it fails, nothing changes and the 422 body says\nwhich line. With If-Match, it is only applied to that program.",
+        "operationId": "replace_loaded_gcode_gcode_loaded_put",
+        "parameters": [
+          {
+            "name": "if-match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcodeEditResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No print loaded"
+          },
+          "409": {
+            "description": "A print is printing or paused"
+          },
+          "412": {
+            "description": "If-Match names a program that is no longer loaded"
+          },
+          "422": {
+            "description": "The edit failed a check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcodeEditErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/history": {
+      "get": {
+        "summary": "Get History",
+        "description": "Recent print sessions, newest first, with their extrusion events.",
+        "operationId": "get_history_history_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature": {
+      "get": {
+        "summary": "Temperature",
+        "description": "The latest reading, target and status of every sensor. `state` says\nwhether the printer is connected and has reported any sensor at all.",
+        "operationId": "temperature_temperature_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/history": {
+      "get": {
+        "summary": "Temperature History",
+        "description": "Readings for the chart: the last `minutes`, or all of one print session's.",
+        "operationId": "temperature_history_temperature_history_get",
+        "parameters": [
+          {
+            "name": "minutes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 120,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Minutes"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureHistoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/export.csv": {
+      "get": {
+        "summary": "Export Temperature Csv",
+        "description": "Logged readings of one print session, or between `from` and `to`\n(ISO 8601; UTC unless an offset is given), as CSV: timestamp, sensor,\nname, actual, target.",
+        "operationId": "export_temperature_csv_temperature_export_csv_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/target": {
+      "post": {
+        "summary": "Set Temperature Target",
+        "description": "Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with\nthe lab firmware (protocol \"printess\"), a channel's (I<n>) with\nM104 I<n> T<\u00b0C> H to heat or C to cool, chosen from its current reading\n(refused without one). Allowed while printing.",
+        "operationId": "set_temperature_target_temperature_target_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemperatureTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureTargetResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/test": {
+      "post": {
+        "summary": "Test Sensors",
+        "description": "Send M105 once (5 s to answer) and return the raw reply, or null if\nnone came, with the sensors found in it. Works with temperature control\non or off: this is how to check the printer's sensor setup.",
+        "operationId": "test_sensors_temperature_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SensorTestResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/temperature/retry": {
+      "post": {
+        "summary": "Retry Temperature",
+        "description": "Start temperature monitoring again after M105 polling paused.",
+        "operationId": "retry_temperature_temperature_retry_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemperatureStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "summary": "Get Settings",
+        "operationId": "get_settings_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Settings",
+        "description": "Save the settings given (the others stay as they are); they apply\nat once and are kept across restarts. Turning temperature_sensors on or\noff starts or stops temperature monitoring right away, connected or\nnot. A new temperature_protocol forgets the readings and targets of the\nold one; 409 while a print waits for its temperatures.",
+        "operationId": "put_settings_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/printer": {
+      "get": {
+        "summary": "Get Printer",
+        "description": "The selected printer profile: its nozzles left to right, bed limits\nand build volume.",
+        "operationId": "get_printer_printer_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterProfile"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Select Printer",
+        "description": "Select another printer profile, kept across restarts (settings.json;\nuntil one is chosen in the app, config.json's printer_profile is used).\nResets the calibration and any resume checkpoint, unloads the loaded\nprint, and sends a connected printer the profile's steps/mm (M92).\nRefused during a print.",
+        "operationId": "select_printer_printer_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterProfile"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/printer/profiles": {
+      "get": {
+        "summary": "List Profiles",
+        "description": "Every printer profile: built in, added in config.json, and the\nCustom one once saved.",
+        "operationId": "list_profiles_printer_profiles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterProfilesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/printer/custom": {
+      "get": {
+        "summary": "Get Custom Profile",
+        "description": "The Custom profile edited in the app; null until one is saved.",
+        "operationId": "get_custom_profile_printer_custom_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PrinterProfile"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Custom Profile Printer Custom Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Save Custom Profile",
+        "description": "Save the Custom profile and select it, as PUT /printer does (refused\nduring a print). 400 lists every problem: each axis must be one of Z, A,\nB, C, I, J, K, U, V, W, used once in the profile, and a syringe's height\nand plunger axis must differ; 1 to 6 syringes; each bed limit's min\nbelow its max.",
+        "operationId": "save_custom_profile_printer_custom_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterProfile"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Reset Custom Profile",
+        "description": "Delete the Custom profile and select the Printess 1.0 (refused\nduring a print). Returns the Printess 1.0 profile.",
+        "operationId": "reset_custom_profile_printer_custom_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterProfile"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AxisRange": {
+        "properties": {
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "title": "AxisRange",
+        "type": "object"
+      },
+      "BedFields": {
+        "properties": {
+          "x": {
+            "$ref": "#/components/schemas/RangeFields"
+          },
+          "y": {
+            "$ref": "#/components/schemas/RangeFields"
+          },
+          "z": {
+            "$ref": "#/components/schemas/RangeFields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "z"
+        ],
+        "title": "BedFields",
+        "description": "Bed limits as the app's editor sends them (see BedLimits)."
+      },
+      "BedLimits": {
+        "description": "Where the nozzles may go, in mm relative to the G92 zero point. Every\nnozzle's height axis has the z range.\n\nThe printer has no homing or endstops, so these are enforced by the host\nonly. The defaults match the 60 \u00d7 60 \u00d7 60 mm Cura machine definition with\nthe zero in the middle of the bed and Z0 at the print surface. Given as\nmin/max rather than a size so an off-centre zero can be described.",
+        "properties": {
+          "x": {
+            "$ref": "#/components/schemas/AxisRange",
+            "default": {
+              "min": -30.0,
+              "max": 30.0
+            }
+          },
+          "y": {
+            "$ref": "#/components/schemas/AxisRange",
+            "default": {
+              "min": -30.0,
+              "max": 30.0
+            }
+          },
+          "z": {
+            "$ref": "#/components/schemas/AxisRange",
+            "default": {
+              "min": 0.0,
+              "max": 60.0
+            }
+          }
+        },
+        "title": "BedLimits",
+        "type": "object"
+      },
+      "Body_upload_gcode_upload_gcode_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_gcode_upload_gcode_post"
+      },
+      "Body_upload_model_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_model_upload_post"
+      },
+      "BuildVolume": {
+        "description": "The slicer's machine size in mm (Cura's machine_width, machine_depth\nand machine_height). A model larger than this is refused before slicing.",
+        "properties": {
+          "x": {
+            "default": 60.0,
+            "exclusiveMinimum": 0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "default": 60.0,
+            "exclusiveMinimum": 0,
+            "title": "Y",
+            "type": "number"
+          },
+          "z": {
+            "default": 60.0,
+            "exclusiveMinimum": 0,
+            "title": "Z",
+            "type": "number"
+          }
+        },
+        "title": "BuildVolume",
+        "type": "object"
+      },
+      "CalibrateRequest": {
+        "properties": {
+          "nozzle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nozzle"
+          },
+          "nozzles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nozzles"
+          }
+        },
+        "type": "object",
+        "title": "CalibrateRequest",
+        "description": "Which nozzle to zero (default: the first selected), for which\nselection of nozzles, by id (default: the loaded print's, or the last\ncalibration's)."
+      },
+      "CalibrateResponse": {
+        "properties": {
+          "command": {
+            "type": "string",
+            "title": "Command"
+          },
+          "calibrated": {
+            "type": "boolean",
+            "title": "Calibrated"
+          },
+          "nozzles": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Nozzles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command",
+          "calibrated",
+          "nozzles"
+        ],
+        "title": "CalibrateResponse"
+      },
+      "CalibrationResetResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "uncalibrated",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "CalibrationResetResponse"
+      },
+      "CalibrationStatusResponse": {
+        "properties": {
+          "calibrated": {
+            "type": "boolean",
+            "title": "Calibrated"
+          },
+          "nozzles": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Nozzles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calibrated",
+          "nozzles"
+        ],
+        "title": "CalibrationStatusResponse"
+      },
+      "ChannelInfo": {
+        "description": "A heater channel of the lab (printess) firmware.",
+        "properties": {
+          "sensor": {
+            "title": "Sensor",
+            "type": "string"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reply_key": {
+            "title": "Reply Key",
+            "type": "string"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sensor",
+          "index",
+          "name",
+          "reply_key",
+          "min",
+          "max"
+        ],
+        "title": "ChannelInfo",
+        "type": "object"
+      },
+      "ConnectRequest": {
+        "properties": {
+          "port": {
+            "type": "string",
+            "title": "Port"
+          }
+        },
+        "type": "object",
+        "required": [
+          "port"
+        ],
+        "title": "ConnectRequest"
+      },
+      "ConnectResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "connected",
+            "title": "Status"
+          },
+          "port": {
+            "type": "string",
+            "title": "Port"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "port"
+        ],
+        "title": "ConnectResponse"
+      },
+      "CustomProfileRequest": {
+        "properties": {
+          "nozzles": {
+            "items": {
+              "$ref": "#/components/schemas/NozzleFields"
+            },
+            "type": "array",
+            "title": "Nozzles"
+          },
+          "nozzle_offset_measured": {
+            "type": "boolean",
+            "title": "Nozzle Offset Measured",
+            "default": false
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "bed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BedFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "nozzles"
+        ],
+        "title": "CustomProfileRequest",
+        "description": "The Custom profile's nozzles, left to right, and its bed limits, as\nedited on the Setup screen. Its build volume and steps/mm (and the bed,\nwithout `bed`) are kept from the Custom profile saved before or, the\nfirst time, copied from `base` (the profile being edited; default: the\nselected one)."
+      },
+      "DisconnectResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "disconnected",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "DisconnectResponse"
+      },
+      "ExtrusionChange": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "session_id": {
+            "type": "integer",
+            "title": "Session Id"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "extrusion_rate": {
+            "type": "integer",
+            "title": "Extrusion Rate"
+          },
+          "lines_sent": {
+            "type": "integer",
+            "title": "Lines Sent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "session_id",
+          "timestamp",
+          "extrusion_rate",
+          "lines_sent"
+        ],
+        "title": "ExtrusionChange"
+      },
+      "ExtrusionRequest": {
+        "properties": {
+          "rate": {
+            "type": "integer",
+            "title": "Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rate"
+        ],
+        "title": "ExtrusionRequest"
+      },
+      "ExtrusionResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "rate": {
+            "type": "integer",
+            "title": "Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "rate"
+        ],
+        "title": "ExtrusionResponse"
+      },
+      "GcodeEditErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/GcodeLineError"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail",
+          "errors"
+        ],
+        "title": "GcodeEditErrorResponse",
+        "description": "PUT /gcode/loaded's 422 body: the edit was rejected, the loaded\nprogram is unchanged. The checks stop at the first problem, so\n`errors` holds one entry."
+      },
+      "GcodeEditResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ready",
+            "title": "Status"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          },
+          "feed_log_entries": {
+            "type": "integer",
+            "title": "Feed Log Entries"
+          },
+          "preview_lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Preview Lines"
+          },
+          "edited": {
+            "type": "boolean",
+            "title": "Edited",
+            "default": false
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          },
+          "program_id": {
+            "type": "string",
+            "title": "Program Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "filename",
+          "lines_total",
+          "time_estimate_s",
+          "feed_log_entries",
+          "preview_lines",
+          "program_id"
+        ],
+        "title": "GcodeEditResult",
+        "description": "PUT /gcode/loaded's body. program_id changes on every load and edit;\nGET /gcode/loaded sends it as its ETag."
+      },
+      "GcodeLineError": {
+        "properties": {
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "line",
+          "message"
+        ],
+        "title": "GcodeLineError"
+      },
+      "GcodeSendRequest": {
+        "properties": {
+          "line": {
+            "type": "string",
+            "title": "Line"
+          }
+        },
+        "type": "object",
+        "required": [
+          "line"
+        ],
+        "title": "GcodeSendRequest"
+      },
+      "GcodeSendResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "response": {
+            "type": "string",
+            "title": "Response"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "response"
+        ],
+        "title": "GcodeSendResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse"
+      },
+      "HistoryResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/PrintSession"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "title": "HistoryResponse"
+      },
+      "JogRequest": {
+        "properties": {
+          "axis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axis"
+          },
+          "axes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Axes"
+          },
+          "distance": {
+            "type": "number",
+            "title": "Distance"
+          },
+          "feed_rate": {
+            "type": "number",
+            "title": "Feed Rate",
+            "default": 300
+          }
+        },
+        "type": "object",
+        "required": [
+          "distance"
+        ],
+        "title": "JogRequest"
+      },
+      "JogResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "axes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Axes"
+          },
+          "distance": {
+            "type": "number",
+            "title": "Distance"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "axis",
+          "axes",
+          "distance"
+        ],
+        "title": "JogResponse"
+      },
+      "NozzleFields": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "height_axis": {
+            "type": "string",
+            "title": "Height Axis"
+          },
+          "plunger_axis": {
+            "type": "string",
+            "title": "Plunger Axis"
+          },
+          "offset_x": {
+            "type": "number",
+            "title": "Offset X",
+            "default": 0.0
+          },
+          "offset_y": {
+            "type": "number",
+            "title": "Offset Y",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "height_axis",
+          "plunger_axis"
+        ],
+        "title": "NozzleFields",
+        "description": "A nozzle as the app's editor sends it: checked by save_custom_profile,\nwhich reports every problem in words, rather than by FastAPI."
+      },
+      "NozzleSpec": {
+        "description": "One nozzle: its height motor, its plunger, and where it sits.",
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "height_axis": {
+            "title": "Height Axis",
+            "type": "string"
+          },
+          "plunger_axis": {
+            "title": "Plunger Axis",
+            "type": "string"
+          },
+          "offset_x": {
+            "default": 0.0,
+            "title": "Offset X",
+            "type": "number"
+          },
+          "offset_y": {
+            "default": 0.0,
+            "title": "Offset Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "height_axis",
+          "plunger_axis"
+        ],
+        "title": "NozzleSpec",
+        "type": "object"
+      },
+      "OriginRequest": {
+        "properties": {
+          "lower": {
+            "type": "boolean",
+            "title": "Lower",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "OriginRequest"
+      },
+      "OriginResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "lines"
+        ],
+        "title": "OriginResponse"
+      },
+      "PauseResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "paused",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "PauseResponse"
+      },
+      "PortInfo": {
+        "properties": {
+          "device": {
+            "type": "string",
+            "title": "Device"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device",
+          "description"
+        ],
+        "title": "PortInfo"
+      },
+      "PortsResponse": {
+        "properties": {
+          "ports": {
+            "items": {
+              "$ref": "#/components/schemas/PortInfo"
+            },
+            "type": "array",
+            "title": "Ports"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ports"
+        ],
+        "title": "PortsResponse"
+      },
+      "PrintSession": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "syringe_config": {
+            "type": "string",
+            "title": "Syringe Config"
+          },
+          "total_lines": {
+            "type": "integer",
+            "title": "Total Lines"
+          },
+          "completed": {
+            "type": "boolean",
+            "title": "Completed"
+          },
+          "nozzle_diameter": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nozzle Diameter"
+          },
+          "syringe_diameter": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Syringe Diameter"
+          },
+          "layer_height": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layer Height"
+          },
+          "pressurize_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pressurize Mm"
+          },
+          "flow_multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow Multiplier"
+          },
+          "travel_retract_multiplier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Travel Retract Multiplier"
+          },
+          "print_speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Print Speed"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "stl",
+                  "gcode"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "end_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "stopped",
+                  "estop",
+                  "error"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Reason"
+          },
+          "resume_line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Line"
+          },
+          "edited": {
+            "type": "boolean",
+            "title": "Edited",
+            "default": false
+          },
+          "serial_log": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial Log"
+          },
+          "extrusion_events": {
+            "items": {
+              "$ref": "#/components/schemas/ExtrusionChange"
+            },
+            "type": "array",
+            "title": "Extrusion Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "started_at",
+          "ended_at",
+          "filename",
+          "syringe_config",
+          "total_lines",
+          "completed",
+          "nozzle_diameter",
+          "syringe_diameter",
+          "layer_height",
+          "pressurize_mm",
+          "flow_multiplier",
+          "travel_retract_multiplier",
+          "source",
+          "end_reason",
+          "resume_line",
+          "extrusion_events"
+        ],
+        "title": "PrintSession",
+        "description": "One print in the history."
+      },
+      "PrintStartRequest": {
+        "properties": {
+          "wait_for_temperature": {
+            "type": "boolean",
+            "title": "Wait For Temperature",
+            "default": false
+          },
+          "from_origin": {
+            "type": "boolean",
+            "title": "From Origin",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "PrintStartRequest"
+      },
+      "PrintStartResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "printing",
+            "title": "Status"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "lines_total"
+        ],
+        "title": "PrintStartResponse"
+      },
+      "PrinterProfile": {
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nozzles": {
+            "items": {
+              "$ref": "#/components/schemas/NozzleSpec"
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Nozzles",
+            "type": "array"
+          },
+          "bed": {
+            "$ref": "#/components/schemas/BedLimits",
+            "default": {
+              "x": {
+                "max": 30.0,
+                "min": -30.0
+              },
+              "y": {
+                "max": 30.0,
+                "min": -30.0
+              },
+              "z": {
+                "max": 60.0,
+                "min": 0.0
+              }
+            }
+          },
+          "build_volume": {
+            "$ref": "#/components/schemas/BuildVolume",
+            "default": {
+              "x": 60.0,
+              "y": 60.0,
+              "z": 60.0
+            }
+          },
+          "nozzle_offset_measured": {
+            "default": false,
+            "title": "Nozzle Offset Measured",
+            "type": "boolean"
+          },
+          "steps_per_mm": {
+            "default": 800.0,
+            "exclusiveMinimum": 0,
+            "title": "Steps Per Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "nozzles"
+        ],
+        "title": "PrinterProfile",
+        "type": "object"
+      },
+      "PrinterProfilesResponse": {
+        "properties": {
+          "selected": {
+            "type": "string",
+            "title": "Selected"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/PrinterProfile"
+            },
+            "type": "array",
+            "title": "Profiles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "selected",
+          "profiles"
+        ],
+        "title": "PrinterProfilesResponse",
+        "description": "Every printer profile (built in, from config.json, and the Custom\nprofile once one is saved), and the selected one's id."
+      },
+      "RangeFields": {
+        "properties": {
+          "min": {
+            "type": "number",
+            "title": "Min"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          }
+        },
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "title": "RangeFields",
+        "description": "An axis range as the app's editor sends it, checked (min < max) by\ncustom_profile like NozzleFields."
+      },
+      "ResumeResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "printing",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ResumeResponse"
+      },
+      "SelectProfileRequest": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "title": "Profile"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile"
+        ],
+        "title": "SelectProfileRequest"
+      },
+      "SensorReading": {
+        "properties": {
+          "sensor": {
+            "title": "Sensor",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "settable": {
+            "title": "Settable",
+            "type": "boolean"
+          },
+          "actual": {
+            "title": "Actual",
+            "type": "number"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "status": {
+            "enum": [
+              "heating",
+              "cooling",
+              "at_target",
+              "off"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "heat",
+                  "cool"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mode"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sensor",
+          "name",
+          "min",
+          "max",
+          "settable",
+          "actual",
+          "target",
+          "status",
+          "timestamp"
+        ],
+        "title": "SensorReading",
+        "type": "object"
+      },
+      "SensorTestReading": {
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "actual": {
+            "type": "number",
+            "title": "Actual"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "heating",
+              "cooling",
+              "at_target",
+              "off"
+            ],
+            "title": "Status"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "heat",
+                  "cool"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sensor",
+          "name",
+          "actual",
+          "target",
+          "status"
+        ],
+        "title": "SensorTestReading"
+      },
+      "SensorTestResponse": {
+        "properties": {
+          "reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/SensorTestReading"
+            },
+            "type": "array",
+            "title": "Sensors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reply",
+          "sensors"
+        ],
+        "title": "SensorTestResponse",
+        "description": "One M105's raw reply (None: no reply in time) and the sensors in it."
+      },
+      "SerialLogEntry": {
+        "properties": {
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "sent",
+              "received"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "line_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line Number"
+          }
+        },
+        "required": [
+          "timestamp",
+          "direction",
+          "content"
+        ],
+        "title": "SerialLogEntry",
+        "type": "object"
+      },
+      "SerialLogResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SerialLogEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "SerialLogResponse"
+      },
+      "Settings": {
+        "description": "Settings changed in the app (Setup screen), kept across restarts.",
+        "properties": {
+          "temperature_sensors": {
+            "default": false,
+            "title": "Temperature Sensors",
+            "type": "boolean"
+          },
+          "temperature_protocol": {
+            "anyOf": [
+              {
+                "enum": [
+                  "marlin",
+                  "printess"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature Protocol"
+          }
+        },
+        "title": "Settings",
+        "type": "object"
+      },
+      "Snapshot": {
+        "properties": {
+          "printer_connected": {
+            "type": "boolean",
+            "title": "Printer Connected"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "print_status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "slicing",
+              "ready",
+              "printing",
+              "paused",
+              "stopped",
+              "completed"
+            ],
+            "title": "Print Status"
+          },
+          "lines_sent": {
+            "type": "integer",
+            "title": "Lines Sent"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          },
+          "calibrated": {
+            "type": "boolean",
+            "title": "Calibrated"
+          },
+          "calibrated_nozzles": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Calibrated Nozzles"
+          },
+          "printer": {
+            "$ref": "#/components/schemas/PrinterProfile"
+          },
+          "nozzles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Nozzles"
+          },
+          "flow_rate": {
+            "type": "number",
+            "title": "Flow Rate"
+          },
+          "resumable": {
+            "type": "boolean",
+            "title": "Resumable"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "printer_connected",
+          "port",
+          "print_status",
+          "lines_sent",
+          "lines_total",
+          "calibrated",
+          "calibrated_nozzles",
+          "printer",
+          "nozzles",
+          "flow_rate",
+          "resumable",
+          "stop_reason",
+          "time_estimate_s",
+          "settings"
+        ],
+        "title": "Snapshot",
+        "description": "Current connection and print state."
+      },
+      "StopResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "stopped",
+            "title": "Status"
+          },
+          "resumable": {
+            "type": "boolean",
+            "title": "Resumable"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "resumable",
+          "reason"
+        ],
+        "title": "StopResponse"
+      },
+      "TemperatureHistoryResponse": {
+        "properties": {
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/TemperatureSeries"
+            },
+            "type": "array",
+            "title": "Series"
+          }
+        },
+        "type": "object",
+        "required": [
+          "series"
+        ],
+        "title": "TemperatureHistoryResponse"
+      },
+      "TemperatureSeries": {
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "min": {
+            "type": "number",
+            "title": "Min"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          },
+          "settable": {
+            "type": "boolean",
+            "title": "Settable"
+          },
+          "timestamps": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Timestamps"
+          },
+          "actual": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Actual"
+          },
+          "target": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Target"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sensor",
+          "name",
+          "min",
+          "max",
+          "settable",
+          "timestamps",
+          "actual",
+          "target"
+        ],
+        "title": "TemperatureSeries",
+        "description": "One sensor's readings, oldest first, as parallel lists."
+      },
+      "TemperatureStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "off",
+              "disconnected",
+              "waiting",
+              "no_sensors",
+              "ok"
+            ],
+            "title": "State"
+          },
+          "monitor": {
+            "type": "string",
+            "enum": [
+              "off",
+              "idle",
+              "starting",
+              "autoreport",
+              "polling",
+              "paused"
+            ],
+            "title": "Monitor"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/SensorReading"
+            },
+            "type": "array",
+            "title": "Sensors"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "marlin",
+              "printess"
+            ],
+            "title": "Protocol",
+            "default": "marlin"
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelInfo"
+            },
+            "type": "array",
+            "title": "Channels",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "monitor",
+          "sensors"
+        ],
+        "title": "TemperatureStatus",
+        "description": "The latest reading of every sensor the printer reports."
+      },
+      "TemperatureTargetRequest": {
+        "properties": {
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "target": {
+            "type": "number",
+            "title": "Target"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sensor",
+          "target"
+        ],
+        "title": "TemperatureTargetRequest"
+      },
+      "TemperatureTargetResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "sensor": {
+            "type": "string",
+            "title": "Sensor"
+          },
+          "target": {
+            "type": "number",
+            "title": "Target"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "sensor",
+          "target",
+          "command"
+        ],
+        "title": "TemperatureTargetResponse"
+      },
+      "UploadResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ready",
+            "title": "Status"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "lines_total": {
+            "type": "integer",
+            "title": "Lines Total"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          },
+          "feed_log_entries": {
+            "type": "integer",
+            "title": "Feed Log Entries"
+          },
+          "preview_lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Preview Lines"
+          },
+          "edited": {
+            "type": "boolean",
+            "title": "Edited",
+            "default": false
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "filename",
+          "lines_total",
+          "time_estimate_s",
+          "feed_log_entries",
+          "preview_lines"
+        ],
+        "title": "UploadResult"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "CalibrationEvent": {
+        "description": "value: every selected nozzle is zeroed. nozzles: which of the\nprofile's nozzles are zeroed.",
+        "properties": {
+          "type": {
+            "const": "calibration",
+            "default": "calibration",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "enum": [
+              "calibrated",
+              "uncalibrated"
+            ],
+            "title": "Value",
+            "type": "string"
+          },
+          "nozzles": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Nozzles",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "value",
+          "nozzles"
+        ],
+        "title": "CalibrationEvent",
+        "type": "object"
+      },
+      "ErrorEvent": {
+        "properties": {
+          "type": {
+            "const": "error",
+            "default": "error",
+            "title": "Type",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "ErrorEvent",
+        "type": "object"
+      },
+      "ExtrusionRateEvent": {
+        "properties": {
+          "type": {
+            "const": "extrusion_rate",
+            "default": "extrusion_rate",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "title": "ExtrusionRateEvent",
+        "type": "object"
+      },
+      "PrintEndEvent": {
+        "description": "A print ended; resume_line is where a resumable stop halted.",
+        "properties": {
+          "type": {
+            "const": "print_end",
+            "default": "print_end",
+            "title": "Type",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "completed",
+              "stopped",
+              "estop",
+              "error"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "resume_line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Line"
+          }
+        },
+        "required": [
+          "type",
+          "reason",
+          "resume_line"
+        ],
+        "title": "PrintEndEvent",
+        "type": "object"
+      },
+      "PrintResumedEvent": {
+        "description": "A stopped print was resumed from its checkpoint.",
+        "properties": {
+          "type": {
+            "const": "print_resumed",
+            "default": "print_resumed",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "PrintResumedEvent",
+        "type": "object"
+      },
+      "PrinterEvent": {
+        "properties": {
+          "type": {
+            "const": "printer",
+            "default": "printer",
+            "title": "Type",
+            "type": "string"
+          },
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          }
+        },
+        "required": [
+          "type",
+          "connected",
+          "port"
+        ],
+        "title": "PrinterEvent",
+        "type": "object"
+      },
+      "PrinterProfileEvent": {
+        "description": "Another printer profile was selected (PUT /printer), or the Custom\nprofile in use was saved (PUT /printer/custom).",
+        "properties": {
+          "type": {
+            "const": "printer_profile",
+            "default": "printer_profile",
+            "title": "Type",
+            "type": "string"
+          },
+          "printer": {
+            "$ref": "#/components/schemas/PrinterProfile"
+          }
+        },
+        "required": [
+          "type",
+          "printer"
+        ],
+        "title": "PrinterProfileEvent",
+        "type": "object"
+      },
+      "PrinterProfilesEvent": {
+        "description": "The list of printer profiles changed: the Custom profile was saved\nor reset (PUT/DELETE /printer/custom). Same body as GET /printer/profiles.",
+        "properties": {
+          "type": {
+            "const": "printer_profiles",
+            "default": "printer_profiles",
+            "title": "Type",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/PrinterProfile"
+            },
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "selected",
+          "profiles"
+        ],
+        "title": "PrinterProfilesEvent",
+        "type": "object"
+      },
+      "ProgressEvent": {
+        "properties": {
+          "type": {
+            "const": "progress",
+            "default": "progress",
+            "title": "Type",
+            "type": "string"
+          },
+          "lines_sent": {
+            "title": "Lines Sent",
+            "type": "integer"
+          },
+          "lines_total": {
+            "title": "Lines Total",
+            "type": "integer"
+          },
+          "time_remaining_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Time Remaining S"
+          }
+        },
+        "required": [
+          "type",
+          "lines_sent",
+          "lines_total"
+        ],
+        "title": "ProgressEvent",
+        "type": "object"
+      },
+      "SerialLogEvent": {
+        "properties": {
+          "type": {
+            "const": "serial_log",
+            "default": "serial_log",
+            "title": "Type",
+            "type": "string"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/SerialLogEntry"
+          }
+        },
+        "required": [
+          "type",
+          "entry"
+        ],
+        "title": "SerialLogEvent",
+        "type": "object"
+      },
+      "SettingsEvent": {
+        "description": "The settings changed (PUT /settings).",
+        "properties": {
+          "temperature_sensors": {
+            "default": false,
+            "title": "Temperature Sensors",
+            "type": "boolean"
+          },
+          "temperature_protocol": {
+            "anyOf": [
+              {
+                "enum": [
+                  "marlin",
+                  "printess"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature Protocol"
+          },
+          "type": {
+            "const": "settings",
+            "default": "settings",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "SettingsEvent",
+        "type": "object"
+      },
+      "SnapshotEvent": {
+        "description": "Sent once, right after a WebSocket connects.",
+        "properties": {
+          "printer_connected": {
+            "title": "Printer Connected",
+            "type": "boolean"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "print_status": {
+            "enum": [
+              "idle",
+              "slicing",
+              "ready",
+              "printing",
+              "paused",
+              "stopped",
+              "completed"
+            ],
+            "title": "Print Status",
+            "type": "string"
+          },
+          "lines_sent": {
+            "title": "Lines Sent",
+            "type": "integer"
+          },
+          "lines_total": {
+            "title": "Lines Total",
+            "type": "integer"
+          },
+          "calibrated": {
+            "title": "Calibrated",
+            "type": "boolean"
+          },
+          "calibrated_nozzles": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Calibrated Nozzles",
+            "type": "object"
+          },
+          "printer": {
+            "$ref": "#/components/schemas/PrinterProfile"
+          },
+          "nozzles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Nozzles",
+            "type": "array"
+          },
+          "flow_rate": {
+            "title": "Flow Rate",
+            "type": "number"
+          },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "time_estimate_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Estimate S"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "type": {
+            "const": "snapshot",
+            "default": "snapshot",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "printer_connected",
+          "port",
+          "print_status",
+          "lines_sent",
+          "lines_total",
+          "calibrated",
+          "calibrated_nozzles",
+          "printer",
+          "nozzles",
+          "flow_rate",
+          "resumable",
+          "stop_reason",
+          "time_estimate_s",
+          "settings"
+        ],
+        "title": "SnapshotEvent",
+        "type": "object"
+      },
+      "StatusEvent": {
+        "properties": {
+          "type": {
+            "const": "status",
+            "default": "status",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "enum": [
+              "idle",
+              "slicing",
+              "ready",
+              "printing",
+              "paused",
+              "stopped",
+              "completed"
+            ],
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "title": "StatusEvent",
+        "type": "object"
+      },
+      "StopEvent": {
+        "description": "Sent after a stop once the backend knows whether the print can resume.",
+        "properties": {
+          "type": {
+            "const": "stop",
+            "default": "stop",
+            "title": "Type",
+            "type": "string"
+          },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line"
+          }
+        },
+        "required": [
+          "type",
+          "resumable",
+          "reason"
+        ],
+        "title": "StopEvent",
+        "type": "object"
+      },
+      "Temperature": {
+        "properties": {
+          "actual": {
+            "title": "Actual",
+            "type": "number"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "actual",
+          "target"
+        ],
+        "title": "Temperature",
+        "type": "object"
+      },
+      "TemperatureEvent": {
+        "properties": {
+          "type": {
+            "const": "temperature",
+            "default": "temperature",
+            "title": "Type",
+            "type": "string"
+          },
+          "temperatures": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Temperature"
+            },
+            "title": "Temperatures",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "temperatures"
+        ],
+        "title": "TemperatureEvent",
+        "type": "object"
+      },
+      "TemperatureStatusEvent": {
+        "description": "GET /temperature's body, after every report and when the state changes.",
+        "properties": {
+          "state": {
+            "enum": [
+              "off",
+              "disconnected",
+              "waiting",
+              "no_sensors",
+              "ok"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "monitor": {
+            "enum": [
+              "off",
+              "idle",
+              "starting",
+              "autoreport",
+              "polling",
+              "paused"
+            ],
+            "title": "Monitor",
+            "type": "string"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/SensorReading"
+            },
+            "title": "Sensors",
+            "type": "array"
+          },
+          "protocol": {
+            "default": "marlin",
+            "enum": [
+              "marlin",
+              "printess"
+            ],
+            "title": "Protocol",
+            "type": "string"
+          },
+          "channels": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChannelInfo"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "type": {
+            "const": "temperature_status",
+            "default": "temperature_status",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "state",
+          "monitor",
+          "sensors"
+        ],
+        "title": "TemperatureStatusEvent",
+        "type": "object"
+      },
+      "TemperatureWaitEvent": {
+        "description": "Sent about once a second while a print waits for its temperatures,\nand once with waiting=False when it stops waiting (reached or stopped).",
+        "properties": {
+          "type": {
+            "const": "temperature_wait",
+            "default": "temperature_wait",
+            "title": "Type",
+            "type": "string"
+          },
+          "waiting": {
+            "title": "Waiting",
+            "type": "boolean"
+          },
+          "settle_s": {
+            "title": "Settle S",
+            "type": "number"
+          },
+          "sensors": {
+            "items": {
+              "$ref": "#/components/schemas/TemperatureWaitSensor"
+            },
+            "title": "Sensors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "waiting",
+          "settle_s",
+          "sensors"
+        ],
+        "title": "TemperatureWaitEvent",
+        "type": "object"
+      },
+      "TemperatureWaitSensor": {
+        "properties": {
+          "sensor": {
+            "title": "Sensor",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "actual": {
+            "title": "Actual",
+            "type": "number"
+          },
+          "target": {
+            "title": "Target",
+            "type": "number"
+          },
+          "stable_s": {
+            "title": "Stable S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sensor",
+          "name",
+          "actual",
+          "target",
+          "stable_s"
+        ],
+        "title": "TemperatureWaitSensor",
+        "type": "object"
+      },
+      "WarningEvent": {
+        "description": "E.g. a syringe running low during a print.",
+        "properties": {
+          "type": {
+            "const": "warning",
+            "default": "warning",
+            "title": "Type",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "WarningEvent",
+        "type": "object"
+      },
+      "WsEvent": {
+        "discriminator": {
+          "mapping": {
+            "calibration": "#/components/schemas/CalibrationEvent",
+            "error": "#/components/schemas/ErrorEvent",
+            "extrusion_rate": "#/components/schemas/ExtrusionRateEvent",
+            "print_end": "#/components/schemas/PrintEndEvent",
+            "print_resumed": "#/components/schemas/PrintResumedEvent",
+            "printer": "#/components/schemas/PrinterEvent",
+            "printer_profile": "#/components/schemas/PrinterProfileEvent",
+            "printer_profiles": "#/components/schemas/PrinterProfilesEvent",
+            "progress": "#/components/schemas/ProgressEvent",
+            "serial_log": "#/components/schemas/SerialLogEvent",
+            "settings": "#/components/schemas/SettingsEvent",
+            "snapshot": "#/components/schemas/SnapshotEvent",
+            "status": "#/components/schemas/StatusEvent",
+            "stop": "#/components/schemas/StopEvent",
+            "temperature": "#/components/schemas/TemperatureEvent",
+            "temperature_status": "#/components/schemas/TemperatureStatusEvent",
+            "temperature_wait": "#/components/schemas/TemperatureWaitEvent",
+            "warning": "#/components/schemas/WarningEvent"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SnapshotEvent"
+          },
+          {
+            "$ref": "#/components/schemas/StatusEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ProgressEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ExtrusionRateEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ErrorEvent"
+          },
+          {
+            "$ref": "#/components/schemas/WarningEvent"
+          },
+          {
+            "$ref": "#/components/schemas/StopEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SerialLogEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TemperatureEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TemperatureStatusEvent"
+          },
+          {
+            "$ref": "#/components/schemas/TemperatureWaitEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SettingsEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrinterEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CalibrationEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrinterProfileEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrinterProfilesEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrintEndEvent"
+          },
+          {
+            "$ref": "#/components/schemas/PrintResumedEvent"
+          }
+        ]
+      },
+      "ErrorResponse": {
+        "description": "The body of every 4xx/5xx response.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      }
+    }
+  }
+}

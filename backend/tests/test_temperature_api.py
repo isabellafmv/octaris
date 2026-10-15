@@ -1,0 +1,455 @@
+"""The /temperature endpoints, mostly against the virtual printer in dev mode."""
+
+from __future__ import annotations
+
+import asyncio
+import csv
+import io
+import time
+
+import pytest
+
+from backend import virtual_printer
+from backend.config import ChannelConfig
+from backend.main import app
+from backend.queue_worker import PrintStatus
+from tests.test_print_gate import connect_fake_serial, set_status
+from tests.test_temperature import MARLIN
+
+# Heaters at 100 °C/s, a temperature report every 0.1 s
+FAST = {"speed": 50, "report_scale": 0.05}
+
+
+async def wait_for(condition, timeout: float = 5.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "timed out"
+        await asyncio.sleep(0.01)
+
+
+@pytest.fixture(autouse=True)
+async def sensors_on(client):
+    """These tests are about a printer with temperature sensors."""
+    assert (await client.put("/settings", json={"temperature_sensors": True})).status_code == 200
+
+
+@pytest.fixture
+def dev_mode(monkeypatch):
+    monkeypatch.setenv("OCTARIS_VIRTUAL_PRINTER", "1")
+    monkeypatch.setattr(virtual_printer, "DEV_OPTIONS", dict(FAST))
+
+
+async def connect_virtual(client, **options) -> virtual_printer.VirtualPrinter:
+    """Connect to the virtual printer; returns it once it reported temperatures."""
+    virtual_printer.DEV_OPTIONS.update(options)
+    assert (await client.post("/connect", json={"port": "virtual"})).status_code == 200
+    printer = app.state.serial_manager._serial
+    if printer.temperatures:
+        await wait_for(lambda: app.state.temperature.status().state == "ok")
+    return printer
+
+
+async def get_status(client) -> dict:
+    resp = await client.get("/temperature")
+    assert resp.status_code == 200
+    return resp.json()
+
+
+# --- GET /temperature -------------------------------------------------------------------
+
+
+async def test_disconnected(client):
+    assert await get_status(client) == {"state": "disconnected", "monitor": "idle", "sensors": [], **MARLIN}
+
+
+async def test_sensors_from_the_virtual_printer(client, dev_mode):
+    await connect_virtual(client)
+
+    status = await get_status(client)
+    assert status["state"] == "ok"
+    sensors = {s["sensor"]: s for s in status["sensors"]}
+    # config.json names them; Marlin's extra "T:" for the active tool is dropped
+    assert list(sensors) == ["T0", "T1", "B", "C"]
+    assert sensors["T0"]["name"] == "Left syringe"
+    assert (sensors["T0"]["min"], sensors["T0"]["max"]) == (4, 60)
+    assert sensors["T0"]["status"] == "off"
+    assert sensors["T0"]["settable"] is True
+
+
+async def test_no_sensor_reported(client, dev_mode):
+    app.state.temperature.config.report_timeout_s = 0.3
+    await connect_virtual(client, sensors={})
+
+    assert (await get_status(client))["state"] == "waiting"
+    await asyncio.sleep(0.35)
+    assert await get_status(client) == {"state": "no_sensors", "monitor": "starting", "sensors": [], **MARLIN}
+
+
+# --- POST /temperature/target -------------------------------------------------------------
+
+
+async def test_target_heats_the_virtual_printer(client, dev_mode):
+    printer = await connect_virtual(client)
+
+    resp = await client.post("/temperature/target", json={"sensor": "T1", "target": 37})
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "sensor": "T1", "target": 37, "command": "M104 T1 S37"}
+    for sensor, target in (("B", 30), ("C", 25), ("T0", 10)):
+        resp = await client.post("/temperature/target", json={"sensor": sensor, "target": target})
+        assert resp.is_success
+    assert [c for c in printer.executed if c.startswith(("M104", "M140", "M141"))] == [
+        "M104 T1 S37",
+        "M140 S30",
+        "M141 S25",
+        "M104 T0 S10",
+    ]
+
+    def reached() -> bool:
+        latest = app.state.temperature.latest
+        return all(
+            abs(latest[key].actual - target) < 0.5 and latest[key].target == target
+            for key, target in (("T1", 37), ("B", 30), ("C", 25), ("T0", 10))
+        )
+
+    await wait_for(reached)
+    statuses = {s["sensor"]: s["status"] for s in (await get_status(client))["sensors"]}
+    assert statuses == {"T0": "at_target", "T1": "at_target", "B": "at_target", "C": "at_target"}
+
+    assert (await client.post("/temperature/target", json={"sensor": "T1", "target": 0})).is_success
+    await wait_for(lambda: abs(app.state.temperature.latest["T1"].actual - 21.1) < 0.5)
+    assert app.state.temperature.latest["T1"].target == 0
+
+
+@pytest.mark.parametrize(
+    ("sensor", "target", "detail"),
+    [
+        ("T0", 61, "Left syringe accepts targets from 4 to 60 °C (or 0 for off)"),
+        ("T0", 2, "Left syringe accepts targets from 4 to 60 °C (or 0 for off)"),
+        ("C", 50, "Chamber accepts targets from 4 to 45 °C (or 0 for off)"),
+        ("T7", 121, "T7 accepts targets from 0 to 120 °C (or 0 for off)"),
+        ("P", 30, "Sensor P has no heater"),
+    ],
+)
+async def test_target_out_of_range_is_rejected(client, sensor, target, detail):
+    connect_fake_serial()
+    resp = await client.post("/temperature/target", json={"sensor": sensor, "target": target})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == detail
+    app.state.serial_manager.send.assert_not_called()
+
+
+async def test_target_needs_a_connection(client):
+    resp = await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Printer not connected"
+
+
+@pytest.mark.parametrize("status", [PrintStatus.PRINTING, PrintStatus.PAUSED])
+async def test_target_is_allowed_while_printing(client, status):
+    connect_fake_serial()
+    set_status(status)
+
+    # Unlike a raw line, which has to wait for a pause
+    if status == PrintStatus.PRINTING:
+        assert (await client.post("/gcode/send", json={"line": "M104 T0 S37"})).status_code == 409
+    resp = await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+
+    assert resp.status_code == 200
+    app.state.serial_manager.send.assert_awaited_once_with("M104 T0 S37")
+
+
+async def test_target_goes_out_between_print_lines(client, dev_mode, tmp_path):
+    """During a real print, the target is sent between two numbered lines,
+    and the print carries on."""
+    from tests.test_history import upload_stl
+
+    printer = await connect_virtual(client, speed=5)
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
+    app.state.session.profile.nozzle_offset_measured = True
+    worker = app.state.queue_worker
+    await upload_stl(client, tmp_path, 200)
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(lambda: worker.lines_sent >= 5)
+
+    resp = await client.post("/temperature/target", json={"sensor": "B", "target": 30})
+    assert resp.status_code == 200
+    sent_at = worker.lines_sent
+    await wait_for(lambda: worker.lines_sent >= sent_at + 5)
+    assert worker.status == PrintStatus.PRINTING
+    assert "M140 S30" in printer.executed
+    assert not any(c.startswith(("M109", "M190")) for c in printer.executed)
+    await client.post("/print/stop")
+
+
+# --- history and export --------------------------------------------------------------------
+
+
+def seed(readings: list[tuple[float, str, float, float | None, int | None]]) -> None:
+    from backend.database import insert_temperature_readings
+
+    insert_temperature_readings(app.state.db, readings)
+
+
+async def test_history_of_the_last_minutes(client):
+    store = app.state.temperature
+    store.record({"T0": {"actual": 20.0, "target": 0.0}, "P": {"actual": 22.0, "target": None}})
+    store.record({"T0": {"actual": 21.0, "target": 37.0}, "P": {"actual": 22.5, "target": None}})
+
+    resp = await client.get("/temperature/history", params={"minutes": 30})
+    assert resp.status_code == 200
+    [t0, p] = resp.json()["series"]
+    assert (t0["sensor"], t0["name"], t0["actual"], t0["target"]) == ("T0", "Left syringe", [20, 21], [0, 37])
+    assert len(t0["timestamps"]) == 2
+    assert (p["sensor"], p["settable"], p["target"]) == ("P", False, [None, None])
+
+
+async def test_history_of_a_print_session(client):
+    seed([(1000.0, "T0", 20.0, 37.0, 1), (1002.0, "T0", 21.0, 37.0, 1), (1004.0, "T0", 22.0, 37.0, 2)])
+
+    resp = await client.get("/temperature/history", params={"session_id": 1})
+    [t0] = resp.json()["series"]
+    assert (t0["timestamps"], t0["actual"]) == ([1000, 1002], [20, 21])
+    assert (await client.get("/temperature/history", params={"session_id": 9})).json() == {"series": []}
+
+
+@pytest.mark.parametrize(
+    ("params", "status"),
+    [({}, 400), ({"minutes": 10, "session_id": 1}, 400), ({"minutes": 121}, 422), ({"minutes": 0}, 422)],
+)
+async def test_history_needs_one_range(client, params, status):
+    assert (await client.get("/temperature/history", params=params)).status_code == status
+
+
+async def test_csv_export_of_a_print(client):
+    seed([(1000.0, "T0", 20.5, 37.0, 1), (1000.0, "P", 22.0, None, 1), (1002.0, "T0", 21.0, 37.0, 2)])
+
+    resp = await client.get("/temperature/export.csv", params={"session_id": 1})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert resp.headers["content-disposition"] == 'attachment; filename="temperature-print-1.csv"'
+    assert list(csv.reader(io.StringIO(resp.text))) == [
+        ["timestamp", "sensor", "name", "actual", "target"],
+        ["1970-01-01T00:16:40.000+00:00", "T0", "Left syringe", "20.5", "37"],
+        ["1970-01-01T00:16:40.000+00:00", "P", "P", "22", ""],
+    ]
+
+
+async def test_csv_export_of_a_time_range(client):
+    now = time.time()
+    seed([(now - 600, "B", 20.0, 0.0, None), (now - 60, "B", 21.0, 30.0, None)])
+    # Readings not yet flushed are included too
+    app.state.temperature.record({"B": {"actual": 22.0, "target": 30.0}})
+
+    start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 120))
+    end = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 60))
+    resp = await client.get("/temperature/export.csv", params={"from": start, "to": end})
+    assert resp.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(resp.text)))
+    assert [(r["name"], r["actual"]) for r in rows] == [("Print bed", "21"), ("Print bed", "22")]
+    assert resp.headers["content-disposition"].startswith('attachment; filename="temperature-')
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"from": "2026-01-01T00:00:00Z"},
+        {"session_id": 1, "from": "2026-01-01T00:00:00Z", "to": "2026-01-02T00:00:00Z"},
+    ],
+)
+async def test_csv_export_needs_one_range(client, params):
+    assert (await client.get("/temperature/export.csv", params=params)).status_code == 400
+
+
+# --- waiting for temperatures at print start -------------------------------------------------
+
+
+@pytest.fixture
+async def ready_to_print(client, dev_mode, tmp_path, monkeypatch):
+    """The virtual printer, connected and zeroed, with a print loaded, and
+    waiting checked every 20 ms."""
+    from backend import queue_worker
+    from tests.test_history import upload_stl
+
+    monkeypatch.setattr(queue_worker, "TEMPERATURE_WAIT_POLL_S", 0.02)
+    printer = await connect_virtual(client, speed=5)  # heaters at 10 °C/s
+    app.state.session.zeroed = {"X", "Y", "Z", "A"}
+    app.state.session.profile.nozzle_offset_measured = True
+    await upload_stl(client, tmp_path, 50)
+    return printer
+
+
+def numbered_lines(printer) -> list[str]:
+    return [line for line in printer.received if line.startswith("N") and "M110" not in line]
+
+
+async def test_print_waits_for_the_temperatures(client, ready_to_print):
+    printer = ready_to_print
+    worker = app.state.queue_worker
+    app.state.temperature.config.settle_s = 0.5
+    sub_id, events = app.state.event_bus.subscribe()
+    assert (await client.post("/temperature/target", json={"sensor": "T0", "target": 37})).is_success
+
+    resp = await client.post("/print/start", json={"wait_for_temperature": True})
+    assert resp.status_code == 200
+    await wait_for(lambda: worker.waiting_for_temperature)
+    assert worker.status == PrintStatus.PRINTING
+    assert numbered_lines(printer) == []
+
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED, timeout=10)
+    app.state.event_bus.unsubscribe(sub_id)
+    published = [events.get_nowait() for _ in range(events.qsize())]
+    waits = [e for e in published if e["type"] == "temperature_wait"]
+    assert waits[0]["waiting"] is True and waits[0]["settle_s"] == 0.5
+    # Once the report with the new target is in, T0 is what it waits for
+    assert [s["sensor"] for s in waits[-2]["sensors"]] == ["T0"]
+    assert waits[-1]["waiting"] is False
+    assert all(e["waiting"] for e in waits[:-1])
+    # No print line went out before the wait ended
+    types = [e["type"] for e in published]
+    assert types.index("progress") > published.index(waits[-1])
+    # By then the syringe had held its target for the settle time
+    t0 = app.state.temperature.latest["T0"]
+    assert abs(t0.actual - 37) <= 1
+
+
+async def test_waiting_print_without_targets_starts_at_once(client, ready_to_print):
+    worker = app.state.queue_worker
+    assert (await client.post("/print/start", json={"wait_for_temperature": True})).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+
+async def test_print_without_waiting_ignores_the_temperatures(client, ready_to_print):
+    worker = app.state.queue_worker
+    app.state.temperature.config.settle_s = 3600
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+    assert (await client.post("/print/start")).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+
+async def test_waiting_can_be_cancelled(client, ready_to_print):
+    printer = ready_to_print
+    worker = app.state.queue_worker
+    app.state.temperature.config.settle_s = 3600
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+    await client.post("/print/start", json={"wait_for_temperature": True})
+    await wait_for(lambda: worker.waiting_for_temperature)
+
+    resp = await client.post("/print/stop")
+    assert resp.json() == {
+        "status": "stopped",
+        "resumable": False,
+        "reason": "Stopped while waiting for the temperatures",
+    }
+    await wait_for(lambda: not worker.sending)
+    assert not worker.waiting_for_temperature
+    assert numbered_lines(printer) == []
+    [session] = (await client.get("/history")).json()["sessions"]
+    assert session["end_reason"] == "stopped"
+
+    # It can simply be started again
+    app.state.temperature.config.settle_s = 0
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 0})
+    assert (await client.post("/print/start", json={"wait_for_temperature": True})).status_code == 200
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
+
+
+async def test_no_deviation_warning_while_waiting(client, ready_to_print):
+    worker = app.state.queue_worker
+    store = app.state.temperature
+    store.config.settle_s = 3600
+    await client.post("/temperature/target", json={"sensor": "T0", "target": 37})
+    await client.post("/print/start", json={"wait_for_temperature": True})
+    await wait_for(lambda: worker.waiting_for_temperature)
+    assert worker.print_active
+    assert store._is_printing() is False
+    await client.post("/print/stop")
+
+
+# --- lab firmware (printess) channels ----------------------------------------------------------
+
+
+@pytest.fixture
+def printess(dev_mode):
+    """The app and the virtual printer on the lab firmware's heater channels."""
+    config = app.state.temperature.config
+    config.protocol = "printess"
+    config.channels = [
+        ChannelConfig(index=n, name=name, reply_key=f"T{n}", min=4, max=60)
+        for n, name in enumerate(["Left syringe", "Right syringe", "Bed", "Chamber"])
+    ]
+    virtual_printer.DEV_OPTIONS["protocol"] = "printess"
+
+
+async def test_channels_from_the_virtual_printer(client, printess):
+    await connect_virtual(client)
+
+    status = await get_status(client)
+    assert status["protocol"] == "printess"
+    assert [(c["sensor"], c["name"]) for c in status["channels"]] == [
+        ("I0", "Left syringe"),
+        ("I1", "Right syringe"),
+        ("I2", "Bed"),
+        ("I3", "Chamber"),
+    ]
+    assert [(s["sensor"], s["name"], s["status"], s["target"]) for s in status["sensors"]] == [
+        ("I0", "Left syringe", "off", None),
+        ("I1", "Right syringe", "off", None),
+        ("I2", "Bed", "off", None),
+        ("I3", "Chamber", "off", None),
+    ]
+
+
+async def test_channel_targets_heat_and_cool(client, printess):
+    printer = await connect_virtual(client)
+
+    resp = await client.post("/temperature/target", json={"sensor": "I0", "target": 37})
+    assert resp.json() == {"status": "ok", "sensor": "I0", "target": 37, "command": "M104 I0 T37 H"}
+    resp = await client.post("/temperature/target", json={"sensor": "I3", "target": 10})
+    assert resp.json()["command"] == "M104 I3 T10 C"
+    readings = {s["sensor"]: s for s in (await get_status(client))["sensors"]}
+    assert (readings["I0"]["status"], readings["I0"]["mode"]) == ("heating", "heat")
+    assert (readings["I3"]["status"], readings["I3"]["mode"]) == ("cooling", "cool")
+
+    def reached() -> bool:
+        latest = app.state.temperature.latest
+        return abs(latest["I0"].actual - 37) < 0.5 and abs(latest["I3"].actual - 10) < 0.5
+
+    await wait_for(reached)
+    statuses = {s["sensor"]: s["status"] for s in (await get_status(client))["sensors"]}
+    assert statuses == {"I0": "at_target", "I1": "off", "I2": "off", "I3": "at_target"}
+
+    # Off: the (unconfirmed) off command, and the channel drifts back
+    assert (await client.post("/temperature/target", json={"sensor": "I0", "target": 0})).is_success
+    await wait_for(lambda: abs(app.state.temperature.latest["I0"].actual - 21.3) < 0.5)
+    assert [c for c in printer.executed if c.startswith("M104")] == [
+        "M104 I0 T37 H",
+        "M104 I3 T10 C",
+        "M104 I0 T0",
+    ]
+
+
+async def test_channel_target_needs_a_reading(client, printess):
+    await connect_virtual(client, sensors={})  # reports no channel
+    resp = await client.post("/temperature/target", json={"sensor": "I0", "target": 37})
+    assert resp.status_code == 400
+    assert "No reading from Left syringe yet" in resp.json()["detail"]
+
+
+async def test_channel_target_typed_in_take_over(client, printess):
+    await connect_virtual(client)
+    assert (await client.post("/gcode/send", json={"line": "M104 I1 T45 H"})).is_success
+    reading = {s["sensor"]: s for s in (await get_status(client))["sensors"]}["I1"]
+    assert (reading["target"], reading["mode"]) == (45, "heat")
+
+
+async def test_print_waits_for_the_channels(client, printess, ready_to_print):
+    worker = app.state.queue_worker
+    app.state.temperature.config.settle_s = 0.3
+    assert (await client.post("/temperature/target", json={"sensor": "I1", "target": 30})).is_success
+
+    assert (await client.post("/print/start", json={"wait_for_temperature": True})).status_code == 200
+    await wait_for(lambda: worker.waiting_for_temperature)
+    assert [s.sensor for s in app.state.temperature.wait_status()] == ["I1"]
+    await wait_for(lambda: worker.status == PrintStatus.COMPLETED, timeout=10)
+    assert abs(app.state.temperature.latest["I1"].actual - 30) <= 1

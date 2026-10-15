@@ -1,33 +1,13 @@
 import asyncio
 import json
-from typing import Any
 
-from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.auth import token_is_valid
 from backend.events import EventBus
+from backend.schemas import SnapshotEvent
 
 router = APIRouter()
-
-
-def build_status_snapshot(app: FastAPI) -> dict[str, Any]:
-    """Current connection/print state, shared by GET /status and the ws snapshot."""
-    serial_manager = app.state.serial_manager
-    worker = app.state.queue_worker
-    processed = getattr(app.state, "processed_gcode", None)
-
-    return {
-        "printer_connected": serial_manager.is_connected,
-        "port": serial_manager.port,
-        "print_status": worker.status.value,
-        "lines_sent": worker.lines_sent,
-        "lines_total": worker.lines_total,
-        "calibrated": getattr(app.state, "is_calibrated", False),
-        "flow_rate": worker.flow_rate,
-        "resumable": worker.resumable,
-        "stop_reason": worker.stop_reason,
-        "time_estimate_s": processed.time_estimate_s if processed is not None else None,
-    }
 
 
 @router.websocket("/ws")
@@ -39,14 +19,41 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     event_bus: EventBus = ws.app.state.event_bus
 
-    await ws.send_text(json.dumps({"type": "snapshot", **build_status_snapshot(ws.app)}))
+    snapshot = SnapshotEvent(**ws.app.state.session.snapshot().model_dump())
+    await ws.send_text(json.dumps(snapshot.dump()))
 
     sub_id, queue = event_bus.subscribe()
+    # Events are sent until the connection ends. That is noticed by reading
+    # from it: the client closing it, and the server shutting down (uvicorn
+    # waits for this handler to return before it runs the lifespan cleanup),
+    # both arrive as a disconnect message, and nothing else would see it.
+    forward = asyncio.create_task(_forward(ws, queue))
+    closed = asyncio.create_task(_until_closed(ws))
+    try:
+        await asyncio.wait({forward, closed}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        event_bus.unsubscribe(sub_id)
+        for task in (forward, closed):
+            task.cancel()
+        # wait(), not gather(): if this handler is cancelled meanwhile, it
+        # raises that cancellation as it is (anyio, under the test client,
+        # only recognises its own)
+        await asyncio.wait({forward, closed})
+
+
+async def _forward(ws: WebSocket, queue: asyncio.Queue) -> None:
     try:
         while True:
             event = await queue.get()
             await ws.send_text(json.dumps(event))
     except (WebSocketDisconnect, Exception):
+        pass  # the connection is gone
+
+
+async def _until_closed(ws: WebSocket) -> None:
+    """Return once the connection is closed (the client sends nothing else)."""
+    try:
+        while (await ws.receive())["type"] != "websocket.disconnect":
+            pass
+    except (WebSocketDisconnect, Exception):
         pass
-    finally:
-        event_bus.unsubscribe(sub_id)

@@ -40,6 +40,17 @@ mac:
 dmg:
   artifactName: Octaris-${version}-mac.${ext}
 
+win:
+  # Unsigned for now: SmartScreen warns on first run ("Windows protected your
+  # PC" → More info → Run anyway). Signing needs a code-signing certificate.
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  artifactName: Octaris-${version}-win-setup.${ext}
+
 npmRebuild: false
 
 publish:

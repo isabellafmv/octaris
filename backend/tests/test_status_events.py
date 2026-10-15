@@ -3,41 +3,29 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from backend.config import load_config
 from backend.database import init_db
-from backend.events import EventBus
-from backend.history import PrintHistory
-from backend.main import app
-from backend.queue_worker import QueueWorker
-from backend.serial_manager import SerialManager
+from backend.main import app, wire
+from tests.conftest import make_config
+from tests.nozzles import PRINTESS_1
+from tests.serial_fakes import mock_port
 
 
 def _setup_app_state():
     """Wire up app.state the same way the conftest `client` fixture does,
     without running the real lifespan (which would open a real db file)."""
-    app.state.config = load_config()
-    app.state.event_bus = EventBus()
-    app.state.serial_manager = SerialManager()
-    app.state.db = init_db(Path(":memory:"))
-    app.state.history = PrintHistory(app.state.db)
-    app.state.queue_worker = QueueWorker(
-        serial_manager=app.state.serial_manager,
-        on_event=app.state.event_bus.publish,
-        on_print_end=app.state.history.end,
-    )
-    app.state.processed_gcode = None
-    app.state.print_source = None
-    app.state.print_settings = {}
-    app.state.current_filename = None
-    app.state.current_syringe_mode = "left"
-    app.state.is_calibrated = False
+    wire(app, make_config(), init_db(Path(":memory:")))
+
+
+def receive_state_event(ws) -> dict:
+    """The next event that isn't serial traffic (log lines, temperatures)."""
+    while True:
+        event = ws.receive_json()
+        if event["type"] not in ("serial_log", "temperature", "temperature_status"):
+            return event
 
 
 def _fake_connected_serial() -> MagicMock:
-    fake = MagicMock()
-    fake.is_open = True
-    fake.readline.return_value = b"ok\n"
-    return fake
+    return mock_port()
 
 
 def test_ws_sends_snapshot_right_after_connect():
@@ -55,10 +43,14 @@ def test_ws_sends_snapshot_right_after_connect():
         "lines_sent": 0,
         "lines_total": 0,
         "calibrated": False,
+        "calibrated_nozzles": {"left": False, "right": False},
         "flow_rate": 100.0,
         "resumable": False,
         "stop_reason": None,
         "time_estimate_s": None,
+        "settings": {"temperature_sensors": False, "temperature_protocol": None},
+        "printer": PRINTESS_1.model_dump(),
+        "nozzles": ["left"],
     }
 
 
@@ -76,10 +68,14 @@ def test_status_endpoint_matches_snapshot_shape():
         "lines_sent": 0,
         "lines_total": 0,
         "calibrated": False,
+        "calibrated_nozzles": {"left": False, "right": False},
         "flow_rate": 100.0,
         "resumable": False,
         "stop_reason": None,
         "time_estimate_s": None,
+        "settings": {"temperature_sensors": False, "temperature_protocol": None},
+        "printer": PRINTESS_1.model_dump(),
+        "nozzles": ["left"],
     }
 
 
@@ -88,14 +84,16 @@ def test_connect_endpoint_publishes_printer_connected_event():
     client = TestClient(app)
     fake = _fake_connected_serial()
 
-    with patch("backend.serial_manager.serial.Serial", return_value=fake):
-        with client.websocket_connect("/ws") as ws:
-            ws.receive_json()  # initial snapshot
+    with (
+        patch("backend.serial_manager.serial.Serial", return_value=fake),
+        client.websocket_connect("/ws") as ws,
+    ):
+        ws.receive_json()  # initial snapshot
 
-            resp = client.post("/connect", json={"port": "/dev/ttyUSB0"})
-            assert resp.status_code == 200
+        resp = client.post("/connect", json={"port": "/dev/ttyUSB0"})
+        assert resp.status_code == 200
 
-            event = ws.receive_json()
+        event = receive_state_event(ws)
 
     assert event == {"type": "printer", "connected": True, "port": "/dev/ttyUSB0"}
 
@@ -105,17 +103,25 @@ def test_disconnect_endpoint_publishes_printer_disconnected_event():
     client = TestClient(app)
     fake = _fake_connected_serial()
 
-    with patch("backend.serial_manager.serial.Serial", return_value=fake):
-        with client.websocket_connect("/ws") as ws:
-            ws.receive_json()  # initial snapshot
+    with (
+        patch("backend.serial_manager.serial.Serial", return_value=fake),
+        client.websocket_connect("/ws") as ws,
+    ):
+        ws.receive_json()  # initial snapshot
 
-            client.post("/connect", json={"port": "/dev/ttyUSB0"})
-            ws.receive_json()  # printer connected event
+        client.post("/connect", json={"port": "/dev/ttyUSB0"})
+        receive_state_event(ws)  # printer connected event
+        # Opening the port may reset the board, so calibration is reset
+        assert receive_state_event(ws) == {
+            "type": "calibration",
+            "value": "uncalibrated",
+            "nozzles": {"left": False, "right": False},
+        }
 
-            resp = client.post("/disconnect")
-            assert resp.status_code == 200
+        resp = client.post("/disconnect")
+        assert resp.status_code == 200
 
-            event = ws.receive_json()
+        event = receive_state_event(ws)
 
     assert event == {"type": "printer", "connected": False, "port": None}
 

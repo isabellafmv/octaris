@@ -1,71 +1,137 @@
 import logging
+import signal
+import sqlite3
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 
+from backend import slicer, virtual_printer
 from backend.auth import get_token, token_is_valid
-from backend.config import load_config
+from backend.config import Config, load_config
 from backend.database import init_db
 from backend.events import EventBus
 from backend.history import PrintHistory
-from backend.queue_worker import QueueWorker
+from backend.limits import LimitError
+from backend.logs import setup_logging
+from backend.queue_worker import InvalidTransition, NotResumable, QueueWorker
 from backend.routers.calibration import router as calibration_router
 from backend.routers.extrusion import router as extrusion_router
 from backend.routers.gcode import router as gcode_router
 from backend.routers.history import router as history_router
 from backend.routers.jog import router as jog_router
 from backend.routers.print_control import router as print_router
+from backend.routers.printer import router as printer_router
 from backend.routers.serial import router as serial_router
+from backend.routers.settings import router as settings_router
+from backend.routers.temperature import router as temperature_router
 from backend.routers.upload import router as upload_router
 from backend.routers.ws import router as ws_router
-from backend.serial_manager import SerialManager
+from backend.schemas import ErrorResponse, HealthResponse, WsEvent
+from backend.serial_manager import SerialError, SerialManager, SerialTimeout
+from backend.session import Conflict, NotReady, PrinterSession
+from backend.settings import SettingsStore
+from backend.temperature import TemperatureStore
 
 logger = logging.getLogger(__name__)
+
+# How long uvicorn waits at shutdown for open requests and WebSockets before
+# it cancels them and runs the lifespan cleanup. Requests normally finish in
+# milliseconds; a slice or a G28 can take minutes.
+GRACEFUL_SHUTDOWN_S = 1
+
+
+def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: SettingsStore | None = None) -> None:
+    """Build the app's components on app.state. Also used by the tests."""
+    settings = settings or SettingsStore()
+    event_bus = EventBus()
+    history = PrintHistory(db)
+    serial_manager = SerialManager(
+        on_event=event_bus.publish,
+        can_reconnect=lambda: session.can_reconnect(),
+        on_traffic=history.log_traffic,
+        temperature_enabled=settings.current.temperature_sensors,
+        on_monitor=lambda: temperature.monitor_changed(),
+        axes=config.profile.axes,
+    )
+    temperature = TemperatureStore(
+        db,
+        # A copy: the protocol chosen in the app replaces config.json's
+        config.temperature.model_copy(
+            update={"protocol": settings.current.temperature_protocol or config.temperature.protocol}
+        ),
+        session_id=lambda: history.session_id,
+        is_connected=lambda: serial_manager.is_connected,
+        is_printing=lambda: queue_worker.print_active and not queue_worker.waiting_for_temperature,
+        enabled=lambda: settings.current.temperature_sensors,
+        monitor=lambda: serial_manager.temperature_monitor,
+        publish=event_bus.publish,
+    )
+    temperature.purge_expired()
+    queue_worker = QueueWorker(
+        serial_manager=serial_manager,
+        on_event=event_bus.publish,
+        retract_on_estop=config.retract_on_estop,
+        syringe_travel_mm=config.syringe_travel_mm,
+        temperature=temperature,
+        axes=config.profile.axes,
+    )
+    session = PrinterSession(
+        config, serial_manager, queue_worker, history, event_bus.publish, temperature, settings
+    )
+    event_bus.listen(session.on_event)
+    event_bus.listen(history.on_event)
+    event_bus.listen(temperature.on_event)
+
+    app.state.config = config
+    app.state.db = db
+    app.state.event_bus = event_bus
+    app.state.history = history
+    app.state.serial_manager = serial_manager
+    app.state.queue_worker = queue_worker
+    app.state.session = session
+    app.state.temperature = temperature
+    app.state.settings = settings
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log_file = setup_logging()
+    logger.info("Logging to %s", log_file)
+    if virtual_printer.enabled():
+        logger.info("Dev mode: the virtual printer is offered as port %r", virtual_printer.VIRTUAL_PORT)
     if not get_token():
-        logger.warning(
-            "OCTARIS_TOKEN is not set — request authentication is disabled (dev mode)"
-        )
-    app.state.config = load_config()
-    app.state.event_bus = EventBus()
-    def _on_disconnect():
-        app.state.is_calibrated = False
-        app.state.queue_worker.invalidate_checkpoint("The printer disconnected")
-        app.state.event_bus.publish({"type": "printer", "connected": False, "port": None})
-        app.state.event_bus.publish({"type": "calibration", "value": "uncalibrated"})
-
-    def _on_connect(port: str):
-        app.state.event_bus.publish({"type": "printer", "connected": True, "port": port})
-
-    app.state.serial_manager = SerialManager(
-        on_disconnect=_on_disconnect,
-        on_serial_log=lambda entry: app.state.event_bus.publish(entry),
-        on_connect=_on_connect,
-    )
-    app.state.db = init_db()
-    app.state.history = PrintHistory(app.state.db)
-    app.state.queue_worker = QueueWorker(
-        serial_manager=app.state.serial_manager,
-        on_event=app.state.event_bus.publish,
-        on_print_end=app.state.history.end,
-        on_print_resumed=app.state.history.reopen,
-        retract_on_estop=app.state.config.retract_on_estop,
-    )
-    app.state.processed_gcode = None
-    app.state.print_source = None
-    app.state.print_settings = {}
-    app.state.current_filename = None
-    app.state.current_syringe_mode = "left"
-    app.state.is_calibrated = False
+        logger.warning("OCTARIS_TOKEN is not set — request authentication is disabled (dev mode)")
+    wire(app, load_config(), init_db())
+    _limit_graceful_shutdown()
     yield
-    if app.state.serial_manager.is_connected:
-        await app.state.serial_manager.disconnect()
+    await slicer.stop_slicing()
+    # Fails the command in flight: a print still running stops (see
+    # QueueWorker.close), and the temperature monitor stops too
+    await app.state.serial_manager.disconnect()
+    await app.state.queue_worker.close()
+    await app.state.temperature.close()
     app.state.db.close()
+
+
+def _limit_graceful_shutdown() -> None:
+    """Give uvicorn's wait for open requests a limit, when it has none.
+
+    uvicorn runs the lifespan cleanup only once every request and WebSocket
+    handler has returned. Started by its CLI (dev, --reload), it waits for
+    them without limit, so one slow request would hold up a reload or Ctrl+C
+    indefinitely. uvicorn's signal handler is the running Server's own
+    method, which is how it is found here; if it isn't (no signal handler
+    installed, another server), nothing changes.
+    """
+    server = getattr(signal.getsignal(signal.SIGINT), "__self__", None)
+    config = getattr(server, "config", None)
+    if config is not None and getattr(config, "timeout_graceful_shutdown", 0) is None:
+        config.timeout_graceful_shutdown = GRACEFUL_SHUTDOWN_S
 
 
 app = FastAPI(title="Octaris Bioprinter", version="0.1.0", lifespan=lifespan)
@@ -78,7 +144,33 @@ app.include_router(extrusion_router)
 app.include_router(jog_router)
 app.include_router(gcode_router)
 app.include_router(history_router)
+app.include_router(temperature_router)
+app.include_router(settings_router)
+app.include_router(printer_router)
 app.include_router(ws_router)
+
+# HTTP status for each error the session and the printer raise. A route
+# that needs a different status for one of them catches it itself.
+ERROR_STATUS: dict[type[Exception], int] = {
+    NotReady: 400,
+    LimitError: 400,
+    Conflict: 409,
+    InvalidTransition: 409,
+    NotResumable: 409,
+    SerialError: 500,
+    SerialTimeout: 504,
+}
+
+
+def _error_handler(status_code: int):
+    async def handle(request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(status_code=status_code, content={"detail": str(exc)})
+
+    return handle
+
+
+for _error, _status in ERROR_STATUS.items():
+    app.add_exception_handler(_error, _error_handler(_status))
 
 
 @app.middleware("http")
@@ -95,21 +187,77 @@ async def require_token(request: Request, call_next):
     return await call_next(request)
 
 
+def openapi_schema() -> dict:
+    """The OpenAPI schema, plus the models no route returns: the WebSocket
+    events (as the WsEvent union) and the error body."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+    # Typed as Any: the two entries are different kinds of type (a union and a
+    # model class), which newer pydantic/mypy reject for one TypeAdapter variable.
+    models: tuple[tuple[str, Any], ...] = (("WsEvent", WsEvent), ("ErrorResponse", ErrorResponse))
+    for name, model in models:
+        extra = TypeAdapter(model).json_schema(
+            mode="serialization", ref_template="#/components/schemas/{model}"
+        )
+        schemas.update(extra.pop("$defs", {}))
+        schemas[name] = extra
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = openapi_schema  # type: ignore[method-assign]  # FastAPI's documented override
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "null"],
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["Content-Type", "X-Octaris-Token"],
+    allow_headers=["Content-Type", "X-Octaris-Token", "If-Match"],
+    # The G-code editor reads the loaded program's id from GET /gcode/loaded
+    expose_headers=["ETag"],
 )
 
 
-@app.get("/")
+@app.get("/", response_model=HealthResponse)
 async def health():
     return {"status": "ok"}
+
+
+def request_exit(app: FastAPI) -> None:
+    """Make uvicorn shut down: the lifespan's cleanup runs, then the process exits."""
+    server = getattr(app.state, "uvicorn_server", None)
+    if server is not None:
+        server.should_exit = True
+    else:
+        # Started by the uvicorn CLI (dev): stop it the way Ctrl+C does
+        signal.raise_signal(signal.SIGINT)
+
+
+@app.post("/shutdown", include_in_schema=False)
+async def shutdown(request: Request, background: BackgroundTasks):
+    """Close the serial port, stop slicing, and exit once the reply is sent.
+
+    Electron calls this when it quits, on every platform (Windows has no
+    SIGTERM to ask a process to stop). Not in the schema: the renderer
+    never calls it.
+    """
+    logger.info("Shutdown requested")
+    await slicer.stop_slicing()
+    if request.app.state.serial_manager.is_connected:
+        await request.app.state.serial_manager.disconnect()
+    background.add_task(request_exit, request.app)
+    return {"status": "shutting down"}
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Our own Server rather than uvicorn.run(), so /shutdown can stop it
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=8000, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S)
+    )
+    app.state.uvicorn_server = server
+    server.run()

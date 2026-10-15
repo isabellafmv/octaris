@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from backend.logs import data_dir
 
 
 def _default_db_path() -> Path:
     """Put the database in a writable location (not inside the frozen bundle)."""
     if getattr(sys, "frozen", False):
-        # Bundled app: use ~/Library/Application Support/Octaris/
-        app_data = Path.home() / "Library" / "Application Support" / "Octaris"
+        # Bundled app: the platform's app data folder (see logs.data_dir)
+        app_data = data_dir()
         app_data.mkdir(parents=True, exist_ok=True)
         return app_data / "octaris_log.db"
     # Dev: store in backend/
@@ -38,6 +41,19 @@ CREATE TABLE IF NOT EXISTS extrusion_events (
     extrusion_rate INTEGER NOT NULL,
     lines_sent INTEGER NOT NULL
 );
+
+-- One row per sensor per temperature report. timestamp is Unix seconds
+-- (UTC): compact, and range queries and charts need numbers anyway.
+CREATE TABLE IF NOT EXISTS temperature_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    sensor TEXT NOT NULL,
+    actual REAL NOT NULL,
+    target REAL,
+    session_id INTEGER REFERENCES sessions(id)
+);
+CREATE INDEX IF NOT EXISTS temperature_readings_timestamp ON temperature_readings (timestamp);
+CREATE INDEX IF NOT EXISTS temperature_readings_session ON temperature_readings (session_id);
 """
 
 
@@ -50,9 +66,14 @@ _SESSION_COLUMNS = {
     "pressurize_mm": "REAL",
     "flow_multiplier": "REAL",
     "travel_retract_multiplier": "REAL",
+    "print_speed": "REAL",  # mm/s
     "source": "TEXT CHECK (source IN ('stl', 'gcode'))",
     "end_reason": "TEXT CHECK (end_reason IN ('completed', 'stopped', 'estop', 'error'))",
     "resume_line": "INTEGER",
+    # Path of the file holding the print's serial traffic
+    "serial_log": "TEXT",
+    # 1 if the program was changed in the G-code editor before printing
+    "edited": "INTEGER NOT NULL DEFAULT 0",
 }
 
 PRINT_SETTING_KEYS = (
@@ -62,6 +83,7 @@ PRINT_SETTING_KEYS = (
     "pressurize_mm",
     "flow_multiplier",
     "travel_retract_multiplier",
+    "print_speed",
 )
 
 END_REASONS = ("completed", "stopped", "estop", "error")
@@ -93,11 +115,12 @@ def create_session(
     syringe_config: str,
     total_lines: int,
     source: str | None = None,
-    settings: dict[str, float | None] | None = None,
+    settings: Mapping[str, object] | None = None,
+    edited: bool = False,
 ) -> int:
     settings = settings or {}
-    columns = ["started_at", "filename", "syringe_config", "total_lines", "source"]
-    values: list[Any] = [_now(), filename, syringe_config, total_lines, source]
+    columns = ["started_at", "filename", "syringe_config", "total_lines", "source", "edited"]
+    values: list[Any] = [_now(), filename, syringe_config, total_lines, source, int(edited)]
     for key in PRINT_SETTING_KEYS:
         columns.append(key)
         values.append(settings.get(key))
@@ -120,10 +143,14 @@ def end_session(
     if end_reason not in END_REASONS:
         raise ValueError(f"Invalid end_reason: {end_reason}")
     conn.execute(
-        "UPDATE sessions SET ended_at = ?, completed = ?, end_reason = ?, resume_line = ? "
-        "WHERE id = ?",
+        "UPDATE sessions SET ended_at = ?, completed = ?, end_reason = ?, resume_line = ? WHERE id = ?",
         (_now(), int(end_reason == "completed"), end_reason, resume_line, session_id),
     )
+    conn.commit()
+
+
+def set_serial_log(conn: sqlite3.Connection, session_id: int, path: str) -> None:
+    conn.execute("UPDATE sessions SET serial_log = ? WHERE id = ?", (path, session_id))
     conn.commit()
 
 
@@ -144,7 +171,8 @@ def log_extrusion_event(
     lines_sent: int,
 ) -> None:
     conn.execute(
-        "INSERT INTO extrusion_events (session_id, timestamp, extrusion_rate, lines_sent) VALUES (?, ?, ?, ?)",
+        "INSERT INTO extrusion_events (session_id, timestamp, extrusion_rate, lines_sent) "
+        "VALUES (?, ?, ?, ?)",
         (session_id, _now(), extrusion_rate, lines_sent),
     )
     conn.commit()
@@ -156,14 +184,12 @@ def list_sessions(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, A
     conn.row_factory = sqlite3.Row
     try:
         sessions = [
-            dict(row)
-            for row in conn.execute(
-                "SELECT * FROM sessions ORDER BY id DESC LIMIT ?", (limit,)
-            )
+            dict(row) for row in conn.execute("SELECT * FROM sessions ORDER BY id DESC LIMIT ?", (limit,))
         ]
         by_id = {s["id"]: s for s in sessions}
         for s in sessions:
             s["completed"] = bool(s["completed"])
+            s["edited"] = bool(s["edited"])
             s["extrusion_events"] = []
         if by_id:
             placeholders = ", ".join("?" for _ in by_id)
@@ -176,3 +202,50 @@ def list_sessions(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, A
     finally:
         conn.row_factory = conn_factory
     return sessions
+
+
+# (timestamp, sensor, actual, target, session_id)
+TemperatureRow = tuple[float, str, float, float | None, int | None]
+
+
+def insert_temperature_readings(conn: sqlite3.Connection, rows: list[TemperatureRow]) -> None:
+    conn.executemany(
+        "INSERT INTO temperature_readings (timestamp, sensor, actual, target, session_id) "
+        "VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def delete_temperature_readings_before(conn: sqlite3.Connection, timestamp: float) -> int:
+    """Delete readings older than `timestamp`; returns how many."""
+    cursor = conn.execute("DELETE FROM temperature_readings WHERE timestamp < ?", (timestamp,))
+    conn.commit()
+    return cursor.rowcount
+
+
+def temperature_readings(
+    conn: sqlite3.Connection,
+    *,
+    session_id: int | None = None,
+    start: float | None = None,
+    end: float | None = None,
+) -> list[TemperatureRow]:
+    """Readings of one print session, or between two times, oldest first."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(session_id)
+    if start is not None:
+        clauses.append("timestamp >= ?")
+        params.append(start)
+    if end is not None:
+        clauses.append("timestamp <= ?")
+        params.append(end)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return conn.execute(
+        "SELECT timestamp, sensor, actual, target, session_id FROM temperature_readings "
+        f"{where} ORDER BY timestamp, id",
+        params,
+    ).fetchall()

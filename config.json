@@ -1,5 +1,35 @@
 {
-  "target": "macos",
   "touch_mode": false,
-  "baud_rate": 115200
+  "baud_rate": 115200,
+  "syringe_travel_mm": 40,
+  "max_feed_mm_min": 400,
+  "printer_profile": "printess-1",
+  "profiles": {
+    "printess-1": {
+      "bed": {
+        "x": { "min": -45, "max": 45 },
+        "y": { "min": -45, "max": 45 },
+        "z": { "min": 0, "max": 60 }
+      },
+      "nozzle_offset_measured": true
+    }
+  },
+  "temperature": {
+    "protocol": "marlin",
+    "sensors": {
+      "T": { "name": "Syringe", "min": 4, "max": 60 },
+      "T0": { "name": "Left syringe", "min": 4, "max": 60 },
+      "T1": { "name": "Right syringe", "min": 4, "max": 60 },
+      "B": { "name": "Print bed", "min": 4, "max": 60 },
+      "C": { "name": "Chamber", "min": 4, "max": 45 }
+    },
+    "channels": [
+      { "index": 0, "name": "Channel 0", "reply_key": "T0", "min": 4, "max": 60 },
+      { "index": 1, "name": "Channel 1", "reply_key": "T1", "min": 4, "max": 60 },
+      { "index": 2, "name": "Channel 2", "reply_key": "T2", "min": 4, "max": 60 },
+      { "index": 3, "name": "Channel 3", "reply_key": "T3", "min": 4, "max": 60 }
+    ],
+    "off_command": "M104 I{n} T0",
+    "retention_days": 30
+  }
 }

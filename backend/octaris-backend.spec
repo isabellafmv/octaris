@@ -10,6 +10,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent  # octaris/
 
+# The resources/bin folder for this OS (same names as config.json's "target")
+BIN_TARGET = {"Darwin": "macos", "Windows": "windows", "Linux": "rpi"}[platform.system()]
+
 block_cipher = None
 
 a = Analysis(
@@ -21,8 +24,8 @@ a = Analysis(
         (str(PROJECT_ROOT / "context"), "context"),
         # App config
         (str(PROJECT_ROOT / "config.json"), "."),
-        # CuraEngine binaries (macOS)
-        (str(PROJECT_ROOT / "resources" / "bin" / "macos"), str(Path("resources", "bin", "macos"))),
+        # CuraEngine binaries for this OS
+        (str(PROJECT_ROOT / "resources" / "bin" / BIN_TARGET), str(Path("resources", "bin", BIN_TARGET))),
     ],
     hiddenimports=[
         "uvicorn.logging",
@@ -67,7 +70,8 @@ exe = EXE(
     strip=False,
     upx=True,
     console=True,  # needed for subprocess stdout/stderr
-    target_arch=platform.machine(),  # arm64 on Apple Silicon, x86_64 on Intel
+    # macOS only: arm64 on Apple Silicon, x86_64 on Intel
+    target_arch=platform.machine() if platform.system() == "Darwin" else None,
 )
 
 coll = COLLECT(

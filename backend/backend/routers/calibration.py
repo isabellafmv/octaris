@@ -1,84 +1,60 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from backend.queue_worker import PrintStatus, QueueWorker
-from backend.serial_manager import SerialError, SerialManager, SerialTimeout
+from backend.routers import get_session
+from backend.schemas import CalibrateResponse, CalibrationResetResponse, CalibrationStatusResponse
+from backend.session import PrinterSession
 
 router = APIRouter(prefix="/calibration")
 
 
 class CalibrateRequest(BaseModel):
-    """Optional overrides for the zeroing command."""
-    zero_z: bool = True
-    zero_b: bool = True
-    zero_c: bool = False
+    """Which nozzle to zero (default: the first selected), for which
+    selection of nozzles, by id (default: the loaded print's, or the last
+    calibration's)."""
+
+    nozzle: str | None = None
+    nozzles: list[str] | None = None
 
 
-@router.get("/status")
-async def calibration_status(request: Request):
-    """Check whether the printer has been calibrated this session."""
-    return {"calibrated": getattr(request.app.state, "is_calibrated", False)}
+@router.get("/status", response_model=CalibrationStatusResponse)
+async def calibration_status(session: PrinterSession = Depends(get_session)):
+    """Whether every selected nozzle is zeroed, and which of the profile's
+    nozzles are."""
+    return {"calibrated": session.calibrated, "nozzles": session.nozzles_calibrated()}
 
 
-@router.post("/zero")
-async def calibrate_zero(request: Request, body: CalibrateRequest | None = None):
+@router.post("/zero", response_model=CalibrateResponse)
+async def calibrate_zero(
+    body: CalibrateRequest | None = None, session: PrinterSession = Depends(get_session)
+):
     """
-    Set the current nozzle position as the origin.
+    Zero one of the selected nozzles where it is. X/Y are set at the first
+    (leftmost) selected nozzle, over the print's start point; each nozzle's
+    height with that nozzle lowered onto the bed (about 0.2 mm above the
+    surface). Printess 1.0:
 
-    IMPORTANT: Always zero using the LEFT nozzle, even when printing with
-    the right nozzle or both. The software automatically applies the nozzle
-    offset (NOZZLE_OFFSET_X) for the right nozzle.
+    - `nozzles: ["left"]`, `nozzle: "left"` → G92 X0 Y0 Z0 B0
+    - `nozzles: ["right"]`, `nozzle: "right"` → G92 X0 Y0 A0 C0 (right nozzle
+      over the start point and on the bed)
+    - `nozzles: ["left", "right"]`, two steps: `nozzle: "left"` → G92 X0 Y0
+      Z0 B0, then lower the right nozzle onto the bed and `nozzle: "right"`
+      → G92 A0 C0
 
-    Jog the LEFT nozzle to the center of the print area at the correct Z
-    height (~0.2 mm above surface) before calling this endpoint.
+    Prints aren't shifted by the nozzle offsets: each nozzle prints its own
+    copy of the same path, in place.
     """
-    worker: QueueWorker = request.app.state.queue_worker
-    if worker.status == PrintStatus.PRINTING:
-        raise HTTPException(status_code=409, detail="Pause the print first")
-    if worker.status == PrintStatus.PAUSED:
-        raise HTTPException(status_code=409, detail="Can't re-zero during a print")
-
-    serial: SerialManager = request.app.state.serial_manager
-    if not serial.is_connected:
-        raise HTTPException(status_code=400, detail="Printer not connected")
-
-    if body is None:
-        body = CalibrateRequest()
-
-    # Build the G92 command based on the current syringe mode and request
-    mode = getattr(request.app.state, "current_syringe_mode", "left")
-
-    axes = "X0 Y0"
-    if body.zero_z:
-        z_axis = "Z" if mode in ("left", "both") else "A"
-        axes += f" {z_axis}0"
-    if body.zero_b:
-        axes += " B0"
-    if body.zero_c or mode == "both":
-        axes += " C0"
-
-    worker.invalidate_checkpoint("The printer was re-zeroed")
-    try:
-        await serial.send_line(f"G92 {axes}")
-    except SerialTimeout as exc:
-        raise HTTPException(status_code=504, detail=str(exc)) from exc
-    except SerialError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    request.app.state.is_calibrated = True
-
-    event_bus = request.app.state.event_bus
-    event_bus.publish({"type": "calibration", "value": "calibrated"})
-
-    return {"status": "calibrated", "command": f"G92 {axes}"}
+    body = body or CalibrateRequest()
+    command = await session.calibrate(body.nozzle, body.nozzles)
+    return {
+        "command": command,
+        "calibrated": session.calibrated,
+        "nozzles": session.nozzles_calibrated(),
+    }
 
 
-@router.post("/reset")
-async def reset_calibration(request: Request):
+@router.post("/reset", response_model=CalibrationResetResponse)
+async def reset_calibration(session: PrinterSession = Depends(get_session)):
     """Mark calibration as invalid (e.g. after a disconnect or power cycle)."""
-    request.app.state.is_calibrated = False
-
-    event_bus = request.app.state.event_bus
-    event_bus.publish({"type": "calibration", "value": "uncalibrated"})
-
+    session.reset_calibration()
     return {"status": "uncalibrated"}

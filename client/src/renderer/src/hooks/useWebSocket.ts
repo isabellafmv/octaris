@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PrintStatus, SerialLogEntry, StopInfo, WsEvent } from '../types'
+import { usePrinter } from '../stores/printer'
+import { useSerialLog } from '../stores/serialLog'
+import { useTemperature } from '../stores/temperature'
+import { NO_NOZZLES } from '../screens/setup/calibration'
+import type { NozzleCalibration, PrintStatus, StopInfo, WsEvent } from '../types'
 
 const WS_BASE_URL = 'ws://127.0.0.1:8000/ws'
 
@@ -10,7 +14,6 @@ function wsUrl(): string {
   return token ? `${WS_BASE_URL}?token=${encodeURIComponent(token)}` : WS_BASE_URL
 }
 const RECONNECT_DELAY = 2000
-const MAX_LOG_ENTRIES = 200
 
 interface PrintState {
   status: PrintStatus
@@ -23,14 +26,16 @@ interface PrintState {
   // Whether the backend currently has a serial connection to the printer.
   printerConnected: boolean
   port: string | null
-  calibrated: boolean
-  serialLog: SerialLogEntry[]
+  // Which nozzles are zeroed; whether that's enough depends on the selection
+  calibratedNozzles: NozzleCalibration
+  // The printer has temperature sensors (Setup); off, every temperature feature is
+  temperatureSensors: boolean
   // id changes on every error event, so a repeated message is shown again
   lastError: { id: number; message: string } | null
   stopInfo: StopInfo
 }
 
-export function useWebSocket() {
+export function useWebSocket(): PrintState & { resetPrintState: () => void } {
   const [state, setState] = useState<PrintState>({
     status: 'idle',
     linesSent: 0,
@@ -40,14 +45,16 @@ export function useWebSocket() {
     wsConnected: false,
     printerConnected: false,
     port: null,
-    calibrated: false,
-    serialLog: [],
+    calibratedNozzles: NO_NOZZLES,
+    temperatureSensors: false,
     lastError: null,
     stopInfo: null
   })
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(null)
+  // connect() schedules itself after a close, through this ref
+  const connectRef = useRef<() => void>(() => {})
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -61,6 +68,25 @@ export function useWebSocket() {
 
     ws.onmessage = (evt) => {
       const data: WsEvent = JSON.parse(evt.data)
+      // Serial lines go to their own store so they don't re-render the app
+      if (data.type === 'serial_log') {
+        if (data.entry) useSerialLog.getState().append(data.entry)
+        return
+      }
+      if (data.type === 'temperature_status') {
+        useTemperature.getState().applyStatus(data)
+        return
+      }
+      // The printer profile goes to its own store, read where it's drawn
+      if (data.type === 'snapshot') usePrinter.getState().setProfile(data.printer)
+      if (data.type === 'printer_profile') {
+        usePrinter.getState().setProfile(data.printer)
+        return
+      }
+      if (data.type === 'printer_profiles') {
+        usePrinter.getState().setProfiles(data.profiles)
+        return
+      }
       setState((prev) => {
         switch (data.type) {
           case 'progress':
@@ -82,6 +108,7 @@ export function useWebSocket() {
           case 'extrusion_rate':
             return { ...prev, extrusionRate: data.value ?? prev.extrusionRate }
           case 'error':
+          case 'warning':
             return {
               ...prev,
               lastError: {
@@ -103,7 +130,8 @@ export function useWebSocket() {
               status: data.print_status,
               linesSent: data.lines_sent,
               linesTotal: data.lines_total,
-              calibrated: data.calibrated,
+              calibratedNozzles: data.calibrated_nozzles,
+              temperatureSensors: data.settings.temperature_sensors ?? false,
               extrusionRate: data.flow_rate,
               stopInfo:
                 data.print_status === 'stopped'
@@ -113,18 +141,9 @@ export function useWebSocket() {
             }
           }
           case 'calibration':
-            return { ...prev, calibrated: data.value === 'calibrated' }
-          case 'serial_log':
-            if (data.entry) {
-              const updated = [...prev.serialLog, data.entry]
-              return {
-                ...prev,
-                serialLog: updated.length > MAX_LOG_ENTRIES
-                  ? updated.slice(-MAX_LOG_ENTRIES)
-                  : updated
-              }
-            }
-            return prev
+            return { ...prev, calibratedNozzles: data.nozzles }
+          case 'settings':
+            return { ...prev, temperatureSensors: data.temperature_sensors ?? false }
           default:
             return prev
         }
@@ -133,13 +152,17 @@ export function useWebSocket() {
 
     ws.onclose = () => {
       setState((s) => ({ ...s, wsConnected: false }))
-      reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY)
+      reconnectTimer.current = setTimeout(() => connectRef.current(), RECONNECT_DELAY)
     }
 
     ws.onerror = () => {
       ws.close()
     }
   }, [])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   useEffect(() => {
     connect()
@@ -149,14 +172,6 @@ export function useWebSocket() {
     }
   }, [connect])
 
-  const clearSerialLog = useCallback(() => {
-    setState((s) => ({ ...s, serialLog: [] }))
-  }, [])
-
-  const setSerialLog = useCallback((entries: SerialLogEntry[]) => {
-    setState((s) => ({ ...s, serialLog: entries }))
-  }, [])
-
   const resetPrintState = useCallback(() => {
     setState((s) => ({
       ...s,
@@ -164,9 +179,9 @@ export function useWebSocket() {
       linesSent: 0,
       linesTotal: 0,
       timeRemainingS: null,
-      extrusionRate: 100,
+      extrusionRate: 100
     }))
   }, [])
 
-  return { ...state, clearSerialLog, setSerialLog, resetPrintState }
+  return { ...state, resetPrintState }
 }
