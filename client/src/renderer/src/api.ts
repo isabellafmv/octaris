@@ -137,19 +137,20 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rate })
     }),
-  // Moves all of `axes` by `distance` together, in one G1 block
+  // Moves all of `axes` by `distance` together, in one G1 block, at feedRate mm/min
   jog: (axes: string[], distance: number, feedRate = 300) =>
     json<{ status: string }>('/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ axes, distance, feed_rate: feedRate })
     }),
-  // X0 Y0 at the current height; with lower, then the selected nozzles down to zero height
-  goToOrigin: (lower = false) =>
+  // X0 Y0 at the current height at xyFeed; with lower, then the selected
+  // nozzles down to zero height at zFeed (mm/min)
+  goToOrigin: (lower = false, xyFeed = 300, zFeed = 300) =>
     json<{ status: string; lines: string[] }>('/jog/origin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lower })
+      body: JSON.stringify({ lower, xy_feed: xyFeed, z_feed: zFeed })
     }),
   sendGcode: (line: string) =>
     json<{ status: string; response: string }>('/gcode/send', {

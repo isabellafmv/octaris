@@ -37,6 +37,21 @@ describe('tokenizeGcodeLine', () => {
     ])
   })
 
+  it('marks D as an axis once the profile has it', () => {
+    const profile = {
+      id: 'printess-2',
+      name: 'Printess 2.0',
+      nozzles: [{ id: 's4', name: 'Syringe 4', height_axis: 'C', plunger_axis: 'D' }]
+    }
+    expect(tokens('G1 X1 D-0.5 F300', axisLetters(profile))).toEqual([
+      ['G1', 'command'],
+      ['X1', 'axis'],
+      ['D-0.5', 'axis'],
+      ['F300', 'param']
+    ])
+    expect(tokens('G1 D-0.5')[1]).toEqual(['D-0.5', 'param'])
+  })
+
   it('splits a move into command, axis and parameter words', () => {
     expect(tokens('G1 X10.5 Y-3 B-.02 F200')).toEqual([
       ['G1', 'command'],

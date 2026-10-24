@@ -371,17 +371,20 @@ class SelectProfileRequest(BaseModel):
 
 
 class CustomProfileRequest(BaseModel):
-    """The Custom profile's nozzles, left to right, and its bed limits, as
-    edited on the Setup screen. Its build volume and steps/mm (and the bed,
-    without `bed`) are kept from the Custom profile saved before or, the
-    first time, copied from `base` (the profile being edited; default: the
-    selected one)."""
+    """The Custom profile's nozzles, left to right, its bed limits and
+    steps/mm, as edited on the Setup screen. Its build volume (and the bed
+    and steps/mm, without `bed` or `steps_per_mm`) are kept from the Custom
+    profile saved before or, the first time, copied from `base` (the profile
+    being edited; default: the selected one)."""
 
     nozzles: list[NozzleFields]
     nozzle_offset_measured: bool = False
     base: str | None = None
     # In mm relative to the zero point; each min below its max
     bed: BedFields | None = None
+    # Of every axis, X/Y included (sent as M92); above 0. Checked by the
+    # session, which reports it in words with the other problems.
+    steps_per_mm: float | None = None
 
 
 class UploadResult(BaseModel):

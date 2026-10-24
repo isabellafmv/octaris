@@ -86,6 +86,12 @@ logger = logging.getLogger(__name__)
 # Where uploaded models are written for the slicer
 DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
 
+# The longest jog, in mm either way (the jog panel's custom step)
+MAX_JOG_MM = 200.0
+# The feed rates a jog or Go to Origin may use, in mm/min
+MIN_JOG_FEED = 1.0
+MAX_JOG_FEED = 3000.0
+
 
 def zero_axes(nozzle: NozzleSpec) -> frozenset[str]:
     """The axes a nozzle's zero sets: X/Y (the start point, set at the first
@@ -129,6 +135,8 @@ def profile_errors(exc: ValidationError) -> str:
             message = f"Syringe {loc[1] + 1}{field}: {message}"
         elif len(loc) >= 2 and loc[0] == "bed":
             message = f"Bed {str(loc[1]).upper()}: {message}"
+        elif loc == ("steps_per_mm",):
+            message = f"Steps per mm: {message}"
         messages.append(message)
     return "\n".join(messages)
 
@@ -304,12 +312,15 @@ class PrinterSession:
         nozzle_offset_measured: bool = False,
         base: str | None = None,
         bed: BedFields | None = None,
+        steps_per_mm: float | None = None,
     ) -> PrinterProfile:
-        """Save the Custom profile with these nozzles (left to right) and
-        bed limits and select it, kept across restarts. Its build volume and
-        steps/mm (and its bed, without `bed`) are `base`'s (a profile id: the
-        one being edited, copied into Custom) or, without one, the Custom
-        profile's so far (or the selected one's).
+        """Save the Custom profile with these nozzles (left to right), bed
+        limits and steps/mm (one value for every axis) and select it, kept
+        across restarts; a connected printer is sent the new M92. Its build
+        volume (and its bed and steps/mm, without `bed` or `steps_per_mm`)
+        are `base`'s (a profile id: the one being edited, copied into
+        Custom) or, without one, the Custom profile's so far (or the
+        selected one's).
         As when switching profile, the calibration, any resume checkpoint
         and the loaded print are dropped.
 
@@ -324,7 +335,7 @@ class PrinterSession:
             raise NotReady(f"A printer can have at most {MAX_NOZZLES} syringes")
         source = profiles[base] if base is not None else self._custom or self.profile
         try:
-            profile = custom_profile(source, nozzles, nozzle_offset_measured, bed)
+            profile = custom_profile(source, nozzles, nozzle_offset_measured, bed, steps_per_mm)
         except ValidationError as exc:
             raise NotReady(profile_errors(exc)) from exc
         self._refuse_during_print()
@@ -479,14 +490,20 @@ class PrinterSession:
 
     async def jog_axes(self, axes: Sequence[str], distance: float, feed_rate: float) -> list[str]:
         """Move each of `axes` (the profile's) by `distance`, together, in one
-        G1 block (several height axes, say: `G1 Z1 A1 F300`); returns the
-        axes, upper-cased. Each is checked against the bed limits before
-        anything moves: raises LimitError if one would leave the bed."""
+        G1 block (several height axes, say: `G1 Z1 A1 F300`, or plungers:
+        `G1 U-1 V-1 F300`) at `feed_rate` (mm/min); returns the axes,
+        upper-cased. Raises NotReady for a distance over MAX_JOG_MM or a
+        feed rate outside MIN_JOG_FEED..MAX_JOG_FEED. Each axis is checked
+        against the bed limits before anything moves: raises LimitError if
+        one would leave the bed."""
         axes = [axis.strip().upper() for axis in axes]
         if not axes:
             raise NotReady("No axis to jog")
         if len(set(axes)) != len(axes):
             raise NotReady(f"An axis is given twice: {', '.join(axes)}")
+        if abs(distance) > MAX_JOG_MM:
+            raise NotReady(f"A jog moves at most {MAX_JOG_MM:g} mm (not {abs(distance):g} mm)")
+        check_feed("Jog", feed_rate)
         plungers = [n.plunger_axis for n in self.profile.nozzles]
         for axis in axes:
             if axis not in ("X", "Y", *self._height_axes(), *plungers):
@@ -534,15 +551,21 @@ class PrinterSession:
         nozzles) make, for the bed checks: see limits.copies_of."""
         return copies_of(self.profile.select(nozzle_ids or self.selected_nozzles))
 
-    async def go_to_origin(self, lower: bool = False) -> list[str]:
-        """Travel to X0 Y0 at the current height and, with `lower`, then
-        lower the height axes of the selected nozzles to 0 — onto the bed.
-        Returns the lines sent, as one sequence.
+    async def go_to_origin(
+        self, lower: bool = False, xy_feed: float = TRAVEL_FEED, z_feed: float = TRAVEL_FEED
+    ) -> list[str]:
+        """Travel to X0 Y0 at the current height, at `xy_feed`, and, with
+        `lower`, then lower the height axes of the selected nozzles to 0 —
+        onto the bed — at `z_feed` (mm/min). Returns the lines sent, as one
+        sequence.
 
-        Raises Conflict while printing, NotReady if `lower` and those
-        height axes aren't zeroed (their 0 would be wherever the printer
-        powered up), and LimitError if the origin is off the bed.
+        Raises Conflict while printing, NotReady for a feed rate outside
+        MIN_JOG_FEED..MAX_JOG_FEED or if `lower` and those height axes
+        aren't zeroed (their 0 would be wherever the printer powered up),
+        and LimitError if the origin is off the bed.
         """
+        check_feed("XY feed", xy_feed)
+        check_feed("Z feed", z_feed)
         if self.worker.status == PrintStatus.PRINTING:
             raise Conflict("Pause the print first")
         self._require_connection()
@@ -557,9 +580,9 @@ class PrinterSession:
                 check_move_to(self.profile.bed, heights, axis, 0.0, copies)
 
         self.worker.manual_command()
-        lines = ["G90", f"G1 X0 Y0 F{TRAVEL_FEED}"]
+        lines = ["G90", f"G1 X0 Y0 F{xy_feed:g}"]
         if lower:
-            lines.append("G1 " + " ".join(f"{axis}0" for axis in heights) + f" F{TRAVEL_FEED}")
+            lines.append("G1 " + " ".join(f"{axis}0" for axis in heights) + f" F{z_feed:g}")
         # Back to the mode the printer was in; G91 while a print is loaded,
         # as every print runs relative (see jog)
         if self.serial.relative or self.loaded is not None:
@@ -947,6 +970,14 @@ class PrinterSession:
         except BaseException:
             self.history.resume_failed()
             raise
+
+
+def check_feed(what: str, feed_rate: float) -> None:
+    """Raises NotReady for a jog or Go to Origin feed rate out of range."""
+    if not MIN_JOG_FEED <= feed_rate <= MAX_JOG_FEED:
+        raise NotReady(
+            f"{what} must be between {MIN_JOG_FEED:g} and {MAX_JOG_FEED:g} mm/min (not {feed_rate:g})"
+        )
 
 
 def split_lines(text: str) -> list[str]:

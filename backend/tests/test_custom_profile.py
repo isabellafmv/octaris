@@ -189,7 +189,7 @@ async def test_saving_the_custom_profile_selects_it(client, published):
     assert app.state.queue_worker.axes == FOUR_AXES
     listed = (await client.get("/printer/profiles")).json()
     assert listed["selected"] == "custom"
-    assert [p["id"] for p in listed["profiles"]] == ["printess-1", "custom"]
+    assert [p["id"] for p in listed["profiles"]] == ["printess-1", "printess-2", "custom"]
     assert (await client.get("/printer/custom")).json() == body
     types = [e["type"] for e in published]
     assert "printer_profile" in types and "printer_profiles" in types
@@ -259,7 +259,8 @@ async def test_reset_to_printess_1(client, published):
     assert app.state.session.profile.id == "printess-1"
     assert app.state.serial_manager.axes == PRINTESS_AXES
     assert (await client.get("/printer/custom")).json() is None
-    assert [p["id"] for p in (await client.get("/printer/profiles")).json()["profiles"]] == ["printess-1"]
+    listed = (await client.get("/printer/profiles")).json()["profiles"]
+    assert [p["id"] for p in listed] == ["printess-1", "printess-2"]
     assert {e["type"] for e in published} >= {"printer_profile", "printer_profiles"}
 
 

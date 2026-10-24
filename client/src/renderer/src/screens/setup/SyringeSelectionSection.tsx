@@ -14,9 +14,11 @@ import {
   isChanged,
   isValid,
   newDraft,
+  stepsDraftFrom,
   toRequest,
   validateBed,
   validateDrafts,
+  validateSteps,
   type BedDraft,
   type BedErrors,
   type DraftErrors,
@@ -161,7 +163,8 @@ function ProfileSelect({
   )
 }
 
-// Each syringe's name, axes and offset, typed under it, and the bed limits. Saved as the
+// Each syringe's name, axes and offset, typed under it, the bed limits and
+// the steps/mm. Saved as the
 // Custom profile (a built-in profile being edited is copied into it), which
 // is then selected: that resets the calibration and unloads the print.
 function SetupEditor({
@@ -181,13 +184,16 @@ function SetupEditor({
   const [drafts, setDrafts] = useState<SyringeDraft[]>(() => draftsFrom(profile))
   const [offsetsMeasured, setOffsetsMeasured] = useState(profile.nozzle_offset_measured ?? false)
   const [bed, setBed] = useState<BedDraft>(() => bedDraftFrom(profile))
+  const [steps, setSteps] = useState(() => stepsDraftFrom(profile))
   const [saving, setSaving] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
 
   const errors = useMemo(() => validateDrafts(drafts), [drafts])
   const bedErrors = useMemo(() => validateBed(bed), [bed])
-  const valid = isValid(drafts, errors) && Object.keys(bedErrors).length === 0
-  const changed = isChanged(drafts, offsetsMeasured, profile, bed)
+  const stepsError = validateSteps(steps)
+  const valid =
+    isValid(drafts, errors) && Object.keys(bedErrors).length === 0 && stepsError === undefined
+  const changed = isChanged(drafts, offsetsMeasured, profile, bed, steps)
   const hasCustom =
     profile.id === CUSTOM_PROFILE_ID || profiles.some((p) => p.id === CUSTOM_PROFILE_ID)
 
@@ -200,6 +206,7 @@ function SetupEditor({
     setDrafts(draftsFrom(profile))
     setOffsetsMeasured(profile.nozzle_offset_measured ?? false)
     setBed(bedDraftFrom(profile))
+    setSteps(stepsDraftFrom(profile))
   }, [profile])
 
   const update = (index: number, field: DraftField, value: string): void =>
@@ -209,7 +216,7 @@ function SetupEditor({
     setSaving(true)
     try {
       // The printer_profile and printer_profiles events update the stores
-      await api.saveCustomProfile(toRequest(drafts, offsetsMeasured, profile.id, bed))
+      await api.saveCustomProfile(toRequest(drafts, offsetsMeasured, profile.id, bed, steps))
       onDone()
     } catch (e) {
       onError(errorMessage(e, 'Could not save the printer setup'))
@@ -290,6 +297,8 @@ function SetupEditor({
           setBed((b) => ({ ...b, [axis]: { ...b[axis], [end]: value } }))
         }
       />
+
+      <StepsField steps={steps} error={stepsError} disabled={locked} onChange={setSteps} />
 
       <p className="text-[10px] text-center text-text-subtle max-w-sm">
         {printing
@@ -464,5 +473,42 @@ function BedFields({
         Relative to where you zero; e.g. −45 to 45 for a 90 mm dish zeroed in the centre.
       </p>
     </fieldset>
+  )
+}
+
+// Steps/mm of every axis, X/Y included: sent as M92 on connect and on saving
+function StepsField({
+  steps,
+  error,
+  disabled,
+  onChange
+}: {
+  steps: string
+  error: string | undefined
+  disabled: boolean
+  onChange: (value: string) => void
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <label className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest uppercase text-text-muted">
+        Steps per mm
+        <input
+          value={steps}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          inputMode="decimal"
+          aria-label="Steps per mm, every axis"
+          aria-invalid={error !== undefined}
+          title={error}
+          className={`w-16 px-1.5 py-1 rounded-md text-xs text-center normal-case tracking-normal font-normal outline-none bg-surface text-text border ${
+            error ? 'border-danger text-danger' : 'border-border'
+          } disabled:opacity-50`}
+        />
+      </label>
+      {error && <p className="text-[10px] leading-tight text-center text-danger">{error}</p>}
+      <p className="text-[10px] text-center text-text-subtle max-w-sm">
+        Every axis, X and Y included; sent to the printer (M92) on connect and on saving.
+      </p>
+    </div>
   )
 }

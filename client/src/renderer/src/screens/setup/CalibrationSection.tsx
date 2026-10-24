@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { api } from '../../api'
 import { JogPanel } from '../../components/JogPanel'
 import { useSelectedNozzles } from '../../stores/printer'
+import { usePrintSettings } from '../../stores/printSettings'
 import type { NozzleCalibration, PrintStatus } from '../../types'
 import { calibrationSteps, isCalibratedFor } from './calibration'
 
@@ -25,6 +26,9 @@ export function CalibrationSection({
   onError
 }: CalibrationSectionProps): React.JSX.Element {
   const selected = useSelectedNozzles()
+  // The jog panel's feed rates (mm/min): X/Y's travel, the heights' lowering
+  const xyFeed = usePrintSettings((s) => s.jogXyFeed)
+  const zFeed = usePrintSettings((s) => s.jogZFeed)
   const isPrinting = printStatus === 'printing'
   const isPausedOrPrinting = isPrinting || printStatus === 'paused'
   const calibrated = isCalibratedFor(selected, nozzles)
@@ -51,7 +55,7 @@ export function CalibrationSection({
   const goToOrigin = async (lower: boolean): Promise<void> => {
     setMoving(lower ? 'lower' : 'origin')
     try {
-      await api.goToOrigin(lower)
+      await api.goToOrigin(lower, xyFeed, zFeed)
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Move failed')
     } finally {
@@ -60,6 +64,12 @@ export function CalibrationSection({
   }
 
   const moveDisabled = !printerConnected || isPrinting || moving !== null
+  // Lowering goes to the height zero set here: until every selected syringe
+  // has one, its 0 is wherever the printer powered up
+  const lowerWhy =
+    printerConnected && !isPrinting && !calibrated
+      ? 'Zero the selected syringes first: jog each one onto the bed and press Zero'
+      : undefined
 
   return (
     <div>
@@ -81,15 +91,19 @@ export function CalibrationSection({
             disabled={moveDisabled}
             onClick={() => goToOrigin(false)}
           />
-          {/* Zero height only means something once the nozzle(s) are zeroed */}
-          <MoveButton
-            label="Lower to zero height"
-            busy={moving === 'lower'}
-            disabled={moveDisabled || !calibrated}
-            onClick={() => setConfirmLower(true)}
-          />
+          {/* Zero height only means something once the nozzle(s) are zeroed.
+              The title is on a wrapper: a disabled button gets no hover. */}
+          <span title={lowerWhy}>
+            <MoveButton
+              label="Lower to zero height"
+              busy={moving === 'lower'}
+              disabled={moveDisabled || !calibrated}
+              onClick={() => setConfirmLower(true)}
+            />
+          </span>
         </div>
       </div>
+      {lowerWhy && <p className="-mt-2 mb-3 text-[10px] text-right text-text-subtle">{lowerWhy}</p>}
 
       {confirmLower &&
         createPortal(

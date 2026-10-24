@@ -566,7 +566,7 @@
     "/jog": {
       "post": {
         "summary": "Jog",
-        "description": "Move one axis, or several together (`axes`), by `distance`. Each\naxis is checked against the bed limits once zeroed; 400 if one would\nleave the bed, and then nothing moves.",
+        "description": "Move one axis, or several together (`axes`: X, Y, the profile's\nheight axes and plungers), by `distance` (mm, at most 200 either way) at\n`feed_rate` (mm/min, 1 to 3000). Each axis is checked against the bed\nlimits once zeroed; 400 if one would leave the bed, and then nothing\nmoves.",
         "operationId": "jog_jog_post",
         "requestBody": {
           "content": {
@@ -605,6 +605,7 @@
     "/jog/origin": {
       "post": {
         "summary": "Go To Origin",
+        "description": "Travel to X0 Y0 at `xy_feed` and, with `lower`, then lower the\nselected nozzles' height axes to their zero at `z_feed`.",
         "operationId": "go_to_origin_jog_origin_post",
         "requestBody": {
           "content": {
@@ -1280,7 +1281,7 @@
       },
       "put": {
         "summary": "Save Custom Profile",
-        "description": "Save the Custom profile and select it, as PUT /printer does (refused\nduring a print). 400 lists every problem: each axis must be one of Z, A,\nB, C, I, J, K, U, V, W, used once in the profile, and a syringe's height\nand plunger axis must differ; 1 to 6 syringes; each bed limit's min\nbelow its max.",
+        "description": "Save the Custom profile and select it, as PUT /printer does (refused\nduring a print), and sends a connected printer its steps/mm (M92).\n400 lists every problem: each axis must be one of Z, A, B, C, I, J, K,\nU, V, W, D, used once in the profile, and a syringe's height and plunger\naxis must differ; 1 to 6 syringes; each bed limit's min below its max;\nsteps/mm above 0.",
         "operationId": "save_custom_profile_printer_custom_put",
         "requestBody": {
           "content": {
@@ -1672,6 +1673,17 @@
                 "type": "null"
               }
             ]
+          },
+          "steps_per_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps Per Mm"
           }
         },
         "type": "object",
@@ -1679,7 +1691,7 @@
           "nozzles"
         ],
         "title": "CustomProfileRequest",
-        "description": "The Custom profile's nozzles, left to right, and its bed limits, as\nedited on the Setup screen. Its build volume and steps/mm (and the bed,\nwithout `bed`) are kept from the Custom profile saved before or, the\nfirst time, copied from `base` (the profile being edited; default: the\nselected one)."
+        "description": "The Custom profile's nozzles, left to right, its bed limits and\nsteps/mm, as edited on the Setup screen. Its build volume (and the bed\nand steps/mm, without `bed` or `steps_per_mm`) are kept from the Custom\nprofile saved before or, the first time, copied from `base` (the profile\nbeing edited; default: the selected one)."
       },
       "DisconnectResponse": {
         "properties": {
@@ -2111,6 +2123,16 @@
             "type": "boolean",
             "title": "Lower",
             "default": false
+          },
+          "xy_feed": {
+            "type": "number",
+            "title": "Xy Feed",
+            "default": 300
+          },
+          "z_feed": {
+            "type": "number",
+            "title": "Z Feed",
+            "default": 300
           }
         },
         "type": "object",
