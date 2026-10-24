@@ -31,8 +31,13 @@ HeaterStatus = Literal["heating", "cooling", "at_target", "off"]
 # How the printer's heaters are addressed (the temperature_protocol setting,
 # or config.json's temperature.protocol until one is chosen in the app)
 TemperatureProtocol = Literal["marlin", "printess"]
-# printess: the direction the last target was sent with (H: heat, C: cool)
+# printess: the way a channel is moving, from the firmware's status (Heating:
+# heat, Cooling: cool), and the way a target is sent (H: heat, C: cool)
 HeaterMode = Literal["heat", "cool"]
+# printess: what a channel heats, the temperature_channels setting: "bed", or
+# "syringe:<nozzle id>" for one of the printer profile's syringes. A channel
+# left out is not used.
+ChannelUse = str
 
 
 def _type_required(schema: dict[str, Any]) -> None:
@@ -71,8 +76,12 @@ class SerialLogEntry(BaseModel):
 
 
 class Temperature(BaseModel):
-    actual: float
+    actual: float | None  # None: no value (printess: X, a disabled channel)
     target: float | None
+    # printess only: the firmware's own status ("Heating", "Cooling",
+    # "Disabled") and the heater's PWM
+    status: str | None = None
+    pwm: float | None = None
 
 
 class SensorInfo(BaseModel):
@@ -85,11 +94,14 @@ class SensorInfo(BaseModel):
 
 
 class SensorReading(SensorInfo):
-    actual: float
+    # None: no value (printess: a disabled channel has none)
+    actual: float | None
     target: float | None
     status: HeaterStatus
-    # printess: whether the target was sent to heat or to cool (None: off,
-    # or a target Octaris didn't send)
+    # printess: the firmware's status as it reports it ("Heating",
+    # "Cooling", "Disabled"), and the way it is moving: heat or cool (None:
+    # disabled)
+    firmware_status: str | None = None
     mode: HeaterMode | None = None
     timestamp: float  # Unix seconds
 
@@ -99,8 +111,10 @@ class ChannelInfo(BaseModel):
 
     sensor: str  # the key it goes by: "I0"
     index: int  # the I of M104 I<n>
+    # What it heats (the temperature_channels setting); None: not used
+    use: ChannelUse | None
+    # By what it heats: "Left syringe (I0)", "Bed (I2)"; "I1 (not used)"
     name: str
-    reply_key: str  # the M105 reply key it reads from
     min: float
     max: float
 
@@ -112,7 +126,8 @@ class TemperatureStatus(BaseModel):
     monitor: TemperatureMonitor
     sensors: list[SensorReading]
     protocol: TemperatureProtocol = "marlin"
-    # printess: every configured channel, reported or not (empty for marlin)
+    # printess: every configured channel, used or not, reported or not
+    # (empty for marlin). sensors has the used ones only.
     channels: list[ChannelInfo] = []
 
 
@@ -127,6 +142,11 @@ class Settings(BaseModel):
     # firmware's channels (M104 I<n> T<°C> H|C). None: config.json's
     # temperature.protocol, until one is chosen in the app.
     temperature_protocol: TemperatureProtocol | None = None
+    # Lab firmware: what each channel heats, by channel ("I0"): "bed" or
+    # "syringe:<nozzle id>". Channels left out are not used. A syringe the
+    # printer profile no longer has is dropped (the channel falls back to
+    # not used).
+    temperature_channels: dict[str, ChannelUse] = {}
 
 
 # Which of the profile's nozzles are zeroed (X/Y and the nozzle's own
@@ -535,9 +555,10 @@ class TemperatureTargetResponse(BaseModel):
 class SensorTestReading(BaseModel):
     sensor: str
     name: str
-    actual: float
+    actual: float | None
     target: float | None
     status: HeaterStatus
+    firmware_status: str | None = None
     mode: HeaterMode | None = None
 
 

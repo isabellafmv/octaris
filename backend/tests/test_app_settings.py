@@ -176,9 +176,14 @@ async def sensors_on(client) -> None:
     assert (await put_settings(client, temperature_sensors=True)).status_code == 200
 
 
-def report(**actuals: float) -> None:
-    """A temperature report, as the serial manager publishes it."""
-    app.state.temperature.record({key: {"actual": value, "target": None} for key, value in actuals.items()})
+def report(**actuals: float | tuple[float, float]) -> None:
+    """A temperature report, as the serial manager publishes it: actual, or
+    (actual, target)."""
+    readings = {}
+    for key, value in actuals.items():
+        actual, target = value if isinstance(value, tuple) else (value, None)
+        readings[key] = {"actual": actual, "target": target}
+    app.state.temperature.record(readings)
 
 
 async def test_protocol_defaults_to_config_json(client, data_dir):
@@ -197,7 +202,11 @@ async def test_protocol_is_saved_and_kept_across_restarts(client, data_dir):
     resp = await put_settings(client, temperature_protocol="printess")
 
     assert resp.status_code == 200
-    assert resp.json() == {"temperature_sensors": False, "temperature_protocol": "printess"}
+    assert resp.json() == {
+        "temperature_sensors": False,
+        "temperature_protocol": "printess",
+        "temperature_channels": {},
+    }
     stored = json.loads((data_dir / "settings.json").read_text())
     assert stored["temperature_protocol"] == "printess"
 
@@ -211,6 +220,7 @@ async def test_settings_not_given_are_kept(client):
     assert (await client.get("/settings")).json() == {
         "temperature_sensors": True,
         "temperature_protocol": "printess",
+        "temperature_channels": {},
     }
     await put_settings(client, temperature_sensors=False)
     assert app.state.temperature.config.protocol == "printess"
@@ -230,11 +240,19 @@ async def test_protocol_applies_at_once(client):
     while not events.empty():
         published.append(events.get_nowait())
     app.state.event_bus.unsubscribe(sub_id)
-    assert {"type": "settings", "temperature_sensors": True, "temperature_protocol": "printess"} in published
-    assert [e["protocol"] for e in published if e["type"] == "temperature_status"] == ["printess"]
+    assert {
+        "type": "settings",
+        "temperature_sensors": True,
+        "temperature_protocol": "printess",
+        "temperature_channels": {},
+    } in published
+    # (the monitor starts again too, polling the lab firmware)
+    assert {e["protocol"] for e in published if e["type"] == "temperature_status"} == {"printess"}
+    assert app.state.serial_manager.temperature_protocol == "printess"
 
     # No reconnect: the next report is read as channels, and targets go out as M104 I<n>
-    report(T0=21.0)
+    assert (await put_settings(client, temperature_channels={"I0": "syringe:left"})).is_success
+    report(I0=21.0)
     resp = await client.post("/temperature/target", json={"sensor": "I0", "target": 37})
     assert resp.status_code == 200, resp.text
     send.assert_awaited_with("M104 I0 T37 H")
@@ -247,12 +265,11 @@ async def test_protocol_applies_at_once(client):
     send.assert_awaited_with("M104 T0 S30")
 
 
-async def test_switching_forgets_the_old_protocols_readings_and_targets(client):
+async def test_switching_forgets_the_old_protocols_readings(client):
     await sensors_on(client)
     connect_fake_serial()
-    await put_settings(client, temperature_protocol="printess")
-    report(T0=21.0, T1=22.0)
-    assert (await client.post("/temperature/target", json={"sensor": "I0", "target": 37})).is_success
+    await put_settings(client, temperature_protocol="printess", temperature_channels={"I0": "bed"})
+    report(I0=(21.0, 37.0))
     store = app.state.temperature
     assert store.latest["I0"].target == 37
 
@@ -261,10 +278,6 @@ async def test_switching_forgets_the_old_protocols_readings_and_targets(client):
     assert store.latest == {}
     assert store.history(3600) == {}
     assert (await client.get("/temperature")).json()["sensors"] == []
-    # Back on printess, the target sent before isn't remembered either
-    await put_settings(client, temperature_protocol="printess")
-    report(T0=21.0)
-    assert store.latest["I0"].target is None
 
 
 async def test_choosing_the_protocol_in_use_changes_nothing(client):

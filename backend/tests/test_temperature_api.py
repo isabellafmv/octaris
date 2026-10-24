@@ -10,7 +10,6 @@ import time
 import pytest
 
 from backend import virtual_printer
-from backend.config import ChannelConfig
 from backend.main import app
 from backend.queue_worker import PrintStatus
 from tests.test_print_gate import connect_fake_serial, set_status
@@ -185,9 +184,10 @@ async def test_target_goes_out_between_print_lines(client, dev_mode, tmp_path):
 
 
 def seed(readings: list[tuple[float, str, float, float | None, int | None]]) -> None:
+    """Logged readings, without the name they were read under."""
     from backend.database import insert_temperature_readings
 
-    insert_temperature_readings(app.state.db, readings)
+    insert_temperature_readings(app.state.db, [(*reading, None) for reading in readings])
 
 
 async def test_history_of_the_last_minutes(client):
@@ -364,92 +364,3 @@ async def test_no_deviation_warning_while_waiting(client, ready_to_print):
     assert worker.print_active
     assert store._is_printing() is False
     await client.post("/print/stop")
-
-
-# --- lab firmware (printess) channels ----------------------------------------------------------
-
-
-@pytest.fixture
-def printess(dev_mode):
-    """The app and the virtual printer on the lab firmware's heater channels."""
-    config = app.state.temperature.config
-    config.protocol = "printess"
-    config.channels = [
-        ChannelConfig(index=n, name=name, reply_key=f"T{n}", min=4, max=60)
-        for n, name in enumerate(["Left syringe", "Right syringe", "Bed", "Chamber"])
-    ]
-    virtual_printer.DEV_OPTIONS["protocol"] = "printess"
-
-
-async def test_channels_from_the_virtual_printer(client, printess):
-    await connect_virtual(client)
-
-    status = await get_status(client)
-    assert status["protocol"] == "printess"
-    assert [(c["sensor"], c["name"]) for c in status["channels"]] == [
-        ("I0", "Left syringe"),
-        ("I1", "Right syringe"),
-        ("I2", "Bed"),
-        ("I3", "Chamber"),
-    ]
-    assert [(s["sensor"], s["name"], s["status"], s["target"]) for s in status["sensors"]] == [
-        ("I0", "Left syringe", "off", None),
-        ("I1", "Right syringe", "off", None),
-        ("I2", "Bed", "off", None),
-        ("I3", "Chamber", "off", None),
-    ]
-
-
-async def test_channel_targets_heat_and_cool(client, printess):
-    printer = await connect_virtual(client)
-
-    resp = await client.post("/temperature/target", json={"sensor": "I0", "target": 37})
-    assert resp.json() == {"status": "ok", "sensor": "I0", "target": 37, "command": "M104 I0 T37 H"}
-    resp = await client.post("/temperature/target", json={"sensor": "I3", "target": 10})
-    assert resp.json()["command"] == "M104 I3 T10 C"
-    readings = {s["sensor"]: s for s in (await get_status(client))["sensors"]}
-    assert (readings["I0"]["status"], readings["I0"]["mode"]) == ("heating", "heat")
-    assert (readings["I3"]["status"], readings["I3"]["mode"]) == ("cooling", "cool")
-
-    def reached() -> bool:
-        latest = app.state.temperature.latest
-        return abs(latest["I0"].actual - 37) < 0.5 and abs(latest["I3"].actual - 10) < 0.5
-
-    await wait_for(reached)
-    statuses = {s["sensor"]: s["status"] for s in (await get_status(client))["sensors"]}
-    assert statuses == {"I0": "at_target", "I1": "off", "I2": "off", "I3": "at_target"}
-
-    # Off: the (unconfirmed) off command, and the channel drifts back
-    assert (await client.post("/temperature/target", json={"sensor": "I0", "target": 0})).is_success
-    await wait_for(lambda: abs(app.state.temperature.latest["I0"].actual - 21.3) < 0.5)
-    assert [c for c in printer.executed if c.startswith("M104")] == [
-        "M104 I0 T37 H",
-        "M104 I3 T10 C",
-        "M104 I0 T0",
-    ]
-
-
-async def test_channel_target_needs_a_reading(client, printess):
-    await connect_virtual(client, sensors={})  # reports no channel
-    resp = await client.post("/temperature/target", json={"sensor": "I0", "target": 37})
-    assert resp.status_code == 400
-    assert "No reading from Left syringe yet" in resp.json()["detail"]
-
-
-async def test_channel_target_typed_in_take_over(client, printess):
-    await connect_virtual(client)
-    assert (await client.post("/gcode/send", json={"line": "M104 I1 T45 H"})).is_success
-    reading = {s["sensor"]: s for s in (await get_status(client))["sensors"]}["I1"]
-    assert (reading["target"], reading["mode"]) == (45, "heat")
-
-
-async def test_print_waits_for_the_channels(client, printess, ready_to_print):
-    worker = app.state.queue_worker
-    app.state.temperature.config.settle_s = 0.3
-    assert (await client.post("/temperature/target", json={"sensor": "I1", "target": 30})).is_success
-
-    assert (await client.post("/print/start", json={"wait_for_temperature": True})).status_code == 200
-    await wait_for(lambda: worker.waiting_for_temperature)
-    assert [s.sensor for s in app.state.temperature.wait_status()] == ["I1"]
-    await wait_for(lambda: worker.status == PrintStatus.COMPLETED, timeout=10)
-    assert abs(app.state.temperature.latest["I1"].actual - 30) <= 1

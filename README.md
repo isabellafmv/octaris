@@ -114,9 +114,10 @@ Under the switch, **Protocol** chooses how heater targets are sent: **Marlin
 firmware* below). It is kept in `settings.json` and applies at once, like the
 switch: no restart or reconnect. Until one is chosen here,
 `temperature.protocol` in `config.json` is used. Switching forgets the readings
-and targets remembered for the old protocol (the logged readings stay in the
-database), and isn't possible while a print is waiting for its temperatures.
-The channel names and the off command still come from `config.json`.
+remembered for the old protocol (the logged readings stay in the database),
+and isn't possible while a print is waiting for its temperatures. With the lab
+firmware, a dropdown per channel below it says what the channel heats (see
+*Lab firmware* below).
 
 The **Temperature** screen (sidebar) shows each sensor's reading, target and status, a chart of actual vs. target, and a CSV export. Warnings appear when a sensor drifts from its target during a print, stops reporting, or reads something implausible (see the safety note above).
 
@@ -129,11 +130,13 @@ a row get no usable reply, polling pauses, and Setup and Temperature show *The
 printer doesn't report temperatures* with a **Retry** button.
 
 - `GET /settings`, `PUT /settings` `{"temperature_sensors": true}`,
-  `{"temperature_protocol": "printess"}`: the settings changed in the app, saved
-  to `settings.json` in the app data folder. Only the settings given change.
+  `{"temperature_protocol": "printess"}`, `{"temperature_channels": {"I0":
+  "syringe:left", "I2": "bed"}}`: the settings changed in the app, saved to
+  `settings.json` in the app data folder. Only the settings given change.
   `temperature_protocol` is `null` until one is chosen (then `config.json`'s
   applies); changing it is refused (409) while a print waits for temperatures.
-- `POST /temperature/test`: one `M105`; `{"reply": "ok T:…" | null, "sensors": […]}`.
+- `POST /temperature/test`: one `M105`; `{"reply": "ok T:…" | null, "sensors": […]}`
+  (lab firmware: every channel in the reply, used or not).
 - `POST /temperature/retry`: start polling again after it paused.
 
 - `GET /temperature`: the latest reading, target and status (heating, cooling,
@@ -141,13 +144,16 @@ printer doesn't report temperatures* with a **Retry** button.
   after connecting, `state` is `no_sensors`.
 - `POST /temperature/target` `{"sensor": "T0", "target": 37}`: sets a target with
   `M104` (T, T0, T1…), `M140` (bed) or `M141` (chamber); `0` turns the heater off.
-  With the lab firmware it's a channel, `{"sensor": "I0", …}` (see below).
+  With the lab firmware it's a channel, `{"sensor": "I0", "target": 37,
+  "direction": "heat"}` (`direction` optional; see below).
   Targets outside the sensor's range are refused. This works during a print,
   since it doesn't move anything. `M109`/`M190`, which block the printer until
   the temperature is reached, are never sent.
 - `GET /temperature/history?minutes=30` or `?session_id=…`: readings for a chart.
 - `GET /temperature/export.csv?session_id=…` or `?from=…&to=…` (ISO 8601): CSV
-  download (timestamp, sensor, name, actual, target).
+  download (timestamp, sensor, name, actual, target). The name is the one the
+  sensor had when it was read (readings logged before this was kept: its name
+  now).
 - `POST /print/start` `{"wait_for_temperature": true}`: the print holds its first
   line until every sensor with a target has stayed within ±1 °C of it for 30 s.
   Stopping the print cancels the wait.
@@ -158,37 +164,65 @@ printer doesn't report temperatures* with a **Retry** button.
 The lab's own firmware addresses its heaters differently from Marlin. With
 the protocol set to *Printess lab firmware* on Setup (or, until one is chosen
 there, `temperature.protocol` set to `"printess"` in `config.json`; default
-`"marlin"`), Octaris drives its four heater channels `I0`–`I3`:
+`"marlin"`), Octaris drives its heater channels `I0`–`I3`.
+
+**Its temperature report** is a block of lines, which answers `M105` (the
+`ok` follows as usual) and also comes unasked, e.g. right after connecting
+(twice, before and after *Printer is now online*):
+
+```
+Status:       [Cooling, Disabled, Disabled, Disabled, Disabled]
+Temperatures: [14.94, X, X, X, X]
+Targets:      [15.00, X, X, X, X]
+PWM:          [127, 0, 0, 0, 0]
+```
+
+Entry *n* of each list is channel `In`; `X` means no value (the channel is
+disabled or has no sensor). The lists have five entries; Octaris reads them
+all and uses the first four. Each line is recognised on its own, wherever it
+arrives: it is never taken for another command's reply or an error, and
+doesn't upset the resync after a poll given up on. The status (*Heating*,
+*Cooling*, *Disabled*) and target shown are the firmware's own. This firmware
+is polled with `M105` every 2 s (no `M155`: its block on connect would pass for
+an auto-report).
+
+**Commands**:
 
 - A target goes out as `M104 I<n> T<°C> H` to heat or `M104 I<n> T<°C> C` to
-  cool. Octaris picks **H** when the new target is at or above the channel's
-  current reading and **C** when it is below. Without a reading from that
-  channel the target is refused (*No reading from … yet*), since the direction
-  can't be chosen. A channel only moves the way it was told, so the Temperature
-  screen shows *Heating* or *Cooling* (*heats only* / *cools only*) for as long
-  as it is away from its target.
-- Each channel's reading comes from a key of the `M105` reply, set per channel
-  in `temperature.channels` (`reply_key`, e.g. `T0` → `I0`). The reply is read
-  with the same parser as Marlin's, so `reply_key` has to be one of Marlin's
-  sensor keys (`T`, `T0`, `T1`…, `B`, `C`, `P`, `R`, `W`); keys no channel reads
-  from show as read-only sensors. If the reply carries no `/target`, Octaris
-  shows the target it last sent (forgotten on reconnect).
-- **Off** sends `temperature.off_command`, default `M104 I{n} T0`.
-- The Temperature screen, Setup's **Test sensors** and Take Over's **Set Temp**
-  (channel picker; H/C chosen as above) all use the channels by name, and
-  *Wait for temperature* waits for every channel with a target. A channel
-  target typed by hand in Take Over (`M104 I1 T30 C`) counts as set too.
+  cool; a channel only moves the way it was told. With a current reading,
+  Octaris picks **H** when the new target is at or above it and **C** when it is
+  below. A disabled channel has no reading, so the Temperature screen then
+  offers **Heat to** and **Cool to** instead of **Set**, and the API takes
+  `"direction": "heat"` or `"cool"` (without one, and without a reading, the
+  target is refused with *choose Heat to or Cool to*).
+- **Off** sends `M104 I<n> D` (`temperature.off_command`): the channel becomes
+  *Disabled*, its temperature and target `X`.
+- Targets from 4 to 50 °C (`temperature.channels`, per channel).
 
-> **Not yet confirmed by the lab.** Two parts are guesses until the lab answers:
-> 1. **The `M105` reply format.** Octaris assumes Marlin-style keys, one per
->    channel (`T0:21.3 T1:21.1 T2:20.8 T3:21.6`, with or without `/target`), and
->    maps them with `reply_key`. If the firmware uses other keys (e.g. `I0:`),
->    the reply parser in `serial_manager.py` has to learn them.
-> 2. **How a channel is switched off.** `off_command` (`M104 I{n} T0`) is a
->    guess; change it in `config.json` once the lab says.
->
-> The virtual printer's printess mode answers in the assumed format, so it
-> can't tell whether the guesses are right.
+**What each channel heats** changes between prints: one of the syringes, the
+bed, or nothing. On Setup under *Temperature control* there is one dropdown
+per channel: *Not used*, *Bed*, or one of the printer profile's syringes by
+name. It is saved in `settings.json` (`temperature_channels`) and applies at
+once. The Temperature screen, warnings, logged readings and the CSV export
+name a channel after it (*Left syringe (I0)*, *Bed (I2)*, *Syringe 2 (I1)*).
+Channels not used are hidden, and their readings aren't logged or watched
+(they can only be switched off). A channel assigned to a syringe the printer
+profile no longer has (another profile was chosen, or *Custom* edited) falls
+back to *Not used*, with a warning.
+
+Take Over's **Set Temp** quick command picks a channel in use by name, takes a
+°C value, and has **Heat**, **Cool** and **Off** buttons, each showing the
+command it sends. *Wait for temperature* waits for every channel in use with
+a target; a disabled channel isn't waited for. **Test sensors** lists every
+channel in the reply, used or not.
+
+> **Still to confirm with the lab**: what the fifth list entry is (Octaris
+> ignores it); whether the firmware answers `M155` or sends its block
+> periodically by itself (Octaris doesn't rely on either); other status
+> words than *Heating*, *Cooling* and *Disabled* (shown as they come);
+> whether a target outside 4–50 °C, or `M104` without `H`/`C`, is refused by
+> the firmware itself; and what *Heating* or *Cooling* means once the target
+> is reached (the PWM reads 127 at 14.94/15.00 °C, so it may keep regulating).
 
 ### Manual control (Take Over screen)
 
@@ -263,7 +297,7 @@ The Electron app opens automatically. The backend must be running for any printe
 
 ### Without a printer
 
-Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time. It has the selected printer profile's axes: the `M92` sent on connect and on a change of profile names them, and its `M114` reports them all. With the *Printess lab firmware* protocol chosen on Setup (or `"protocol": "printess"` in `config.json`) when it connects, it simulates the lab firmware's four heater channels instead of Marlin's heaters (it keeps the protocol it connected with until it is reconnected): `M104 I<n> T<°C> H` only heats, `C` only cools, `M104 I<n> T0` switches off, and `M105` answers `ok T0:21.30 T1:21.10 T2:20.80 T3:21.60`.
+Start the backend with `OCTARIS_VIRTUAL_PRINTER=1` and the port selector offers a **Virtual printer**: a simulated Marlin board (`backend/backend/virtual_printer.py`) with a 16-move planner, real move timing, temperatures, resends and M410. The whole app can be used against it. `OCTARIS_VIRTUAL_PRINTER_SPEED=20` runs its moves 20× faster than real time. It has the selected printer profile's axes: the `M92` sent on connect and on a change of profile names them, and its `M114` reports them all. With the *Printess lab firmware* protocol chosen on Setup (or `"protocol": "printess"` in `config.json`) when it connects, it simulates the lab firmware's five heater channels instead of Marlin's heaters (it keeps the protocol it connected with until it is reconnected): it sends the temperature block once unasked on connect and in answer to `M105`, every channel *Disabled* (`X`) until `M104 I<n> T<°C> H` (only heats) or `C` (only cools) sets a target, and `M104 I<n> D` disables it again.
 
 ```bash
 OCTARIS_VIRTUAL_PRINTER=1 uvicorn backend.main:app --host 127.0.0.1 --port 8000
@@ -354,8 +388,8 @@ Everything else, such as the channel names, is only in `config.json`:
 | `profiles` | `{"<id>": {…}}` | Overrides of the built-in profiles and added ones, see [Printer profiles](#printer-profiles). In the app, the Custom profile (*Edit setup*) has its own syringes and bed limits. |
 | `syringe_travel_mm` | number | Plunger travel of a full syringe (default `40`). A print that needs more is refused; a warning appears when less than 10% is left. |
 | `temperature.protocol` | `marlin` / `printess` | How heaters are set: Marlin's `M104`/`M140`/`M141` (default), or the lab firmware's channels, `M104 I<n> T<°C> H\|C` (see *Lab firmware* above). The default until a protocol is chosen on Setup, which is kept in `settings.json` and wins from then on. |
-| `temperature.channels` | `[{"index", "name", "reply_key", "min", "max"}, …]` | `printess` only: each heater channel `I<index>`, its name, the `M105` reply key it reads from (**unconfirmed**), and the targets it accepts (besides 0 for off). Default: `I0`–`I3` reading `T0`–`T3`, 0–120 °C |
-| `temperature.off_command` | string | `printess` only: the command that switches channel `{n}` off. Default `M104 I{n} T0` (**unconfirmed**) |
+| `temperature.channels` | `[{"index", "min", "max"}, …]` | `printess` only: each heater channel `I<index>` (0–3) and the targets it accepts (besides 0 for off). Default: `I0`–`I3`, 4–50 °C. What each heats is chosen on Setup, not here (`name` and `reply_key` from older versions are ignored). |
+| `temperature.off_command` | string | `printess` only: the command that switches channel `{n}` off. Default `M104 I{n} D` |
 | `temperature.sensors` | `{"T0": {"name", "min", "max"}, …}` | A readable name per sensor key the printer reports, and the targets it accepts (besides 0 for off). Unlisted sensors show under their raw key and accept 0–120 °C. |
 | `temperature.retention_days` | number | Logged readings older than this are deleted at startup (default `30`) |
 | `temperature.target_band_c` | number | A sensor counts as at its target within ± this (default `1`) |

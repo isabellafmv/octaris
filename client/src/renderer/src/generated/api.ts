@@ -474,9 +474,11 @@ export interface paths {
         /**
          * Set Temperature Target
          * @description Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with
-         *     the lab firmware (protocol "printess"), a channel's (I<n>) with
-         *     M104 I<n> T<°C> H to heat or C to cool, chosen from its current reading
-         *     (refused without one). Allowed while printing.
+         *     the lab firmware (protocol "printess"), a used channel's (I<n>) with
+         *     M104 I<n> T<°C> H to heat or C to cool: as `direction` says or, without
+         *     it, chosen from its current reading (refused when it has none, as a
+         *     disabled channel doesn't). Off (0) is M104 I<n> D. Allowed while
+         *     printing.
          */
         post: operations["set_temperature_target_temperature_target_post"];
         delete?: never;
@@ -786,10 +788,10 @@ export interface components {
             sensor: string;
             /** Index */
             index: number;
+            /** Use */
+            use: string | null;
             /** Name */
             name: string;
-            /** Reply Key */
-            reply_key: string;
             /** Min */
             min: number;
             /** Max */
@@ -1231,7 +1233,7 @@ export interface components {
             /** Settable */
             settable: boolean;
             /** Actual */
-            actual: number;
+            actual: number | null;
             /** Target */
             target: number | null;
             /**
@@ -1239,6 +1241,11 @@ export interface components {
              * @enum {string}
              */
             status: "heating" | "cooling" | "at_target" | "off";
+            /**
+             * Firmware Status
+             * @default null
+             */
+            firmware_status?: string | null;
             /**
              * Mode
              * @default null
@@ -1254,7 +1261,7 @@ export interface components {
             /** Name */
             name: string;
             /** Actual */
-            actual: number;
+            actual: number | null;
             /** Target */
             target: number | null;
             /**
@@ -1262,6 +1269,8 @@ export interface components {
              * @enum {string}
              */
             status: "heating" | "cooling" | "at_target" | "off";
+            /** Firmware Status */
+            firmware_status?: string | null;
             /** Mode */
             mode?: ("heat" | "cool") | null;
         };
@@ -1312,6 +1321,13 @@ export interface components {
              * @default null
              */
             temperature_protocol?: ("marlin" | "printess") | null;
+            /**
+             * Temperature Channels
+             * @default {}
+             */
+            temperature_channels?: {
+                [key: string]: string;
+            };
         };
         /**
          * Snapshot
@@ -1424,6 +1440,8 @@ export interface components {
             sensor: string;
             /** Target */
             target: number;
+            /** Direction */
+            direction?: ("heat" | "cool") | null;
         };
         /** TemperatureTargetResponse */
         TemperatureTargetResponse: {
@@ -1633,6 +1651,13 @@ export interface components {
              */
             temperature_protocol?: ("marlin" | "printess") | null;
             /**
+             * Temperature Channels
+             * @default {}
+             */
+            temperature_channels?: {
+                [key: string]: string;
+            };
+            /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
@@ -1716,9 +1741,19 @@ export interface components {
         /** Temperature */
         Temperature: {
             /** Actual */
-            actual: number;
+            actual: number | null;
             /** Target */
             target: number | null;
+            /**
+             * Status
+             * @default null
+             */
+            status?: string | null;
+            /**
+             * Pwm
+             * @default null
+             */
+            pwm?: number | null;
         };
         /** TemperatureEvent */
         TemperatureEvent: {

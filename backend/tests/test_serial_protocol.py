@@ -178,8 +178,8 @@ async def test_unsolicited_temperature_reports_while_printing(rig):
     reports = [e for e in events[before:] if e["type"] == "temperature"]
     assert len(reports) >= 5  # arrived while the print was running
     assert reports[-1]["temperatures"] == {
-        "T": {"actual": 21.3, "target": 0.0},
-        "B": {"actual": 20.1, "target": 0.0},
+        "T": {"actual": 21.3, "target": 0.0, "status": None, "pwm": None},
+        "B": {"actual": 20.1, "target": 0.0, "status": None, "pwm": None},
     }
     # Reports never end up in a reply or the serial log.
     reply = await manager.send("M114")
