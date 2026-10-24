@@ -12,12 +12,19 @@ format. Its heaters (hotends T or T0, T1..., bed B, chamber C) take targets
 from M104/M109, M140/M190 and M141 and move towards them over time.
 
 With protocol="printess" it speaks the lab firmware's heater protocol
-instead: channels I0..I3 (reported as T0..T3), set with M104 I<n> T<°C> H to
-heat or C to cool. A channel only moves the way it was told: H heats up to
-the target and never cools, C cools down to it and never heats. M104 I<n> T0
-(Octaris's unconfirmed guess at the off command) switches a channel off and
-it drifts back to ambient. M105 answers "ok T0:21.30 T1:21.10 ..." without
-targets. This is a stand-in until the lab confirms its reply format.
+instead: channels I0..I4, each Disabled until M104 I<n> T<°C> H (heat) or C
+(cool) sets a target. A channel only moves the way it was told: H heats up
+to the target and never cools, C cools down to it and never heats; its
+status is Heating or Cooling accordingly. M104 I<n> D disables it again (it
+drifts back to ambient, unseen). Its temperatures are reported as the lab
+firmware's block, once unasked right after connecting and in answer to M105:
+
+    Status:       [Cooling, Disabled, Disabled, Disabled, Disabled]
+    Temperatures: [14.94, X, X, X, X]
+    Targets:      [15.00, X, X, X, X]
+    PWM:          [127, 0, 0, 0, 0]
+
+X: no value, as for every disabled channel.
 
 Its axes are X, Y and those of `axes` (default: the default printer
 profile's). A move, G92 or M92 on another nozzle axis letter (see
@@ -68,8 +75,10 @@ HEATING_RATE = 2.0
 DEFAULT_SENSORS = {"T": 21.3, "B": 20.1}
 # Dev mode: two syringes, the bed and the chamber
 DEV_SENSORS = {"T0": 21.3, "T1": 21.1, "B": 20.1, "C": 22.0}
-# printess: channel I<n> is reported as T<n>
-PRINTESS_SENSORS = {"T0": 21.3, "T1": 21.1, "T2": 20.8, "T3": 21.6}
+# printess: its five channels (Octaris uses I0..I3)
+PRINTESS_SENSORS = {"I0": 21.3, "I1": 21.1, "I2": 20.8, "I3": 21.6, "I4": 21.0}
+# printess: a channel's PWM while it moves towards its target
+PRINTESS_PWM = 127
 
 _NUMBERED = re.compile(r"^N(\d+)\s+(.*)\*(\d+)$")
 
@@ -241,6 +250,10 @@ class VirtualPrinter:
         self._next_report = 0.0
         self._last_tick = time.monotonic()
         self._stop = threading.Event()
+        if protocol == "printess" and self.temperatures:
+            # The lab firmware reports its channels unasked once it is connected
+            for line in self.temperature_lines():
+                self._out.put(line)
         threading.Thread(target=self._run, name="virtual-printer", daemon=True).start()
 
     # --- pyserial interface -------------------------------------------------
@@ -345,11 +358,34 @@ class VirtualPrinter:
             self._machine_at(self._clock.now())
             return len(self._moves)
 
+    def temperature_lines(self) -> list[str]:
+        """A temperature report, as lines: Marlin's one, or the lab
+        firmware's block (printess)."""
+        if self.protocol != "printess":
+            report = self.temperature_report()
+            return [report] if report else []
+        channels = list(self.temperatures.items())
+
+        def entry(key: str, value: str) -> str:
+            return value if self.modes.get(key) else "X"
+
+        def pwm(key: str, actual: float, target: float) -> str:
+            mode = self.modes.get(key)
+            moving = (mode == "H" and actual < target) or (mode == "C" and actual > target)
+            return str(PRINTESS_PWM if moving else 0)
+
+        status = [
+            {"H": "Heating", "C": "Cooling"}.get(self.modes.get(key) or "", "Disabled") for key, _ in channels
+        ]
+        return [
+            f"Status:       [{', '.join(status)}]",
+            f"Temperatures: [{', '.join(entry(key, f'{actual:.2f}') for key, (actual, _) in channels)}]",
+            f"Targets:      [{', '.join(entry(key, f'{target:.2f}') for key, (_, target) in channels)}]",
+            f"PWM:          [{', '.join(pwm(key, a, t) for key, (a, t) in channels)}]",
+        ]
+
     def temperature_report(self) -> str:
-        """Marlin's format; with several tools, "T:" first repeats the active one (T0).
-        printess: every channel's reading only, "T0:21.30 T1:21.10 ..."."""
-        if self.protocol == "printess":
-            return " ".join(f"{key}:{actual:.2f}" for key, (actual, _) in self.temperatures.items())
+        """Marlin's format; with several tools, "T:" first repeats the active one (T0)."""
         temperatures = dict(self.temperatures)
         if "T" not in temperatures and "T0" in temperatures:
             temperatures = {"T": temperatures["T0"], **temperatures}
@@ -415,8 +451,8 @@ class VirtualPrinter:
                 self.temperatures[key] = (actual, target)
         if self._report_every and now >= self._next_report:
             self._next_report = now + self._report_every
-            if self.temperatures:
-                self._out.put(self.temperature_report())
+            for line in self.temperature_lines():
+                self._out.put(line)
 
     def _wait(self, done: Callable[[], bool]) -> None:
         """Block the command, like Marlin: busy messages and reports go on."""
@@ -512,6 +548,8 @@ class VirtualPrinter:
                 time.sleep(0.002)
             if not self.answers_m105:
                 return []
+            if self.protocol == "printess":
+                return [*self.temperature_lines(), "ok"]
             return [f"ok {self.temperature_report()}".rstrip()]
         elif code == "M110":
             self._last_n = int(params.get("N", 0))
@@ -546,12 +584,15 @@ class VirtualPrinter:
         return ["ok"]
 
     def _channel_target(self, words: list[str]) -> list[str]:
-        """printess: M104 I<n> T<°C> H|C, or M104 I<n> T0 (off)."""
+        """printess: M104 I<n> T<°C> H|C, or M104 I<n> D (off: Disabled)."""
         channel = target = None
         mode: str | None = None
+        disable = False
         for word in words:
             if word in ("H", "C"):
                 mode = word
+            elif word == "D":
+                disable = True
             elif word[:1] in ("I", "T"):
                 try:
                     value = float(word[1:])
@@ -561,14 +602,18 @@ class VirtualPrinter:
                     channel = int(value)
                 else:
                     target = value
-        key = f"T{channel}"
+        key = f"I{channel}"
         if channel is None or key not in self.temperatures:
             return [f"echo:Unknown heater channel I{channel}", "ok"]
-        if target is None or (target and mode is None):
-            return ["echo:M104 needs T<temperature> and H or C", "ok"]
         actual, _ = self.temperatures[key]
+        if disable:
+            self.temperatures[key] = (actual, 0.0)
+            self.modes[key] = None
+            return ["ok"]
+        if target is None or mode is None:
+            return ["echo:M104 needs T<temperature> and H or C, or D", "ok"]
         self.temperatures[key] = (actual, target)
-        self.modes[key] = mode if target else None
+        self.modes[key] = mode
         return ["ok"]
 
     def _m114(self) -> str:

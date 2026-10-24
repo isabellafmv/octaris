@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from backend.routers import get_session
 from backend.schemas import (
+    HeaterMode,
     SensorTestResponse,
     TemperatureHistoryResponse,
     TemperatureStatus,
@@ -81,6 +82,9 @@ async def export_temperature_csv(
 class TemperatureTargetRequest(BaseModel):
     sensor: str
     target: float  # °C; 0 turns the heater off
+    # Lab firmware only: heat (H) or cool (C) to the target. None: chosen
+    # from the channel's current reading (refused without one).
+    direction: HeaterMode | None = None
 
 
 @router.post("/target", response_model=TemperatureTargetResponse)
@@ -88,10 +92,12 @@ async def set_temperature_target(
     body: TemperatureTargetRequest, session: PrinterSession = Depends(get_session)
 ):
     """Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with
-    the lab firmware (protocol "printess"), a channel's (I<n>) with
-    M104 I<n> T<°C> H to heat or C to cool, chosen from its current reading
-    (refused without one). Allowed while printing."""
-    command = await session.set_temperature_target(body.sensor, body.target)
+    the lab firmware (protocol "printess"), a used channel's (I<n>) with
+    M104 I<n> T<°C> H to heat or C to cool: as `direction` says or, without
+    it, chosen from its current reading (refused when it has none, as a
+    disabled channel doesn't). Off (0) is M104 I<n> D. Allowed while
+    printing."""
+    command = await session.set_temperature_target(body.sensor, body.target, body.direction)
     return {"status": "ok", "sensor": body.sensor, "target": body.target, "command": command}
 
 

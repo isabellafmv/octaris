@@ -225,11 +225,13 @@ export const api = {
   retryTemperature: () => json<TemperatureStatus>('/temperature/retry', { method: 'POST' }),
   getTemperatureHistory: (minutes: number) =>
     json<TemperatureHistoryResponse>(`/temperature/history?minutes=${minutes}`),
-  setTemperatureTarget: (sensor: string, target: number) =>
+  // Lab firmware: `direction` heats (H) or cools (C) to the target; without
+  // it the backend chooses from the channel's reading. 0 is off.
+  setTemperatureTarget: (sensor: string, target: number, direction?: 'heat' | 'cool') =>
     json<{ status: string; command: string }>('/temperature/target', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sensor, target })
+      body: JSON.stringify({ sensor, target, direction: direction ?? null })
     }),
   exportTemperatureCsv: (range: TemperatureRange) => {
     const params =

@@ -64,8 +64,10 @@ from backend.printer import (
 from backend.queue_worker import InvalidTransition, PrintStatus, QueueWorker
 from backend.schemas import (
     CalibrationEvent,
+    ChannelUse,
     Event,
     ExtrusionRateEvent,
+    HeaterMode,
     NozzleCalibration,
     PrinterEvent,
     PrinterProfileEvent,
@@ -75,8 +77,9 @@ from backend.schemas import (
     SettingsEvent,
     Snapshot,
     StatusEvent,
+    WarningEvent,
 )
-from backend.serial_manager import SerialError, SerialManager, parse_temperatures
+from backend.serial_manager import SerialError, SerialManager, reply_temperatures
 from backend.settings import PrinterSettings, SettingsStore
 from backend.slicer import PrintSettings, slice_model
 from backend.temperature import TargetError, TemperatureStore
@@ -121,6 +124,26 @@ def offset_unmeasured(profile: PrinterProfile) -> str:
 
 
 TEMPERATURE_OFF = "Temperature control is off — enable it in Setup"
+# A lab firmware channel heating one of the printer profile's syringes:
+# the temperature_channels setting's "syringe:<nozzle id>"
+SYRINGE_USE = "syringe:"
+
+
+def syringe_label(nozzle: NozzleSpec) -> str:
+    """What a channel heating `nozzle` is called: "Left syringe", "Syringe 2"."""
+    return nozzle.name if "syringe" in nozzle.name.lower() else f"{nozzle.name} syringe"
+
+
+def channel_label(use: ChannelUse, profile: PrinterProfile) -> str | None:
+    """What a channel used for `use` is called, or None if `profile` has no
+    such syringe (or `use` means nothing)."""
+    if use == "bed":
+        return "Bed"
+    if use.startswith(SYRINGE_USE):
+        nozzle_id = use[len(SYRINGE_USE) :]
+        nozzle = next((n for n in profile.nozzles if n.id == nozzle_id), None)
+        return syringe_label(nozzle) if nozzle is not None else None
+    return None
 
 
 def profile_errors(exc: ValidationError) -> str:
@@ -213,6 +236,7 @@ class PrinterSession:
         self._run_id = secrets.token_hex(4)
         serial.set_axes(self.profile.axes)
         worker.set_axes(self.profile.axes)
+        self._check_channel_uses()
 
     def _load_custom(self) -> PrinterProfile | None:
         saved = self.settings.printer.custom
@@ -372,8 +396,59 @@ class PrinterSession:
             self._publish(StatusEvent(value="idle"))
         self.reset_calibration()
         self._publish(PrinterProfileEvent(printer=profile))
+        self._check_channel_uses()
         if self.serial.is_connected:
             await self._send_steps_per_mm()
+
+    # --- lab firmware heater channels -----------------------------------------------
+
+    def _check_channel_uses(self) -> None:
+        """Name the lab firmware's channels after what they heat (the
+        temperature_channels setting). A channel assigned to a syringe this
+        profile doesn't have falls back to not used, saved, with a warning."""
+        uses = self.settings.current.temperature_channels
+        kept = {key: use for key, use in uses.items() if channel_label(use, self.profile) is not None}
+        if kept != uses:
+            dropped = ", ".join(sorted(key for key in uses if key not in kept))
+            message = (
+                f"Temperature channel {dropped} was assigned to a syringe the {self.profile.name} "
+                "doesn't have, and is now not used. Assign it again in Setup."
+            )
+            settings = self.settings.current.model_copy(update={"temperature_channels": kept})
+            try:
+                self.settings.save(settings)
+            except OSError:
+                logger.exception("Couldn't save the temperature channels")
+                self.settings.current = settings
+            logger.warning(message)
+            self._publish(WarningEvent(message=message))
+            self._publish(SettingsEvent(**settings.model_dump()))
+        self._apply_channel_uses()
+
+    def _apply_channel_uses(self) -> None:
+        uses = self.settings.current.temperature_channels
+        self.temperature.set_channel_uses(
+            {key: (use, label) for key, use in uses.items() if (label := channel_label(use, self.profile))}
+        )
+
+    def _checked_channel_uses(self, uses: dict[str, ChannelUse]) -> dict[str, ChannelUse]:
+        """A new temperature_channels setting, checked against the configured
+        channels and the profile's syringes; "unused" (or "") entries are
+        dropped. Raises NotReady for an unknown channel or use."""
+        channels = [c.sensor for c in self.config.temperature.channels]
+        result = {}
+        for key, use in uses.items():
+            if key not in channels:
+                raise NotReady(f"Unknown temperature channel {key!r} (there are {', '.join(channels)})")
+            if use in ("", "unused"):
+                continue
+            if channel_label(use, self.profile) is None:
+                syringes = ", ".join(SYRINGE_USE + n.id for n in self.profile.nozzles)
+                raise NotReady(
+                    f"{key} can't be used for {use!r}: choose unused, bed or a syringe ({syringes})"
+                )
+            result[key] = use
+        return result
 
     def _publish_profiles(self) -> None:
         self._publish(PrinterProfilesEvent(selected=self.profile.id, profiles=list(self.profiles.values())))
@@ -605,26 +680,26 @@ class PrinterSession:
         if reason:
             self.worker.invalidate_checkpoint(reason)
         self.worker.manual_command()
-        reply = await self.serial.send(line)
-        # printess: a channel target typed by hand counts as one set here
-        self.temperature.note_command(line)
-        return reply
+        return await self.serial.send(line)
 
-    async def set_temperature_target(self, sensor: str, target: float) -> str:
+    async def set_temperature_target(
+        self, sensor: str, target: float, direction: HeaterMode | None = None
+    ) -> str:
         """Set a heater's target (0: off); returns the command sent.
 
         Allowed while printing, unlike other manual commands: it moves
         nothing, and M104/M140/M141 return at once (M109/M190, which wait
         for the temperature, are never sent). It goes out between two print
-        lines. With the lab firmware (printess) it is M104 I<n> T<°C> H|C.
+        lines. With the lab firmware (printess) it is M104 I<n> T<°C> H|C,
+        heating or cooling as `direction` says, or as the channel's reading
+        does without one, and M104 I<n> D for off.
         """
         try:
-            plan = self.temperature.plan_target(sensor, target)
+            plan = self.temperature.plan_target(sensor, target, direction)
         except TargetError as exc:
             raise NotReady(str(exc)) from exc
         self._require_connection()
         await self.serial.send(plan.command)
-        self.temperature.target_sent(plan)
         return plan.command
 
     async def test_sensors(self) -> SensorTestResponse:
@@ -632,9 +707,7 @@ class PrinterSession:
         return its raw reply, None if none came, with the sensors it lists."""
         self._require_connection()
         reply = await self.serial.test_sensors()
-        found: dict[str, dict[str, float | None]] = {}
-        for line in (reply or "").splitlines():
-            found.update(parse_temperatures(line) or {})
+        found = reply_temperatures(reply or "", self.temperature.config.protocol)
         return SensorTestResponse(reply=reply, sensors=self.temperature.test_readings(found))
 
     def retry_temperature(self) -> None:
@@ -654,6 +727,8 @@ class PrinterSession:
         for its temperatures, and OSError if they can't be saved."""
         old = self.settings.current
         settings = old.model_copy(update={name: getattr(changes, name) for name in changes.model_fields_set})
+        if "temperature_channels" in changes.model_fields_set:
+            settings.temperature_channels = self._checked_channel_uses(changes.temperature_channels)
         protocol = settings.temperature_protocol or self.config.temperature.protocol
         protocol_changed = protocol != self.temperature.config.protocol
         if protocol_changed and self.worker.waiting_for_temperature:
@@ -663,7 +738,10 @@ class PrinterSession:
             self.serial.set_temperature_enabled(settings.temperature_sensors)
             self.temperature.enabled_changed()
         if protocol_changed:
+            self.serial.set_temperature_protocol(protocol)
             self.temperature.protocol_changed(protocol)
+        if settings.temperature_channels != old.temperature_channels:
+            self._apply_channel_uses()
         self._publish(SettingsEvent(**settings.model_dump()))
         return settings
 

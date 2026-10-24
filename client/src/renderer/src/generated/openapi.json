@@ -1049,7 +1049,7 @@
     "/temperature/target": {
       "post": {
         "summary": "Set Temperature Target",
-        "description": "Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with\nthe lab firmware (protocol \"printess\"), a channel's (I<n>) with\nM104 I<n> T<\u00b0C> H to heat or C to cool, chosen from its current reading\n(refused without one). Allowed while printing.",
+        "description": "Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with\nthe lab firmware (protocol \"printess\"), a used channel's (I<n>) with\nM104 I<n> T<\u00b0C> H to heat or C to cool: as `direction` says or, without\nit, chosen from its current reading (refused when it has none, as a\ndisabled channel doesn't). Off (0) is M104 I<n> D. Allowed while\nprinting.",
         "operationId": "set_temperature_target_temperature_target_post",
         "requestBody": {
           "content": {
@@ -1579,12 +1579,19 @@
             "title": "Index",
             "type": "integer"
           },
+          "use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Use"
+          },
           "name": {
             "title": "Name",
-            "type": "string"
-          },
-          "reply_key": {
-            "title": "Reply Key",
             "type": "string"
           },
           "min": {
@@ -1599,8 +1606,8 @@
         "required": [
           "sensor",
           "index",
+          "use",
           "name",
-          "reply_key",
           "min",
           "max"
         ],
@@ -2603,8 +2610,15 @@
             "type": "boolean"
           },
           "actual": {
-            "title": "Actual",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
           },
           "target": {
             "anyOf": [
@@ -2626,6 +2640,18 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "firmware_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Firmware Status"
           },
           "mode": {
             "anyOf": [
@@ -2673,7 +2699,14 @@
             "title": "Name"
           },
           "actual": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Actual"
           },
           "target": {
@@ -2696,6 +2729,17 @@
               "off"
             ],
             "title": "Status"
+          },
+          "firmware_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firmware Status"
           },
           "mode": {
             "anyOf": [
@@ -2830,6 +2874,14 @@
             ],
             "default": null,
             "title": "Temperature Protocol"
+          },
+          "temperature_channels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Temperature Channels",
+            "type": "object"
           }
         },
         "title": "Settings",
@@ -3128,6 +3180,21 @@
           "target": {
             "type": "number",
             "title": "Target"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "heat",
+                  "cool"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
           }
         },
         "type": "object",
@@ -3557,6 +3624,14 @@
             "default": null,
             "title": "Temperature Protocol"
           },
+          "temperature_channels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Temperature Channels",
+            "type": "object"
+          },
           "type": {
             "const": "settings",
             "default": "settings",
@@ -3767,8 +3842,15 @@
       "Temperature": {
         "properties": {
           "actual": {
-            "title": "Actual",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
           },
           "target": {
             "anyOf": [
@@ -3780,6 +3862,30 @@
               }
             ],
             "title": "Target"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "pwm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pwm"
           }
         },
         "required": [

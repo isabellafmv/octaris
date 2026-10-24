@@ -24,12 +24,12 @@
       "C": { "name": "Chamber", "min": 4, "max": 45 }
     },
     "channels": [
-      { "index": 0, "name": "Channel 0", "reply_key": "T0", "min": 4, "max": 60 },
-      { "index": 1, "name": "Channel 1", "reply_key": "T1", "min": 4, "max": 60 },
-      { "index": 2, "name": "Channel 2", "reply_key": "T2", "min": 4, "max": 60 },
-      { "index": 3, "name": "Channel 3", "reply_key": "T3", "min": 4, "max": 60 }
+      { "index": 0, "min": 4, "max": 50 },
+      { "index": 1, "min": 4, "max": 50 },
+      { "index": 2, "min": 4, "max": 50 },
+      { "index": 3, "min": 4, "max": 50 }
     ],
-    "off_command": "M104 I{n} T0",
+    "off_command": "M104 I{n} D",
     "retention_days": 30
   }
 }

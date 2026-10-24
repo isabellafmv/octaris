@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 
 import pytest
 
-from backend.serial_manager import number_line, parse_temperatures
+from backend.serial_manager import number_line, parse_block
 from backend.virtual_printer import PRINTESS_SENSORS, VirtualPrinter
 
 
@@ -223,63 +224,100 @@ def test_hold_freezes_motion_at_a_point(make):
 # --- lab firmware (printess) heater channels ----------------------------------------------
 
 
-def test_printess_reports_its_channels(make):
-    printer = make(protocol="printess", sensors=PRINTESS_SENSORS)
-    reply = send(printer, "M105")
-    assert reply == ["ok T0:21.30 T1:21.10 T2:20.80 T3:21.60"]
-    # In a format Octaris reads: actual only, no target
-    assert parse_temperatures(reply[0]) == {
-        "T0": {"actual": 21.3, "target": None},
-        "T1": {"actual": 21.1, "target": None},
-        "T2": {"actual": 20.8, "target": None},
-        "T3": {"actual": 21.6, "target": None},
-    }
+def lab(make, **options) -> VirtualPrinter:
+    """A virtual lab firmware, past the block it sends unasked on connect."""
+    printer = make(protocol="printess", **options)
+    read_until(printer, lambda line: line.startswith("PWM:"))
+    return printer
+
+
+def test_printess_sends_its_block_unasked_on_connect(make):
+    printer = make(protocol="printess", sensors={"I0": 21.0, "I1": 21.0, "I2": 21.0, "I3": 21.0, "I4": 21.0})
+    assert read_until(printer, lambda line: line.startswith("PWM:")) == [
+        "Status:       [Disabled, Disabled, Disabled, Disabled, Disabled]",
+        "Temperatures: [X, X, X, X, X]",
+        "Targets:      [X, X, X, X, X]",
+        "PWM:          [0, 0, 0, 0, 0]",
+    ]
+    time.sleep(0.05)
+    assert printer.readline() == b""  # once only
+
+
+def test_printess_m105_answers_with_the_block(make):
+    printer = lab(make, sensors={"I0": 14.94, "I1": 21.0, "I2": 21.0, "I3": 21.0, "I4": 21.0})
+    printer.temperatures["I0"] = (14.94, 15.0)
+    printer.modes["I0"] = "C"
+    assert send(printer, "M105") == [
+        "Status:       [Cooling, Disabled, Disabled, Disabled, Disabled]",
+        "Temperatures: [14.94, X, X, X, X]",
+        "Targets:      [15.00, X, X, X, X]",
+        "PWM:          [0, 0, 0, 0, 0]",  # at its target
+        "ok",
+    ]
+    # In the format Octaris reads
+    readings = parse_block("\n".join(send(printer, "M105")))
+    assert readings is not None
+    assert readings["I0"] == {"actual": 14.94, "target": 15.0, "status": "Cooling", "pwm": 0.0}
 
 
 def test_printess_channels_heat_and_cool(make):
-    printer = make(protocol="printess", speed=50, sensors={"T0": 21.0, "T1": 21.0})  # 100 °C/s
+    printer = lab(make, speed=50, sensors={"I0": 21.0, "I1": 21.0})  # 100 °C/s
     assert send(printer, "M104 I0 T37 H") == ["ok"]
     assert send(printer, "M104 I1 T10 C") == ["ok"]
+    status, temperatures, targets, pwm, ok = send(printer, "M105")
+    assert (status, targets, pwm, ok) == (
+        "Status:       [Heating, Cooling]",
+        "Targets:      [37.00, 10.00]",
+        "PWM:          [127, 127]",
+        "ok",
+    )
+    assert re.fullmatch(r"Temperatures: \[\d+\.\d\d, \d+\.\d\d\]", temperatures)
     time.sleep(0.3)
-    assert printer.temperatures == {"T0": (37.0, 37.0), "T1": (10.0, 10.0)}
-    assert printer.modes == {"T0": "H", "T1": "C"}
+    assert printer.temperatures == {"I0": (37.0, 37.0), "I1": (10.0, 10.0)}
+    assert printer.modes == {"I0": "H", "I1": "C"}
 
 
 def test_printess_heat_only_heats_and_cool_only_cools(make):
-    printer = make(protocol="printess", speed=50, sensors={"T0": 30.0, "T1": 30.0})
+    printer = lab(make, speed=50, sensors={"I0": 30.0, "I1": 30.0})
     send(printer, "M104 I0 T20 H")  # below: heating can't get there
     send(printer, "M104 I1 T40 C")  # above: cooling can't get there
     time.sleep(0.3)
-    assert printer.temperatures == {"T0": (30.0, 20.0), "T1": (30.0, 40.0)}
+    assert printer.temperatures == {"I0": (30.0, 20.0), "I1": (30.0, 40.0)}
 
 
-def test_printess_off_returns_to_ambient(make):
-    printer = make(protocol="printess", speed=50, sensors={"T0": 21.0})
+def test_printess_d_disables_a_channel(make):
+    printer = lab(make, speed=50, sensors={"I0": 21.0, "I1": 21.0})
     send(printer, "M104 I0 T37 H")
     time.sleep(0.3)
-    assert send(printer, "M104 I0 T0") == ["ok"]
+    assert send(printer, "M104 I0 D") == ["ok"]
+    assert send(printer, "M105")[:3] == [
+        "Status:       [Disabled, Disabled]",
+        "Temperatures: [X, X]",
+        "Targets:      [X, X]",
+    ]
     time.sleep(0.3)
-    assert printer.temperatures["T0"] == (21.0, 0.0)
-    assert printer.modes["T0"] is None
+    assert printer.temperatures["I0"] == (21.0, 0.0)  # back at ambient, unseen
+    assert printer.modes["I0"] is None
 
 
 @pytest.mark.parametrize(
     ("command", "echo"),
     [
-        ("M104 I0 T37", "echo:M104 needs T<temperature> and H or C"),
-        ("M104 I0 H", "echo:M104 needs T<temperature> and H or C"),
+        ("M104 I0 T37", "echo:M104 needs T<temperature> and H or C, or D"),
+        ("M104 I0 H", "echo:M104 needs T<temperature> and H or C, or D"),
         ("M104 I7 T37 H", "echo:Unknown heater channel I7"),
         ("M104 S37", "echo:Unknown heater channel INone"),
     ],
 )
 def test_printess_rejects_incomplete_targets(make, command, echo):
-    printer = make(protocol="printess", sensors={"T0": 21.0})
+    printer = lab(make, sensors={"I0": 21.0})
     assert send(printer, command) == [echo, "ok"]
-    assert printer.temperatures["T0"] == (21.0, 0.0)
+    assert printer.temperatures["I0"] == (21.0, 0.0)
+    assert printer.modes["I0"] is None
 
 
 def test_printess_without_m105_answers(make):
-    printer = make(protocol="printess", sensors=PRINTESS_SENSORS, answers_m105=False)
+    printer = lab(make, sensors=PRINTESS_SENSORS, answers_m105=False)
     printer.write(b"M105\n")
     time.sleep(0.1)
     assert printer.readline() == b""

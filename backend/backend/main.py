@@ -48,6 +48,8 @@ GRACEFUL_SHUTDOWN_S = 1
 def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: SettingsStore | None = None) -> None:
     """Build the app's components on app.state. Also used by the tests."""
     settings = settings or SettingsStore()
+    # The protocol chosen in the app replaces config.json's
+    protocol = settings.current.temperature_protocol or config.temperature.protocol
     event_bus = EventBus()
     history = PrintHistory(db)
     serial_manager = SerialManager(
@@ -57,13 +59,12 @@ def wire(app: FastAPI, config: Config, db: sqlite3.Connection, settings: Setting
         temperature_enabled=settings.current.temperature_sensors,
         on_monitor=lambda: temperature.monitor_changed(),
         axes=config.profile.axes,
+        temperature_protocol=protocol,
     )
     temperature = TemperatureStore(
         db,
-        # A copy: the protocol chosen in the app replaces config.json's
-        config.temperature.model_copy(
-            update={"protocol": settings.current.temperature_protocol or config.temperature.protocol}
-        ),
+        # A copy, with the protocol in use
+        config.temperature.model_copy(update={"protocol": protocol}),
         session_id=lambda: history.session_id,
         is_connected=lambda: serial_manager.is_connected,
         is_printing=lambda: queue_worker.print_active and not queue_worker.waiting_for_temperature,
