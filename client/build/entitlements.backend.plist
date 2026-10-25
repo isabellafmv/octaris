@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime exceptions for the executables build.py signs inside
+  Resources/backend: the PyInstaller bootloader (octaris-backend) and the
+  bundled CuraEngine / UltiMaker-Cura. Libraries (.dylib, .so) ignore
+  entitlements; they run under the rules of the process that loads them.
+
+  Intentionally empty. Checked against a signed build:
+  - disable-library-validation: not needed. build.py signs every library in
+    the bundle with the same Developer ID (same Team ID), so library
+    validation passes. Needed only if the backend loaded a library signed by
+    someone else, or unsigned, at runtime.
+  - allow-unsigned-executable-memory / allow-jit: not needed. CPython 3.13
+    has no JIT, ctypes on Apple Silicon uses libffi's static trampolines, and
+    CuraEngine is plain native code.
+  If a future dependency needs one (the backend log shows "code signature
+  not valid for use in process" or a crash in a JIT), add it here, with the
+  reason.
+-->
+<plist version="1.0">
+  <dict/>
+</plist>
