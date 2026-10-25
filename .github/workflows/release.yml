@@ -29,8 +29,10 @@ jobs:
         working-directory: client
       # Builds only. To publish the GitHub release electron-updater reads,
       # pass --publish always and set GH_TOKEN (with contents: write).
+      # Unsigned: the runner has no Developer ID certificate (see README,
+      # "Signed macOS build", for building a signed release locally).
       - name: Build
-        run: ./build.sh --publish never
+        run: ./build.sh --unsigned --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: octaris-${{ github.ref_name }}

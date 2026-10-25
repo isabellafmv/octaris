@@ -3,6 +3,7 @@ import { api } from '../api'
 import { SensorCard } from '../components/SensorCard'
 import { SensorsNotReporting, TEMPERATURE_OFF_HINT } from '../components/SensorsNotReporting'
 import { TemperatureChart, type ChartSeries } from '../components/TemperatureChart'
+import { usedChannels } from '../components/temperatureChannels'
 import { compareSensors, sensorColorVar } from '../components/temperatureColors'
 import { RANGES_MIN, useTemperature } from '../stores/temperature'
 
@@ -72,10 +73,12 @@ export function TemperatureScreen({
 
   const state = status?.state ?? (printerConnected ? 'waiting' : 'disconnected')
   const readings = useMemo(() => status?.sensors ?? [], [status])
-  // Lab firmware: configured channels the printer's reply doesn't include
-  const silentChannels = (status?.channels ?? []).filter(
-    (c) => !readings.some((r) => r.sensor === c.sensor)
-  )
+  // Lab firmware: only the channels assigned to something are shown
+  const printess = status?.protocol === 'printess'
+  const channels = usedChannels(status)
+  const noChannels = printess && channels.length === 0
+  // Channels in use the printer's reply doesn't include
+  const silentChannels = channels.filter((c) => !readings.some((r) => r.sensor === c.sensor))
 
   const chartSeries = useMemo<ChartSeries[]>(() => {
     const all = Object.keys(sensors)
@@ -150,6 +153,11 @@ export function TemperatureScreen({
             title="Printer not connected"
             hint="Connect the printer on the Setup screen to read and set its temperatures."
           />
+        ) : noChannels ? (
+          <EmptyState
+            title="No heater channel in use"
+            hint="Choose what each channel heats (a syringe or the bed) on the Setup screen, under Temperature control."
+          />
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
             {readings.map((reading) => (
@@ -158,6 +166,7 @@ export function TemperatureScreen({
                 reading={reading}
                 colorVar={sensorColorVar(reading.sensor, allSensors)}
                 disabled={!printerConnected}
+                printess={printess}
               />
             ))}
             {silentChannels.map((channel) => (
@@ -166,9 +175,8 @@ export function TemperatureScreen({
                 className="rounded-2xl p-4 flex flex-col gap-1 bg-surface-card text-text-muted"
               >
                 <span className="text-sm font-semibold text-text-secondary">{channel.name}</span>
-                <span className="text-[10px] font-mono text-text-subtle">{channel.sensor}</span>
                 <p className="text-xs mt-2">
-                  No reading: the printer&apos;s reply has no {channel.reply_key}
+                  No reading: the printer&apos;s reply doesn&apos;t list {channel.sensor}
                 </p>
               </div>
             ))}

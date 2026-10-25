@@ -280,9 +280,11 @@ export interface paths {
         put?: never;
         /**
          * Jog
-         * @description Move one axis, or several together (`axes`), by `distance`. Each
-         *     axis is checked against the bed limits once zeroed; 400 if one would
-         *     leave the bed, and then nothing moves.
+         * @description Move one axis, or several together (`axes`: X, Y, the profile's
+         *     height axes and plungers), by `distance` (mm, at most 200 either way) at
+         *     `feed_rate` (mm/min, 1 to 3000). Each axis is checked against the bed
+         *     limits once zeroed; 400 if one would leave the bed, and then nothing
+         *     moves.
          */
         post: operations["jog_jog_post"];
         delete?: never;
@@ -300,7 +302,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Go To Origin */
+        /**
+         * Go To Origin
+         * @description Travel to X0 Y0 at `xy_feed` and, with `lower`, then lower the
+         *     selected nozzles' height axes to their zero at `z_feed`.
+         */
         post: operations["go_to_origin_jog_origin_post"];
         delete?: never;
         options?: never;
@@ -474,9 +480,11 @@ export interface paths {
         /**
          * Set Temperature Target
          * @description Set a heater's target with M104 (T, T<n>), M140 (B) or M141 (C); with
-         *     the lab firmware (protocol "printess"), a channel's (I<n>) with
-         *     M104 I<n> T<°C> H to heat or C to cool, chosen from its current reading
-         *     (refused without one). Allowed while printing.
+         *     the lab firmware (protocol "printess"), a used channel's (I<n>) with
+         *     M104 I<n> T<°C> H to heat or C to cool: as `direction` says or, without
+         *     it, chosen from its current reading (refused when it has none, as a
+         *     disabled channel doesn't). Off (0) is M104 I<n> D. Allowed while
+         *     printing.
          */
         post: operations["set_temperature_target_temperature_target_post"];
         delete?: never;
@@ -617,10 +625,11 @@ export interface paths {
         /**
          * Save Custom Profile
          * @description Save the Custom profile and select it, as PUT /printer does (refused
-         *     during a print). 400 lists every problem: each axis must be one of Z, A,
-         *     B, C, I, J, K, U, V, W, used once in the profile, and a syringe's height
-         *     and plunger axis must differ; 1 to 6 syringes; each bed limit's min
-         *     below its max.
+         *     during a print), and sends a connected printer its steps/mm (M92).
+         *     400 lists every problem: each axis must be one of Z, A, B, C, I, J, K,
+         *     U, V, W, D, used once in the profile, and a syringe's height and plunger
+         *     axis must differ; 1 to 6 syringes; each bed limit's min below its max;
+         *     steps/mm above 0.
          */
         put: operations["save_custom_profile_printer_custom_put"];
         post?: never;
@@ -786,10 +795,10 @@ export interface components {
             sensor: string;
             /** Index */
             index: number;
+            /** Use */
+            use: string | null;
             /** Name */
             name: string;
-            /** Reply Key */
-            reply_key: string;
             /** Min */
             min: number;
             /** Max */
@@ -812,11 +821,11 @@ export interface components {
         };
         /**
          * CustomProfileRequest
-         * @description The Custom profile's nozzles, left to right, and its bed limits, as
-         *     edited on the Setup screen. Its build volume and steps/mm (and the bed,
-         *     without `bed`) are kept from the Custom profile saved before or, the
-         *     first time, copied from `base` (the profile being edited; default: the
-         *     selected one).
+         * @description The Custom profile's nozzles, left to right, its bed limits and
+         *     steps/mm, as edited on the Setup screen. Its build volume (and the bed
+         *     and steps/mm, without `bed` or `steps_per_mm`) are kept from the Custom
+         *     profile saved before or, the first time, copied from `base` (the profile
+         *     being edited; default: the selected one).
          */
         CustomProfileRequest: {
             /** Nozzles */
@@ -829,6 +838,8 @@ export interface components {
             /** Base */
             base?: string | null;
             bed?: components["schemas"]["BedFields"] | null;
+            /** Steps Per Mm */
+            steps_per_mm?: number | null;
         };
         /** DisconnectResponse */
         DisconnectResponse: {
@@ -1036,6 +1047,16 @@ export interface components {
              * @default false
              */
             lower?: boolean;
+            /**
+             * Xy Feed
+             * @default 300
+             */
+            xy_feed?: number;
+            /**
+             * Z Feed
+             * @default 300
+             */
+            z_feed?: number;
         };
         /** OriginResponse */
         OriginResponse: {
@@ -1231,7 +1252,7 @@ export interface components {
             /** Settable */
             settable: boolean;
             /** Actual */
-            actual: number;
+            actual: number | null;
             /** Target */
             target: number | null;
             /**
@@ -1239,6 +1260,11 @@ export interface components {
              * @enum {string}
              */
             status: "heating" | "cooling" | "at_target" | "off";
+            /**
+             * Firmware Status
+             * @default null
+             */
+            firmware_status?: string | null;
             /**
              * Mode
              * @default null
@@ -1254,7 +1280,7 @@ export interface components {
             /** Name */
             name: string;
             /** Actual */
-            actual: number;
+            actual: number | null;
             /** Target */
             target: number | null;
             /**
@@ -1262,6 +1288,8 @@ export interface components {
              * @enum {string}
              */
             status: "heating" | "cooling" | "at_target" | "off";
+            /** Firmware Status */
+            firmware_status?: string | null;
             /** Mode */
             mode?: ("heat" | "cool") | null;
         };
@@ -1312,6 +1340,13 @@ export interface components {
              * @default null
              */
             temperature_protocol?: ("marlin" | "printess") | null;
+            /**
+             * Temperature Channels
+             * @default {}
+             */
+            temperature_channels?: {
+                [key: string]: string;
+            };
         };
         /**
          * Snapshot
@@ -1424,6 +1459,8 @@ export interface components {
             sensor: string;
             /** Target */
             target: number;
+            /** Direction */
+            direction?: ("heat" | "cool") | null;
         };
         /** TemperatureTargetResponse */
         TemperatureTargetResponse: {
@@ -1633,6 +1670,13 @@ export interface components {
              */
             temperature_protocol?: ("marlin" | "printess") | null;
             /**
+             * Temperature Channels
+             * @default {}
+             */
+            temperature_channels?: {
+                [key: string]: string;
+            };
+            /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
@@ -1716,9 +1760,19 @@ export interface components {
         /** Temperature */
         Temperature: {
             /** Actual */
-            actual: number;
+            actual: number | null;
             /** Target */
             target: number | null;
+            /**
+             * Status
+             * @default null
+             */
+            status?: string | null;
+            /**
+             * Pwm
+             * @default null
+             */
+            pwm?: number | null;
         };
         /** TemperatureEvent */
         TemperatureEvent: {

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { SliceOptions } from '../api'
+import { DEFAULT_FEED } from '../components/jogControls'
 import type { NordsonTip } from '../data/nordsonTips'
 
 // Numeric fields are kept as the raw input text; empty means "backend default".
@@ -13,14 +14,22 @@ interface PrintSettingsState extends PrintParameters {
   // least one. Kept to the printer profile's nozzles by stores/printer.ts.
   selectedNozzles: string[]
   jogStep: number
-  // The syringes whose heights the jog panel moves, picked by hand; null:
-  // follow selectedNozzles (see components/jogHeights.ts)
+  // Jog feed rates in mm/min: X/Y, and the heights and plungers (also Go
+  // to Origin's travel and lowering)
+  jogXyFeed: number
+  jogZFeed: number
+  // The syringes whose heights / plungers the jog panel moves, picked by
+  // hand; null: follow selectedNozzles (see components/jogControls.ts)
   jogHeightNozzles: string[] | null
+  jogPlungerNozzles: string[] | null
   // Gauge of the picked Nordson tip; null once the nozzle diameter is typed by hand
   nordsonGauge: number | null
   selectNordsonTip: (tip: NordsonTip) => void
   setJogStep: (step: number) => void
+  setJogXyFeed: (feed: number) => void
+  setJogZFeed: (feed: number) => void
   setJogHeightNozzles: (ids: string[]) => void
+  setJogPlungerNozzles: (ids: string[]) => void
   setSelectedNozzles: (ids: string[]) => void
   // Select or deselect one; the last selected one can't be deselected
   toggleNozzle: (id: string) => void
@@ -38,12 +47,18 @@ export const usePrintSettings = create<PrintSettingsState>()((set) => ({
   travelRetractMultiplier: '3',
   printSpeed: '300', // mm/min (5 mm/s)
   jogStep: 5,
+  jogXyFeed: DEFAULT_FEED,
+  jogZFeed: DEFAULT_FEED,
   jogHeightNozzles: null,
+  jogPlungerNozzles: null,
   nordsonGauge: null,
   selectNordsonTip: (tip) =>
     set({ nordsonGauge: tip.gauge, nozzleDiameter: String(tip.innerDiameterMm) }),
   setJogStep: (jogStep) => set({ jogStep }),
+  setJogXyFeed: (jogXyFeed) => set({ jogXyFeed }),
+  setJogZFeed: (jogZFeed) => set({ jogZFeed }),
   setJogHeightNozzles: (jogHeightNozzles) => set({ jogHeightNozzles }),
+  setJogPlungerNozzles: (jogPlungerNozzles) => set({ jogPlungerNozzles }),
   setSelectedNozzles: (selectedNozzles) => set({ selectedNozzles }),
   toggleNozzle: (id) =>
     set(({ selectedNozzles }) => {

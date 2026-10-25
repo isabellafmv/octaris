@@ -50,7 +50,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["gi", "gtk", "gobject", "_tkinter", "tkinter"],
+    excludes=[
+        "gi", "gtk", "gobject", "_tkinter", "tkinter",
+        # Dev tools (the [dev] extras), in case the building Python has them:
+        # pydantic's hook collects pydantic.mypy, which imports all of mypy,
+        # and anyio imports pytest's outcomes if it can
+        "mypy", "pydantic.mypy", "pydantic.v1.mypy", "pytest", "_pytest",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

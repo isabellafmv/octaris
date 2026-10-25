@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import platform
-import re
 import sys
 from pathlib import Path
 from typing import Any, Literal
@@ -58,30 +57,25 @@ class SensorConfig(BaseModel):
         return self
 
 
-# The sensor keys serial_manager.parse_temperatures reads from a reply
-# (Marlin's), so the only keys a printess channel can read from
-REPLY_KEY = re.compile(r"^(T\d*|B|C|P|R|W)$")
+# The lab firmware's channels, I0..I3. Its M105 reply lists more (5 so far),
+# but only these are wired up.
+CHANNEL_COUNT = 4
 
 
 class ChannelConfig(BaseModel):
-    """One heater channel of the lab (printess) firmware: M104 I<index> ..."""
+    """One heater channel of the lab (printess) firmware: M104 I<index> ...
+    What it heats (a syringe, the bed or nothing) is chosen in the app, the
+    temperature_channels setting."""
 
-    index: int = Field(ge=0)
-    name: str
-    # The key in the M105 reply this channel's reading is under (e.g. "T0").
-    # UNCONFIRMED: the lab hasn't said yet what its M105 reply looks like.
-    reply_key: str
-    min: float = 0.0
-    max: float = 120.0
+    index: int = Field(ge=0, lt=CHANNEL_COUNT)
+    # The targets it accepts, besides 0 (off)
+    min: float = 4.0
+    max: float = 50.0
 
     @model_validator(mode="after")
     def _check(self) -> ChannelConfig:
         if self.min >= self.max:
             raise ValueError(f"min ({self.min}) must be below max ({self.max})")
-        if not REPLY_KEY.match(self.reply_key):
-            raise ValueError(
-                f"reply_key {self.reply_key!r} isn't a sensor key of a Marlin temperature report"
-            )
         return self
 
     @property
@@ -91,7 +85,7 @@ class ChannelConfig(BaseModel):
 
 
 def _default_channels() -> list[ChannelConfig]:
-    return [ChannelConfig(index=n, name=f"Channel {n}", reply_key=f"T{n}") for n in range(4)]
+    return [ChannelConfig(index=n) for n in range(CHANNEL_COUNT)]
 
 
 class TemperatureConfig(BaseModel):
@@ -101,11 +95,10 @@ class TemperatureConfig(BaseModel):
     # By the key the printer reports ("T0", "B", ...). A sensor not listed
     # here shows under its raw key with SensorConfig's default range.
     sensors: dict[str, SensorConfig] = {}
-    # printess only: the heater channels, each read from a key of the M105 reply
+    # printess only: the heater channels and the targets each accepts
     channels: list[ChannelConfig] = Field(default_factory=_default_channels)
-    # printess only: the command that switches channel {n} off.
-    # UNCONFIRMED: a guess until the lab says how a channel is switched off.
-    off_command: str = "M104 I{n} T0"
+    # printess only: the command that switches channel {n} off (Disabled)
+    off_command: str = "M104 I{n} D"
     # Readings older than this are deleted from the database at startup
     retention_days: float = 30.0
     # A sensor counts as at its target within ± this (status, and waiting
@@ -122,10 +115,9 @@ class TemperatureConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_channels(self) -> TemperatureConfig:
-        for attribute in ("index", "reply_key"):
-            values = [getattr(channel, attribute) for channel in self.channels]
-            if len(values) != len(set(values)):
-                raise ValueError(f"Two temperature channels have the same {attribute}")
+        indexes = [channel.index for channel in self.channels]
+        if len(indexes) != len(set(indexes)):
+            raise ValueError("Two temperature channels have the same index")
         try:
             self.off_command.format(n=0)
         except (KeyError, IndexError, ValueError) as exc:

@@ -14,6 +14,13 @@ is queued, and a poll in flight gives way to one that arrives. The "ok" of a
 poll given up on may still come, and can't be told from the next command's by
 itself, so the next exchange starts with an M114 that only counts as answered
 once its position report is in: any "ok" before that is the poll's.
+
+The lab firmware (temperature protocol "printess") reports its heater
+channels in a block of lines instead of Marlin's "T:... B:..." (see
+PrintessBlock). The block answers M105 and also comes unasked (after
+connecting), so its lines are never taken for a command's reply. That
+firmware is polled with M105: no M155, as its block on connect would pass
+for an auto-report.
 """
 
 from __future__ import annotations
@@ -34,9 +41,17 @@ import serial
 import serial.tools.list_ports
 
 from backend.checkpoint import parse_m114
+from backend.config import CHANNEL_COUNT
 from backend.gcode_processor import MachineState, step
 from backend.printer import Axes, default_axes
-from backend.schemas import Event, PrinterEvent, SerialLogEvent, TemperatureEvent, TemperatureMonitor
+from backend.schemas import (
+    Event,
+    PrinterEvent,
+    SerialLogEvent,
+    TemperatureEvent,
+    TemperatureMonitor,
+    TemperatureProtocol,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +94,9 @@ _RESEND = re.compile(r"^(?:resend:?|rs)\s*N?:?\s*(\d+)", re.IGNORECASE)
 # "T:21.30 /0.00 B:20.10 /0.00 @:0 B@:0". M114's "X:... B:... C:..." does not.
 _TEMPERATURE_REPORT = re.compile(r"^(?:ok\s+)?(?:T\d*|B|C|P|R|W):\s*-?\d")
 _TEMPERATURE = re.compile(r"\b(T\d*|B|C|P|R|W):\s*(-?\d+(?:\.\d+)?)(?:\s*/\s*(-?\d+(?:\.\d+)?))?")
+# A line of the lab firmware's temperature block: "Temperatures: [14.94, X, X, X, X]"
+_BLOCK_LINE = re.compile(r"^(Status|Temperatures|Targets|PWM)\s*:\s*\[(.*)\]\s*$", re.IGNORECASE)
+BLOCK_KEYS = ("Status", "Temperatures", "Targets", "PWM")
 _M110 = re.compile(r"^M110\b.*?\bN(\d+)", re.IGNORECASE)
 # Errors Marlin sends just before a "Resend:" request — not a reply by themselves.
 _RESEND_ERRORS = ("checksum", "line number", "last line")
@@ -155,6 +173,106 @@ def parse_temperatures(line: str) -> dict[str, dict[str, float | None]] | None:
     }
 
 
+# One reading per sensor, as a TemperatureEvent carries it:
+# {"I0": {"actual": 14.94, "target": 15.0, "status": "Cooling", "pwm": 127.0}, ...}
+Readings = dict[str, dict[str, Any]]
+
+
+def parse_block_line(line: str) -> tuple[str, list[str]] | None:
+    """("Temperatures", ["14.94", "X", ...]) for a line of the lab
+    firmware's temperature block, else None."""
+    match = _BLOCK_LINE.match(line)
+    if not match:
+        return None
+    key = next(k for k in BLOCK_KEYS if k.lower() == match.group(1).lower())
+    body = match.group(2).strip()
+    return key, [item.strip() for item in body.split(",")] if body else []
+
+
+def _value(items: list[str] | None, n: int) -> str | None:
+    """Entry `n` of a block list; None for X (no value) or a missing entry."""
+    if items is None or n >= len(items) or items[n].upper() in ("X", ""):
+        return None
+    return items[n]
+
+
+def _number(item: str | None) -> float | None:
+    if item is None:
+        return None
+    try:
+        return float(item)
+    except ValueError:
+        return None
+
+
+def block_readings(lists: dict[str, list[str]]) -> Readings | None:
+    """A block's lists as one reading per channel (I0..I3; the lists may be
+    longer), or None without a Temperatures line."""
+    temperatures = lists.get("Temperatures")
+    if temperatures is None:
+        return None
+    return {
+        f"I{n}": {
+            "actual": _number(_value(temperatures, n)),
+            "target": _number(_value(lists.get("Targets"), n)),
+            "status": _value(lists.get("Status"), n),
+            "pwm": _number(_value(lists.get("PWM"), n)),
+        }
+        for n in range(min(CHANNEL_COUNT, len(temperatures)))
+    }
+
+
+class PrintessBlock:
+    """Puts the lab firmware's temperature block back together from its lines:
+
+        Status:       [Cooling, Disabled, Disabled, Disabled, Disabled]
+        Temperatures: [14.94, X, X, X, X]
+        Targets:      [15.00, X, X, X, X]
+        PWM:          [127, 0, 0, 0, 0]
+
+    Entry n of each list is channel I<n>; X: no value. A block is complete
+    once each list is in, or ends at the first other line or when a list
+    repeats (the next block started).
+    """
+
+    def __init__(self) -> None:
+        self._lists: dict[str, list[str]] = {}
+
+    def feed(self, key: str, items: list[str]) -> Readings | None:
+        """Take one parsed line (parse_block_line); returns a block it completes."""
+        done = self.end() if key in self._lists else None
+        self._lists[key] = items
+        if len(self._lists) == len(BLOCK_KEYS):
+            return self.end()
+        return done
+
+    def end(self) -> Readings | None:
+        """The block so far is all there is: its readings, if it has any."""
+        lists, self._lists = self._lists, {}
+        return block_readings(lists)
+
+
+def parse_block(text: str) -> Readings | None:
+    """The last block in a reply (several lines), if there is one."""
+    block = PrintessBlock()
+    found: Readings | None = None
+    for line in text.splitlines():
+        parsed = parse_block_line(line.strip())
+        readings = block.feed(*parsed) if parsed else block.end()
+        found = readings or found
+    return block.end() or found
+
+
+def reply_temperatures(reply: str, protocol: TemperatureProtocol) -> Readings:
+    """Every sensor in a reply to M105, read the way `protocol` reports them."""
+    if protocol == "printess":
+        return parse_block(reply) or {}
+    found: Readings = {}
+    for line in reply.splitlines():
+        found.update(parse_temperatures(line) or {})
+    return found
+
+
 @dataclass
 class _Pending:
     """The one command in flight. While set, nothing else may be sent."""
@@ -196,6 +314,7 @@ class SerialManager:
         temperature_enabled: bool = False,
         on_monitor: Callable[[], None] | None = None,
         axes: Axes | None = None,
+        temperature_protocol: TemperatureProtocol = "marlin",
     ):
         # The printer profile's axes: the ones tracked and read from M114
         # (see set_axes)
@@ -238,6 +357,10 @@ class SerialManager:
         # Off: the monitor never runs, so no M155/M105 goes out by itself.
         self._temperature_enabled = temperature_enabled
         self._monitor_state: TemperatureMonitor = "idle" if temperature_enabled else "off"
+        # How the printer reports temperatures (see set_temperature_protocol)
+        self._temperature_protocol: TemperatureProtocol = temperature_protocol
+        # The lab firmware's temperature block being read (reader thread only)
+        self._block = PrintessBlock()
         # Called on the event loop whenever temperature_monitor changes
         self._on_monitor = on_monitor
         # Keeps a fire-and-forget task (M155 S0) referenced until it's done
@@ -353,6 +476,7 @@ class SerialManager:
         self._resync = True
         self._stale_ok = False
         self._state = self._unknown_position()
+        self._block = PrintessBlock()
         with self._state_lock:
             self._emergency_oks.clear()
         stop = threading.Event()
@@ -683,8 +807,18 @@ class SerialManager:
                 pending.deadline = time.monotonic() + pending.timeout_s
             return
 
+        block_line = parse_block_line(line)
+        if block_line is not None:
+            # The lab firmware's temperature block: part of M105's reply,
+            # never of another command's (it also comes unasked)
+            self._block_readings(self._block.feed(*block_line))
+            if pending is not None and pending.wants_temperatures:
+                pending.lines.append(line)
+            return
+        self._block_readings(self._block.end())
+
         temperatures = parse_temperatures(line)
-        if temperatures is not None:
+        if temperatures is not None and self._temperature_protocol == "marlin":
             self._emit(TemperatureEvent.model_validate({"temperatures": temperatures}))
             autoreport_seen, loop = self._autoreport_seen, self._loop
             if (pending is None or not pending.wants_temperatures) and autoreport_seen and loop:
@@ -728,6 +862,12 @@ class SerialManager:
             self._finish(pending, "\n".join(pending.lines))
             return
         pending.lines.append(line)
+
+    def _block_readings(self, readings: Readings | None) -> None:
+        """A complete block from the lab firmware: a temperature report,
+        if the printer is set up to speak that protocol."""
+        if readings is not None and self._temperature_protocol == "printess":
+            self._emit(TemperatureEvent.model_validate({"temperatures": readings}))
 
     def _is_emergency_ok(self, pending: _Pending | None) -> bool:
         """Whether an "ok" is the ack of an emergency line, not a reply to
@@ -798,6 +938,19 @@ class SerialManager:
             self._background.add(task)
             task.add_done_callback(self._background.discard)
 
+    @property
+    def temperature_protocol(self) -> TemperatureProtocol:
+        return self._temperature_protocol
+
+    def set_temperature_protocol(self, protocol: TemperatureProtocol) -> None:
+        """Read temperature reports the way `protocol` sends them, at once;
+        a running monitor starts again (the lab firmware is polled)."""
+        if protocol == self._temperature_protocol:
+            return
+        self._temperature_protocol = protocol
+        if self._temperature_enabled and self.is_connected:
+            self._start_monitor()
+
     def retry_temperature(self) -> None:
         """Start the monitor again after polling paused (or at any time it's on)."""
         if self._temperature_enabled and self.is_connected:
@@ -860,6 +1013,9 @@ class SerialManager:
         """Ask for temperature auto-reports; poll with M105 if they don't come."""
         self._autoreport_seen = asyncio.Event()
         try:
+            if self._temperature_protocol == "printess":
+                await self._poll_temperatures()
+                return
             self._set_monitor("starting")
             try:
                 await self._poll(f"M155 S{AUTOREPORT_INTERVAL_S}", skip_if_busy=False)
@@ -888,7 +1044,7 @@ class SerialManager:
                 continue
             except SerialTimeout:
                 reply = None
-            if reply is not None and any(parse_temperatures(line) for line in reply.splitlines()):
+            if reply is not None and reply_temperatures(reply, self._temperature_protocol):
                 failures = 0
                 continue
             failures += 1

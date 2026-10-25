@@ -27,8 +27,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 # The letters a nozzle's height motor or plunger can have: Marlin's axis
 # names, except X/Y (the stage) and E (the slicer's extruder, which the
-# processing turns into plunger moves)
-NOZZLE_AXIS_LETTERS = ("Z", "A", "B", "C", "I", "J", "K", "U", "V", "W")
+# processing turns into plunger moves), and D, the Printess 2.0 board's
+# fourth plunger
+NOZZLE_AXIS_LETTERS = ("Z", "A", "B", "C", "I", "J", "K", "U", "V", "W", "D")
 # How many nozzles a profile may have
 MAX_NOZZLES = 6
 # Steps/mm sent for every axis on connect (M92), unless a profile sets its own
@@ -219,8 +220,32 @@ PRINTESS_1: dict[str, Any] = {
     ],
 }
 
-# Printess 2.0 (four nozzles) goes here once its axis letters are known.
-BUILTIN_PROFILES: dict[str, dict[str, Any]] = {PRINTESS_1["id"]: PRINTESS_1}
+# Printess 2.0: four syringes 30 mm apart, on a 200 × 200 mm bed, every
+# axis at 3200 steps/mm.
+PRINTESS_2: dict[str, Any] = {
+    "id": "printess-2",
+    "name": "Printess 2.0",
+    "nozzles": [
+        {
+            "id": f"syringe-{i + 1}",
+            "name": f"Syringe {i + 1}",
+            "height_axis": height,
+            "plunger_axis": plunger,
+            "offset_x": 30.0 * i,
+        }
+        for i, (height, plunger) in enumerate((("Z", "U"), ("A", "V"), ("B", "W"), ("C", "D")))
+    ],
+    "bed": {
+        "x": {"min": -100.0, "max": 100.0},
+        "y": {"min": -100.0, "max": 100.0},
+        "z": {"min": 0.0, "max": 60.0},
+    },
+    "build_volume": {"x": 200.0, "y": 200.0, "z": 60.0},
+    "nozzle_offset_measured": True,
+    "steps_per_mm": 3200.0,
+}
+
+BUILTIN_PROFILES: dict[str, dict[str, Any]] = {p["id"]: p for p in (PRINTESS_1, PRINTESS_2)}
 DEFAULT_PROFILE = PRINTESS_1["id"]
 
 
@@ -288,10 +313,11 @@ def custom_profile(
     nozzles: Sequence[NozzleFields | dict[str, Any]],
     nozzle_offset_measured: bool,
     bed: BedFields | dict[str, Any] | None = None,
+    steps_per_mm: float | None = None,
 ) -> PrinterProfile:
-    """The Custom profile: `base`'s build volume and steps/mm, with these
-    nozzles and `bed` (None: `base`'s). Raises pydantic.ValidationError for
-    invalid nozzles or bed limits."""
+    """The Custom profile: `base`'s build volume, with these nozzles, `bed`
+    and `steps_per_mm` (None: `base`'s). Raises pydantic.ValidationError
+    for invalid nozzles, bed limits or steps/mm."""
     data = base.model_dump()
     data.update(
         id=CUSTOM_PROFILE_ID,
@@ -301,4 +327,6 @@ def custom_profile(
     )
     if bed is not None:
         data["bed"] = bed.model_dump() if isinstance(bed, BaseModel) else bed
+    if steps_per_mm is not None:
+        data["steps_per_mm"] = steps_per_mm
     return PrinterProfile.model_validate(data)

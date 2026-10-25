@@ -11,6 +11,8 @@ import {
   toRequest,
   validateBed,
   validateDrafts,
+  validateSteps,
+  stepsDraftFrom,
   type SyringeDraft
 } from './printerSetup'
 
@@ -56,10 +58,11 @@ describe('the printer setup editor', () => {
       ['syringe-4', 'Syringe 4', 'K', 'U']
     ])
     expect(isValid(drafts)).toBe(true)
-    expect(freeLetters(drafts)).toEqual(['V', 'W'])
+    expect(freeLetters(drafts)).toEqual(['V', 'W', 'D'])
     expect(canAdd(drafts)).toBe(true)
     drafts.push(newDraft(drafts))
-    // Ten letters: five syringes use them all
+    // Eleven letters: five syringes use ten, and one is too few for a sixth
+    expect(freeLetters(drafts)).toEqual(['D'])
     expect(canAdd(drafts)).toBe(false)
   })
 
@@ -191,5 +194,43 @@ describe('the bed limits', () => {
       ...DISH,
       z: { min: 0, max: 12.5 }
     })
+  })
+})
+
+describe('the letter D', () => {
+  it('is an axis like the others', () => {
+    const drafts = draftsFrom(PRINTESS_1)
+    drafts[1].plungerAxis = 'd'
+    expect(validateDrafts(drafts)).toEqual([{}, {}])
+    expect(toRequest(drafts, false, 'printess-1', bedDraftFrom(PRINTESS_1)).nozzles[1]).toEqual(
+      expect.objectContaining({ plunger_axis: 'D' })
+    )
+    drafts[0].heightAxis = 'D'
+    expect(validateDrafts(drafts)[0].heightAxis).toBe("D is also Right's")
+  })
+})
+
+describe('the steps per mm', () => {
+  it("starts from the profile's, or the backend's default", () => {
+    expect(stepsDraftFrom({ ...PRINTESS_1, steps_per_mm: 3200 })).toBe('3200')
+    expect(stepsDraftFrom(PRINTESS_1)).toBe('800')
+  })
+
+  it('needs a number above 0', () => {
+    expect(validateSteps('3200')).toBeUndefined()
+    expect(validateSteps('0.5')).toBeUndefined()
+    expect(validateSteps('0')).toBe('Steps per mm must be above 0')
+    expect(validateSteps('-800')).toBe('Steps per mm must be above 0')
+    expect(validateSteps('')).toBe('Enter a number')
+    expect(validateSteps('8OO')).toBe('Enter a number')
+  })
+
+  it('is sent with the profile, and a change counts', () => {
+    const bed = bedDraftFrom(PRINTESS_1)
+    expect(toRequest(draftsFrom(PRINTESS_1), false, 'printess-1', bed, '1600').steps_per_mm).toBe(
+      1600
+    )
+    expect(isChanged(draftsFrom(PRINTESS_1), false, PRINTESS_1, bed, '800')).toBe(false)
+    expect(isChanged(draftsFrom(PRINTESS_1), false, PRINTESS_1, bed, '1600')).toBe(true)
   })
 })

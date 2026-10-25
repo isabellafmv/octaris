@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { useTemperature } from '../stores/temperature'
+import { channelCommand, usedChannels, type ChannelAction } from './temperatureChannels'
 
 interface GcodeInputProps {
   disabled: boolean
@@ -30,9 +31,11 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
   const inputRef = useRef<HTMLInputElement>(null)
   // Inline M104 field: null while closed, else the raw °C text
   const [tempText, setTempText] = useState<string | null>(null)
-  // Lab firmware (protocol "printess"): M104 sets one of its heater channels
-  const channels = useTemperature((s) => s.status?.channels) ?? []
-  const printess = useTemperature((s) => s.status?.protocol) === 'printess'
+  // Lab firmware (protocol "printess"): M104 sets one of its heater channels,
+  // those in use, by what they heat
+  const status = useTemperature((s) => s.status)
+  const channels = usedChannels(status)
+  const printess = status?.protocol === 'printess'
   const [tempSensor, setTempSensor] = useState<string | null>(null)
   const tempChannel = channels.find((c) => c.sensor === tempSensor) ?? channels[0]
 
@@ -92,24 +95,26 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
   const tempValue = parseFloat(tempText ?? '')
   const tempMin = printess ? (tempChannel?.min ?? MIN_TEMP_C) : MIN_TEMP_C
   const tempMax = printess ? (tempChannel?.max ?? MAX_TEMP_C) : MAX_TEMP_C
-  // A channel also takes 0 (off)
-  const tempValid = (tempValue >= tempMin && tempValue <= tempMax) || (printess && tempValue === 0)
+  const tempValid = tempValue >= tempMin && tempValue <= tempMax
   const tempInvalid = !!tempText && !tempValid
 
   const handleSetTemp = async (): Promise<void> => {
-    if (!tempValid || sending) return
-    if (!printess) {
-      if (await sendCommand(`M104 S${tempValue}`)) setTempText(null)
-      return
-    }
-    if (!tempChannel) return
-    // The backend picks H (heat) or C (cool) from the channel's current reading
+    if (!tempValid || sending || printess) return
+    if (await sendCommand(`M104 S${tempValue}`)) setTempText(null)
+  }
+
+  // Lab firmware: heat (H) or cool (C) the channel to the target, or switch it off (D)
+  const handleChannel = async (action: ChannelAction): Promise<void> => {
+    if (!tempChannel || sending || (action !== 'off' && !tempValid)) return
     setError(null)
     setSending(true)
     try {
-      const { command } = await api.setTemperatureTarget(tempChannel.sensor, tempValue)
+      const { command } =
+        action === 'off'
+          ? await api.setTemperatureTarget(tempChannel.sensor, 0)
+          : await api.setTemperatureTarget(tempChannel.sensor, tempValue, action)
       remember(command)
-      setTempText(null)
+      if (action !== 'off') setTempText(null)
     } catch (e) {
       setError((e instanceof Error && e.message) || 'Setting the temperature failed')
     } finally {
@@ -200,7 +205,7 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
           <button
             onClick={() => setTempText((t) => (t === null ? '' : null))}
             disabled={commandsDisabled || sending}
-            title={printess ? 'M104 I<channel> T<°C> H|C' : 'M104 S<°C>'}
+            title={printess ? 'M104 I<channel> T<°C> H|C, or M104 I<channel> D' : 'M104 S<°C>'}
             aria-expanded={tempText !== null}
             className={`px-3 py-3 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed ${
               tempText !== null
@@ -213,31 +218,14 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
               {printess ? 'M104 I…' : 'M104'}
             </span>
           </button>
-          {tempText !== null && (
+          {tempText !== null && !printess && (
             <div className="col-span-2">
               <div className="flex gap-2">
-                {printess && (
-                  <select
-                    value={tempChannel?.sensor ?? ''}
-                    onChange={(e) => setTempSensor(e.target.value)}
-                    disabled={commandsDisabled || sending || channels.length === 0}
-                    aria-label="Heater channel"
-                    className="rounded px-2 py-2 font-mono text-sm bg-surface-card border border-border text-text"
-                  >
-                    {channels.map((c) => (
-                      <option key={c.sensor} value={c.sensor}>
-                        {c.sensor} · {c.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
                 <label className="flex-1 flex items-center gap-2 rounded px-3 py-2 bg-surface-card border border-border">
-                  <span className="font-mono text-sm text-text-muted">
-                    {printess ? 'T' : 'M104 S'}
-                  </span>
+                  <span className="font-mono text-sm text-text-muted">M104 S</span>
                   <input
                     type="number"
-                    min={printess ? 0 : tempMin}
+                    min={tempMin}
                     max={tempMax}
                     step="1"
                     autoFocus
@@ -267,13 +255,101 @@ export function GcodeInput({ disabled, printing = false }: GcodeInputProps): Rea
               {tempInvalid && (
                 <p className="mt-1 text-xs text-danger">
                   Temperature must be between {tempMin} and {tempMax} °C
-                  {printess && ', or 0 for off'}
                 </p>
               )}
-              {printess && !tempInvalid && (
-                <p className="mt-1 text-xs text-text-subtle">
-                  H (heat) or C (cool) is chosen from the channel&apos;s current reading
+            </div>
+          )}
+          {tempText !== null && printess && (
+            <div className="col-span-2 flex flex-col gap-2">
+              {channels.length === 0 ? (
+                <p className="text-xs text-text-subtle">
+                  No heater channel in use: choose what each channel heats in Setup.
                 </p>
+              ) : (
+                <>
+                  <div className="flex gap-2">
+                    <select
+                      value={tempChannel?.sensor ?? ''}
+                      onChange={(e) => setTempSensor(e.target.value)}
+                      disabled={commandsDisabled || sending}
+                      aria-label="Heater channel"
+                      className="flex-1 min-w-0 rounded px-2 py-2 text-sm bg-surface-card border border-border text-text"
+                    >
+                      {channels.map((c) => (
+                        <option key={c.sensor} value={c.sensor}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="w-24 flex items-center gap-1 rounded px-3 py-2 bg-surface-card border border-border">
+                      <input
+                        type="number"
+                        min={tempMin}
+                        max={tempMax}
+                        step="1"
+                        autoFocus
+                        value={tempText}
+                        placeholder={`${tempMin}–${tempMax}`}
+                        onChange={(e) => setTempText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') setTempText(null)
+                        }}
+                        disabled={commandsDisabled || sending}
+                        aria-label="Target temperature in °C"
+                        aria-invalid={tempInvalid}
+                        className={`flex-1 min-w-0 bg-transparent font-mono text-sm outline-none ${
+                          tempInvalid ? 'text-danger' : 'text-text'
+                        }`}
+                      />
+                      <span className="text-sm text-text-muted">°C</span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['heat', 'cool', 'off'] as const).map((action) => (
+                      <button
+                        key={action}
+                        onClick={() => handleChannel(action)}
+                        disabled={
+                          commandsDisabled ||
+                          sending ||
+                          !tempChannel ||
+                          (action !== 'off' && !tempValid)
+                        }
+                        title={
+                          tempChannel &&
+                          channelCommand(
+                            tempChannel.index,
+                            action,
+                            tempValid ? tempValue : undefined
+                          )
+                        }
+                        className={`px-3 py-2 rounded font-medium text-sm transition-opacity active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed ${
+                          action === 'off'
+                            ? 'bg-surface-sunken text-text-secondary'
+                            : 'bg-primary text-white'
+                        }`}
+                      >
+                        <span className="block">
+                          {action === 'heat' ? 'Heat' : action === 'cool' ? 'Cool' : 'Off'}
+                        </span>
+                        {tempChannel && (
+                          <span className="block text-xs opacity-70 font-mono">
+                            {channelCommand(
+                              tempChannel.index,
+                              action,
+                              tempValid ? tempValue : undefined
+                            )}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {tempInvalid && (
+                    <p className="text-xs text-danger">
+                      Temperature must be between {tempMin} and {tempMax} °C
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}

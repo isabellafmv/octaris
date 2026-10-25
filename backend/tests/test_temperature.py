@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.config import ChannelConfig, SensorConfig, TemperatureConfig
+from backend.config import SensorConfig, TemperatureConfig
 from backend.database import init_db, insert_temperature_readings, temperature_readings
 from backend.main import app
 from backend.queue_worker import PrintStatus
@@ -18,7 +18,6 @@ from backend.temperature import (
     HISTORY_S,
     TargetError,
     TemperatureStore,
-    channel_command,
     target_command,
 )
 from tests.serial_fakes import attach
@@ -123,7 +122,7 @@ def test_readings_are_written_in_batches(db, clock):
 
     clock.advance(FLUSH_INTERVAL_S / 2)
     store.record(report(T=(21.2, 0.0), B=(20.2, 0.0)))
-    assert [(sensor, actual) for _, sensor, actual, _, _ in rows(db)] == [
+    assert [(sensor, actual) for _, sensor, actual, _, _, _ in rows(db)] == [
         ("T", 21.0),
         ("B", 20.0),
         ("T", 21.1),
@@ -160,16 +159,16 @@ def test_retention_deletes_old_readings(db, clock):
     insert_temperature_readings(
         db,
         [
-            (clock.now - 31 * DAY_S, "T", 20.0, 0.0, None),
-            (clock.now - 29 * DAY_S, "T", 21.0, 0.0, None),
-            (clock.now - 1, "T", 22.0, 0.0, None),
+            (clock.now - 31 * DAY_S, "T", 20.0, 0.0, None, None),
+            (clock.now - 29 * DAY_S, "T", 21.0, 0.0, None, None),
+            (clock.now - 1, "T", 22.0, 0.0, None, None),
         ],
     )
     assert make_store(db, clock).purge_expired() == 1
-    assert [actual for _, _, actual, _, _ in rows(db)] == [21.0, 22.0]
+    assert [actual for _, _, actual, _, _, _ in rows(db)] == [21.0, 22.0]
 
     assert make_store(db, clock, retention_days=7).purge_expired() == 1
-    assert [actual for _, _, actual, _, _ in rows(db)] == [22.0]
+    assert [actual for _, _, actual, _, _, _ in rows(db)] == [22.0]
 
 
 def test_old_readings_are_purged_at_startup(db):
@@ -178,11 +177,11 @@ def test_old_readings_are_purged_at_startup(db):
 
     now = time.time()
     insert_temperature_readings(
-        db, [(now - 365 * DAY_S, "T", 20.0, 0.0, None), (now - DAY_S, "T", 21.0, 0.0, None)]
+        db, [(now - 365 * DAY_S, "T", 20.0, 0.0, None, None), (now - DAY_S, "T", 21.0, 0.0, None, None)]
     )
     wire(app, load_config(), db)
     try:
-        assert [actual for _, _, actual, _, _ in rows(db)] == [21.0]
+        assert [actual for _, _, actual, _, _, _ in rows(db)] == [21.0]
     finally:
         app.state.history._traffic.stop()
 
@@ -204,8 +203,24 @@ def test_existing_database_gets_the_table(tmp_path):
 
     conn = init_db(path)
     columns = [row[1] for row in conn.execute("PRAGMA table_info(temperature_readings)")]
-    assert columns == ["id", "timestamp", "sensor", "actual", "target", "session_id"]
+    assert columns == ["id", "timestamp", "sensor", "actual", "target", "session_id", "name"]
     assert conn.execute("SELECT filename FROM sessions").fetchall() == [("a",)]
+    conn.close()
+
+
+def test_existing_readings_table_gets_the_name_column(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute(
+        "CREATE TABLE temperature_readings (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL NOT NULL, "
+        "sensor TEXT NOT NULL, actual REAL NOT NULL, target REAL, session_id INTEGER)"
+    )
+    old.execute("INSERT INTO temperature_readings (timestamp, sensor, actual) VALUES (1, 'T', 20)")
+    old.commit()
+    old.close()
+
+    conn = init_db(path)
+    assert temperature_readings(conn) == [(1.0, "T", 20.0, None, None, None)]
     conn.close()
 
 
@@ -232,7 +247,7 @@ async def test_readings_during_a_print_carry_its_session(client, tmp_path):
     store.flush()
 
     [session] = (await client.get("/history")).json()["sessions"]
-    assert [(actual, session_id) for _, _, actual, _, session_id in rows(app.state.db)] == [
+    assert [(actual, session_id) for _, _, actual, _, session_id, _ in rows(app.state.db)] == [
         (20.0, None),
         (21.0, session["id"]),
         (22.0, None),
@@ -569,239 +584,3 @@ def test_nothing_to_wait_for_without_targets(db, clock):
     assert store.targets_reached()  # no sensors at all
     store.record(report(T0=(21.0, 0.0), P=(22.0, None)))
     assert store.targets_reached()
-
-
-# --- lab firmware (printess) channels ---------------------------------------------------------
-
-
-CHANNELS = [
-    ChannelConfig(index=n, name=name, reply_key=f"T{n}", min=4, max=60)
-    for n, name in enumerate(["Left syringe", "Right syringe", "Bed", "Chamber"])
-]
-
-
-def make_printess(db, clock, **config) -> TemperatureStore:
-    """A connected store for the lab firmware's channels."""
-    config = {"protocol": "printess", "channels": CHANNELS, **config}
-    return TemperatureStore(db, TemperatureConfig(**config), is_connected=lambda: True, clock=clock)
-
-
-def sent(store: TemperatureStore, sensor: str, target: float) -> str:
-    """Set a target as the session does: plan it, (send it,) note it sent."""
-    plan = store.plan_target(sensor, target)
-    store.target_sent(plan)
-    return plan.command
-
-
-@pytest.mark.parametrize(
-    ("actual", "target", "command", "mode"),
-    [
-        (21.0, 37, "M104 I1 T37 H", "heat"),  # above the reading: heat
-        (21.0, 10.5, "M104 I1 T10.5 C", "cool"),  # below: cool
-        (37.0, 37, "M104 I1 T37 H", "heat"),  # equal: heat
-    ],
-)
-def test_channel_command_heats_or_cools_from_the_reading(actual, target, command, mode):
-    assert channel_command(CHANNELS[1], target, actual, "M104 I{n} T0") == (command, mode)
-
-
-def test_channel_command_needs_a_reading():
-    with pytest.raises(TargetError, match="No reading from Right syringe yet"):
-        channel_command(CHANNELS[1], 37, None, "M104 I{n} T0")
-
-
-def test_channel_off_uses_the_off_command_without_a_reading():
-    assert channel_command(CHANNELS[2], 0, None, "M104 I{n} T0") == ("M104 I2 T0", None)
-    assert channel_command(CHANNELS[2], 0, 30.0, "M104 I{n} S0 X") == ("M104 I2 S0 X", None)
-
-
-def test_channel_targets_from_the_store(db, clock):
-    store = make_printess(db, clock)
-    store.record(report(T0=(21.0, None), T1=(30.0, None)))
-
-    assert store.check_target("I0", 37) == "M104 I0 T37 H"
-    assert store.check_target("I1", 20) == "M104 I1 T20 C"
-    assert store.check_target("I1", 30) == "M104 I1 T30 H"
-    assert store.check_target("I0", 0) == "M104 I0 T0"
-    with pytest.raises(TargetError, match="No reading from Bed yet"):
-        store.check_target("I2", 30)  # not in the report
-
-
-@pytest.mark.parametrize("target", [3.9, 60.1, -5])
-def test_channel_target_out_of_range(db, clock, target):
-    store = make_printess(db, clock)
-    store.record(report(T0=(21.0, None)))
-    with pytest.raises(TargetError, match="Left syringe accepts targets from 4 to 60"):
-        store.check_target("I0", target)
-
-
-@pytest.mark.parametrize("sensor", ["T0", "B", "I7"])
-def test_only_channels_are_settable_with_printess(db, clock, sensor):
-    store = make_printess(db, clock)
-    with pytest.raises(TargetError, match=f"Sensor {sensor} isn't a heater channel"):
-        store.check_target(sensor, 30)
-
-
-def test_marlin_ignores_the_channels(db, clock):
-    store = TemperatureStore(db, TemperatureConfig(channels=CHANNELS), is_connected=lambda: True, clock=clock)
-    store.record(report(T0=(21.0, 0.0)))
-    assert store.check_target("T0", 37) == "M104 T0 S37"
-    with pytest.raises(TargetError):
-        store.check_target("I0", 37)
-    assert [s.sensor for s in store.status().sensors] == ["T0"]
-    assert store.status().channels == []
-
-
-def test_reply_keys_map_to_channels(db, clock):
-    store = make_printess(db, clock)
-    store.record(report(T=(21.0, None), T0=(21.0, None), T1=(22.0, None), T3=(23.0, None), B=(20.0, None)))
-    status = store.status()
-    # Channels in config order, then what no channel reads from; Marlin's
-    # extra "T:" is dropped
-    assert [(s.sensor, s.name, s.settable) for s in status.sensors] == [
-        ("I0", "Left syringe", True),
-        ("I1", "Right syringe", True),
-        ("I3", "Chamber", True),
-        ("B", "B", False),
-    ]
-    assert status.protocol == "printess"
-    assert [(c.sensor, c.index, c.reply_key) for c in status.channels] == [
-        ("I0", 0, "T0"),
-        ("I1", 1, "T1"),
-        ("I2", 2, "T2"),
-        ("I3", 3, "T3"),
-    ]
-
-
-def test_reply_key_mapping_is_configurable(db, clock):
-    channels = [
-        ChannelConfig(index=0, name="Syringe", reply_key="B"),
-        ChannelConfig(index=1, name="Two", reply_key="T"),
-    ]
-    store = make_printess(db, clock, channels=channels)
-    store.record(report(T=(30.0, None), T0=(25.0, None), B=(20.0, None)))
-    assert {s.sensor: s.actual for s in store.status().sensors} == {"I0": 20.0, "I1": 30.0, "T0": 25.0}
-
-
-def test_channel_keeps_the_target_sent_when_the_reply_has_none(db, clock):
-    store = make_printess(db, clock)
-    store.record(report(T0=(21.0, None), T1=(30.0, None)))
-    assert sent(store, "I0", 37) == "M104 I0 T37 H"
-    assert sent(store, "I1", 10) == "M104 I1 T10 C"
-
-    clock.advance(1)
-    store.record(report(T0=(25.0, None), T1=(28.0, None)))
-    readings = {s.sensor: s for s in store.status().sensors}
-    assert (readings["I0"].target, readings["I0"].mode, readings["I0"].status) == (37, "heat", "heating")
-    assert (readings["I1"].target, readings["I1"].mode, readings["I1"].status) == (10, "cool", "cooling")
-
-    # Heating: shown as heating even while above the target, which it can't cool to
-    clock.advance(1)
-    store.record(report(T0=(40.0, None)))
-    assert store.status().sensors[0].status == "heating"
-    store.record(report(T0=(37.5, None)))
-    assert store.status().sensors[0].status == "at_target"
-
-    assert sent(store, "I0", 0) == "M104 I0 T0"
-    reading = store.status().sensors[0]
-    assert (reading.target, reading.mode, reading.status) == (0, None, "off")
-
-
-def test_target_in_the_reply_wins(db, clock):
-    store = make_printess(db, clock)
-    store.record(report(T0=(21.0, None)))
-    sent(store, "I0", 37)
-    store.record(report(T0=(22.0, 37.0)))
-    assert (store.status().sensors[0].target, store.status().sensors[0].mode) == (37, "heat")
-    # A different target than the one sent: its direction isn't known
-    store.record(report(T0=(22.0, 30.0)))
-    reading = store.status().sensors[0]
-    assert (reading.target, reading.mode, reading.status) == (30, None, "heating")
-
-
-def test_targets_sent_are_forgotten_on_reconnect(db, clock):
-    store = make_printess(db, clock)
-    store.record(report(T0=(21.0, None)))
-    sent(store, "I0", 37)
-    store.on_event({"type": "printer", "connected": True})
-    store.record(report(T0=(21.0, None)))
-    assert store.status().sensors[0].target is None
-
-
-@pytest.mark.parametrize(
-    ("line", "target", "mode"),
-    [
-        ("M104 I1 T30 C", 30, "cool"),
-        ("m104  i1 t42.5 h", 42.5, "heat"),
-        ("M104 I1 T0", 0, None),  # the off command
-    ],
-)
-def test_channel_target_typed_by_hand_counts(db, clock, line, target, mode):
-    store = make_printess(db, clock)
-    store.record(report(T1=(35.0, None)))
-    store.note_command(line)
-    reading = store.status().sensors[0]
-    assert (reading.target, reading.mode) == (target, mode)
-
-
-@pytest.mark.parametrize("line", ["M104 I1 T30", "M104 I9 T30 H", "M104 T1 S30", "G1 X1"])
-def test_other_lines_typed_by_hand_set_no_target(db, clock, line):
-    store = make_printess(db, clock)
-    store.record(report(T1=(35.0, None)))
-    store.note_command(line)
-    assert store.status().sensors[0].target is None
-
-
-def test_waiting_for_channels(db, clock):
-    store = make_printess(db, clock, settle_s=30)
-    store.record(report(T0=(21.0, None), T1=(21.0, None)))
-    sent(store, "I0", 37)
-    assert not store.targets_reached()
-    for _ in range(4):
-        clock.advance(10)
-        store.record(report(T0=(37.2, None), T1=(21.0, None)))
-    assert [(s.sensor, s.name, s.target) for s in store.wait_status()] == [("I0", "Left syringe", 37)]
-    assert store.targets_reached()
-
-
-@pytest.mark.parametrize(
-    ("config", "error"),
-    [
-        ({"channels": [{"index": 0, "name": "A", "reply_key": "X0"}]}, "isn't a sensor key"),
-        (
-            {
-                "channels": [
-                    {"index": 0, "name": "A", "reply_key": "T0"},
-                    {"index": 0, "name": "B", "reply_key": "T1"},
-                ]
-            },
-            "same index",
-        ),
-        (
-            {
-                "channels": [
-                    {"index": 0, "name": "A", "reply_key": "T0"},
-                    {"index": 1, "name": "B", "reply_key": "T0"},
-                ]
-            },
-            "same reply_key",
-        ),
-        ({"off_command": "M104 I{channel} T0"}, "can only use"),
-        ({"protocol": "reprap"}, "protocol"),
-    ],
-)
-def test_channel_config_is_checked(config, error):
-    with pytest.raises(ValueError, match=error):
-        TemperatureConfig(**config)
-
-
-def test_default_channels():
-    config = TemperatureConfig()
-    assert config.protocol == "marlin"
-    assert [(c.sensor, c.reply_key) for c in config.channels] == [
-        ("I0", "T0"),
-        ("I1", "T1"),
-        ("I2", "T2"),
-        ("I3", "T3"),
-    ]
-    assert config.off_command == "M104 I{n} T0"

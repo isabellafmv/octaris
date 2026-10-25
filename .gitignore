@@ -5,6 +5,8 @@ __pycache__/
 *.egg
 dist/
 build/
+# electron-builder's buildResources (entitlements), not build output
+!client/build/
 .venv/
 venv/
 *.db

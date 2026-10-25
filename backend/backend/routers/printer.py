@@ -41,13 +41,14 @@ async def get_custom_profile(session: PrinterSession = Depends(get_session)):
 @router.put("/custom", response_model=PrinterProfile)
 async def save_custom_profile(body: CustomProfileRequest, session: PrinterSession = Depends(get_session)):
     """Save the Custom profile and select it, as PUT /printer does (refused
-    during a print). 400 lists every problem: each axis must be one of Z, A,
-    B, C, I, J, K, U, V, W, used once in the profile, and a syringe's height
-    and plunger axis must differ; 1 to 6 syringes; each bed limit's min
-    below its max."""
+    during a print), and sends a connected printer its steps/mm (M92).
+    400 lists every problem: each axis must be one of Z, A, B, C, I, J, K,
+    U, V, W, D, used once in the profile, and a syringe's height and plunger
+    axis must differ; 1 to 6 syringes; each bed limit's min below its max;
+    steps/mm above 0."""
     try:
         return await session.save_custom_profile(
-            body.nozzles, body.nozzle_offset_measured, body.base, body.bed
+            body.nozzles, body.nozzle_offset_measured, body.base, body.bed, body.steps_per_mm
         )
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Couldn't save the printer profile: {exc}") from exc

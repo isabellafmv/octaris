@@ -50,7 +50,10 @@ CREATE TABLE IF NOT EXISTS temperature_readings (
     sensor TEXT NOT NULL,
     actual REAL NOT NULL,
     target REAL,
-    session_id INTEGER REFERENCES sessions(id)
+    session_id INTEGER REFERENCES sessions(id),
+    -- The sensor's name when it was read: what a lab firmware channel heats
+    -- changes between prints
+    name TEXT
 );
 CREATE INDEX IF NOT EXISTS temperature_readings_timestamp ON temperature_readings (timestamp);
 CREATE INDEX IF NOT EXISTS temperature_readings_session ON temperature_readings (session_id);
@@ -89,11 +92,16 @@ PRINT_SETTING_KEYS = (
 END_REASONS = ("completed", "stopped", "estop", "error")
 
 
+# The same for temperature_readings
+_TEMPERATURE_COLUMNS = {"name": "TEXT"}
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
-    for name, definition in _SESSION_COLUMNS.items():
-        if name not in existing:
-            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {definition}")
+    for table, columns in (("sessions", _SESSION_COLUMNS), ("temperature_readings", _TEMPERATURE_COLUMNS)):
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, definition in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def init_db(db_path: Path | None = None) -> sqlite3.Connection:
@@ -204,14 +212,15 @@ def list_sessions(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, A
     return sessions
 
 
-# (timestamp, sensor, actual, target, session_id)
-TemperatureRow = tuple[float, str, float, float | None, int | None]
+# (timestamp, sensor, actual, target, session_id, name); name is None for
+# readings logged before it was kept
+TemperatureRow = tuple[float, str, float, float | None, int | None, str | None]
 
 
 def insert_temperature_readings(conn: sqlite3.Connection, rows: list[TemperatureRow]) -> None:
     conn.executemany(
-        "INSERT INTO temperature_readings (timestamp, sensor, actual, target, session_id) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO temperature_readings (timestamp, sensor, actual, target, session_id, name) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
@@ -245,7 +254,7 @@ def temperature_readings(
         params.append(end)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return conn.execute(
-        "SELECT timestamp, sensor, actual, target, session_id FROM temperature_readings "
+        "SELECT timestamp, sensor, actual, target, session_id, name FROM temperature_readings "
         f"{where} ORDER BY timestamp, id",
         params,
     ).fetchall()

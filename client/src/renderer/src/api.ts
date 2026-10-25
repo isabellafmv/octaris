@@ -137,19 +137,20 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rate })
     }),
-  // Moves all of `axes` by `distance` together, in one G1 block
+  // Moves all of `axes` by `distance` together, in one G1 block, at feedRate mm/min
   jog: (axes: string[], distance: number, feedRate = 300) =>
     json<{ status: string }>('/jog', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ axes, distance, feed_rate: feedRate })
     }),
-  // X0 Y0 at the current height; with lower, then the selected nozzles down to zero height
-  goToOrigin: (lower = false) =>
+  // X0 Y0 at the current height at xyFeed; with lower, then the selected
+  // nozzles down to zero height at zFeed (mm/min)
+  goToOrigin: (lower = false, xyFeed = 300, zFeed = 300) =>
     json<{ status: string; lines: string[] }>('/jog/origin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lower })
+      body: JSON.stringify({ lower, xy_feed: xyFeed, z_feed: zFeed })
     }),
   sendGcode: (line: string) =>
     json<{ status: string; response: string }>('/gcode/send', {
@@ -224,11 +225,13 @@ export const api = {
   retryTemperature: () => json<TemperatureStatus>('/temperature/retry', { method: 'POST' }),
   getTemperatureHistory: (minutes: number) =>
     json<TemperatureHistoryResponse>(`/temperature/history?minutes=${minutes}`),
-  setTemperatureTarget: (sensor: string, target: number) =>
+  // Lab firmware: `direction` heats (H) or cools (C) to the target; without
+  // it the backend chooses from the channel's reading. 0 is off.
+  setTemperatureTarget: (sensor: string, target: number, direction?: 'heat' | 'cool') =>
     json<{ status: string; command: string }>('/temperature/target', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sensor, target })
+      body: JSON.stringify({ sensor, target, direction: direction ?? null })
     }),
   exportTemperatureCsv: (range: TemperatureRange) => {
     const params =

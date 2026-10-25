@@ -64,8 +64,10 @@ from backend.printer import (
 from backend.queue_worker import InvalidTransition, PrintStatus, QueueWorker
 from backend.schemas import (
     CalibrationEvent,
+    ChannelUse,
     Event,
     ExtrusionRateEvent,
+    HeaterMode,
     NozzleCalibration,
     PrinterEvent,
     PrinterProfileEvent,
@@ -75,8 +77,9 @@ from backend.schemas import (
     SettingsEvent,
     Snapshot,
     StatusEvent,
+    WarningEvent,
 )
-from backend.serial_manager import SerialError, SerialManager, parse_temperatures
+from backend.serial_manager import SerialError, SerialManager, reply_temperatures
 from backend.settings import PrinterSettings, SettingsStore
 from backend.slicer import PrintSettings, slice_model
 from backend.temperature import TargetError, TemperatureStore
@@ -85,6 +88,12 @@ logger = logging.getLogger(__name__)
 
 # Where uploaded models are written for the slicer
 DATA_DIR = Path(tempfile.gettempdir()) / "octaris"
+
+# The longest jog, in mm either way (the jog panel's custom step)
+MAX_JOG_MM = 200.0
+# The feed rates a jog or Go to Origin may use, in mm/min
+MIN_JOG_FEED = 1.0
+MAX_JOG_FEED = 3000.0
 
 
 def zero_axes(nozzle: NozzleSpec) -> frozenset[str]:
@@ -115,6 +124,26 @@ def offset_unmeasured(profile: PrinterProfile) -> str:
 
 
 TEMPERATURE_OFF = "Temperature control is off — enable it in Setup"
+# A lab firmware channel heating one of the printer profile's syringes:
+# the temperature_channels setting's "syringe:<nozzle id>"
+SYRINGE_USE = "syringe:"
+
+
+def syringe_label(nozzle: NozzleSpec) -> str:
+    """What a channel heating `nozzle` is called: "Left syringe", "Syringe 2"."""
+    return nozzle.name if "syringe" in nozzle.name.lower() else f"{nozzle.name} syringe"
+
+
+def channel_label(use: ChannelUse, profile: PrinterProfile) -> str | None:
+    """What a channel used for `use` is called, or None if `profile` has no
+    such syringe (or `use` means nothing)."""
+    if use == "bed":
+        return "Bed"
+    if use.startswith(SYRINGE_USE):
+        nozzle_id = use[len(SYRINGE_USE) :]
+        nozzle = next((n for n in profile.nozzles if n.id == nozzle_id), None)
+        return syringe_label(nozzle) if nozzle is not None else None
+    return None
 
 
 def profile_errors(exc: ValidationError) -> str:
@@ -129,6 +158,8 @@ def profile_errors(exc: ValidationError) -> str:
             message = f"Syringe {loc[1] + 1}{field}: {message}"
         elif len(loc) >= 2 and loc[0] == "bed":
             message = f"Bed {str(loc[1]).upper()}: {message}"
+        elif loc == ("steps_per_mm",):
+            message = f"Steps per mm: {message}"
         messages.append(message)
     return "\n".join(messages)
 
@@ -205,6 +236,7 @@ class PrinterSession:
         self._run_id = secrets.token_hex(4)
         serial.set_axes(self.profile.axes)
         worker.set_axes(self.profile.axes)
+        self._check_channel_uses()
 
     def _load_custom(self) -> PrinterProfile | None:
         saved = self.settings.printer.custom
@@ -304,12 +336,15 @@ class PrinterSession:
         nozzle_offset_measured: bool = False,
         base: str | None = None,
         bed: BedFields | None = None,
+        steps_per_mm: float | None = None,
     ) -> PrinterProfile:
-        """Save the Custom profile with these nozzles (left to right) and
-        bed limits and select it, kept across restarts. Its build volume and
-        steps/mm (and its bed, without `bed`) are `base`'s (a profile id: the
-        one being edited, copied into Custom) or, without one, the Custom
-        profile's so far (or the selected one's).
+        """Save the Custom profile with these nozzles (left to right), bed
+        limits and steps/mm (one value for every axis) and select it, kept
+        across restarts; a connected printer is sent the new M92. Its build
+        volume (and its bed and steps/mm, without `bed` or `steps_per_mm`)
+        are `base`'s (a profile id: the one being edited, copied into
+        Custom) or, without one, the Custom profile's so far (or the
+        selected one's).
         As when switching profile, the calibration, any resume checkpoint
         and the loaded print are dropped.
 
@@ -324,7 +359,7 @@ class PrinterSession:
             raise NotReady(f"A printer can have at most {MAX_NOZZLES} syringes")
         source = profiles[base] if base is not None else self._custom or self.profile
         try:
-            profile = custom_profile(source, nozzles, nozzle_offset_measured, bed)
+            profile = custom_profile(source, nozzles, nozzle_offset_measured, bed, steps_per_mm)
         except ValidationError as exc:
             raise NotReady(profile_errors(exc)) from exc
         self._refuse_during_print()
@@ -361,8 +396,59 @@ class PrinterSession:
             self._publish(StatusEvent(value="idle"))
         self.reset_calibration()
         self._publish(PrinterProfileEvent(printer=profile))
+        self._check_channel_uses()
         if self.serial.is_connected:
             await self._send_steps_per_mm()
+
+    # --- lab firmware heater channels -----------------------------------------------
+
+    def _check_channel_uses(self) -> None:
+        """Name the lab firmware's channels after what they heat (the
+        temperature_channels setting). A channel assigned to a syringe this
+        profile doesn't have falls back to not used, saved, with a warning."""
+        uses = self.settings.current.temperature_channels
+        kept = {key: use for key, use in uses.items() if channel_label(use, self.profile) is not None}
+        if kept != uses:
+            dropped = ", ".join(sorted(key for key in uses if key not in kept))
+            message = (
+                f"Temperature channel {dropped} was assigned to a syringe the {self.profile.name} "
+                "doesn't have, and is now not used. Assign it again in Setup."
+            )
+            settings = self.settings.current.model_copy(update={"temperature_channels": kept})
+            try:
+                self.settings.save(settings)
+            except OSError:
+                logger.exception("Couldn't save the temperature channels")
+                self.settings.current = settings
+            logger.warning(message)
+            self._publish(WarningEvent(message=message))
+            self._publish(SettingsEvent(**settings.model_dump()))
+        self._apply_channel_uses()
+
+    def _apply_channel_uses(self) -> None:
+        uses = self.settings.current.temperature_channels
+        self.temperature.set_channel_uses(
+            {key: (use, label) for key, use in uses.items() if (label := channel_label(use, self.profile))}
+        )
+
+    def _checked_channel_uses(self, uses: dict[str, ChannelUse]) -> dict[str, ChannelUse]:
+        """A new temperature_channels setting, checked against the configured
+        channels and the profile's syringes; "unused" (or "") entries are
+        dropped. Raises NotReady for an unknown channel or use."""
+        channels = [c.sensor for c in self.config.temperature.channels]
+        result = {}
+        for key, use in uses.items():
+            if key not in channels:
+                raise NotReady(f"Unknown temperature channel {key!r} (there are {', '.join(channels)})")
+            if use in ("", "unused"):
+                continue
+            if channel_label(use, self.profile) is None:
+                syringes = ", ".join(SYRINGE_USE + n.id for n in self.profile.nozzles)
+                raise NotReady(
+                    f"{key} can't be used for {use!r}: choose unused, bed or a syringe ({syringes})"
+                )
+            result[key] = use
+        return result
 
     def _publish_profiles(self) -> None:
         self._publish(PrinterProfilesEvent(selected=self.profile.id, profiles=list(self.profiles.values())))
@@ -479,14 +565,20 @@ class PrinterSession:
 
     async def jog_axes(self, axes: Sequence[str], distance: float, feed_rate: float) -> list[str]:
         """Move each of `axes` (the profile's) by `distance`, together, in one
-        G1 block (several height axes, say: `G1 Z1 A1 F300`); returns the
-        axes, upper-cased. Each is checked against the bed limits before
-        anything moves: raises LimitError if one would leave the bed."""
+        G1 block (several height axes, say: `G1 Z1 A1 F300`, or plungers:
+        `G1 U-1 V-1 F300`) at `feed_rate` (mm/min); returns the axes,
+        upper-cased. Raises NotReady for a distance over MAX_JOG_MM or a
+        feed rate outside MIN_JOG_FEED..MAX_JOG_FEED. Each axis is checked
+        against the bed limits before anything moves: raises LimitError if
+        one would leave the bed."""
         axes = [axis.strip().upper() for axis in axes]
         if not axes:
             raise NotReady("No axis to jog")
         if len(set(axes)) != len(axes):
             raise NotReady(f"An axis is given twice: {', '.join(axes)}")
+        if abs(distance) > MAX_JOG_MM:
+            raise NotReady(f"A jog moves at most {MAX_JOG_MM:g} mm (not {abs(distance):g} mm)")
+        check_feed("Jog", feed_rate)
         plungers = [n.plunger_axis for n in self.profile.nozzles]
         for axis in axes:
             if axis not in ("X", "Y", *self._height_axes(), *plungers):
@@ -534,15 +626,21 @@ class PrinterSession:
         nozzles) make, for the bed checks: see limits.copies_of."""
         return copies_of(self.profile.select(nozzle_ids or self.selected_nozzles))
 
-    async def go_to_origin(self, lower: bool = False) -> list[str]:
-        """Travel to X0 Y0 at the current height and, with `lower`, then
-        lower the height axes of the selected nozzles to 0 — onto the bed.
-        Returns the lines sent, as one sequence.
+    async def go_to_origin(
+        self, lower: bool = False, xy_feed: float = TRAVEL_FEED, z_feed: float = TRAVEL_FEED
+    ) -> list[str]:
+        """Travel to X0 Y0 at the current height, at `xy_feed`, and, with
+        `lower`, then lower the height axes of the selected nozzles to 0 —
+        onto the bed — at `z_feed` (mm/min). Returns the lines sent, as one
+        sequence.
 
-        Raises Conflict while printing, NotReady if `lower` and those
-        height axes aren't zeroed (their 0 would be wherever the printer
-        powered up), and LimitError if the origin is off the bed.
+        Raises Conflict while printing, NotReady for a feed rate outside
+        MIN_JOG_FEED..MAX_JOG_FEED or if `lower` and those height axes
+        aren't zeroed (their 0 would be wherever the printer powered up),
+        and LimitError if the origin is off the bed.
         """
+        check_feed("XY feed", xy_feed)
+        check_feed("Z feed", z_feed)
         if self.worker.status == PrintStatus.PRINTING:
             raise Conflict("Pause the print first")
         self._require_connection()
@@ -557,9 +655,9 @@ class PrinterSession:
                 check_move_to(self.profile.bed, heights, axis, 0.0, copies)
 
         self.worker.manual_command()
-        lines = ["G90", f"G1 X0 Y0 F{TRAVEL_FEED}"]
+        lines = ["G90", f"G1 X0 Y0 F{xy_feed:g}"]
         if lower:
-            lines.append("G1 " + " ".join(f"{axis}0" for axis in heights) + f" F{TRAVEL_FEED}")
+            lines.append("G1 " + " ".join(f"{axis}0" for axis in heights) + f" F{z_feed:g}")
         # Back to the mode the printer was in; G91 while a print is loaded,
         # as every print runs relative (see jog)
         if self.serial.relative or self.loaded is not None:
@@ -582,26 +680,26 @@ class PrinterSession:
         if reason:
             self.worker.invalidate_checkpoint(reason)
         self.worker.manual_command()
-        reply = await self.serial.send(line)
-        # printess: a channel target typed by hand counts as one set here
-        self.temperature.note_command(line)
-        return reply
+        return await self.serial.send(line)
 
-    async def set_temperature_target(self, sensor: str, target: float) -> str:
+    async def set_temperature_target(
+        self, sensor: str, target: float, direction: HeaterMode | None = None
+    ) -> str:
         """Set a heater's target (0: off); returns the command sent.
 
         Allowed while printing, unlike other manual commands: it moves
         nothing, and M104/M140/M141 return at once (M109/M190, which wait
         for the temperature, are never sent). It goes out between two print
-        lines. With the lab firmware (printess) it is M104 I<n> T<°C> H|C.
+        lines. With the lab firmware (printess) it is M104 I<n> T<°C> H|C,
+        heating or cooling as `direction` says, or as the channel's reading
+        does without one, and M104 I<n> D for off.
         """
         try:
-            plan = self.temperature.plan_target(sensor, target)
+            plan = self.temperature.plan_target(sensor, target, direction)
         except TargetError as exc:
             raise NotReady(str(exc)) from exc
         self._require_connection()
         await self.serial.send(plan.command)
-        self.temperature.target_sent(plan)
         return plan.command
 
     async def test_sensors(self) -> SensorTestResponse:
@@ -609,9 +707,7 @@ class PrinterSession:
         return its raw reply, None if none came, with the sensors it lists."""
         self._require_connection()
         reply = await self.serial.test_sensors()
-        found: dict[str, dict[str, float | None]] = {}
-        for line in (reply or "").splitlines():
-            found.update(parse_temperatures(line) or {})
+        found = reply_temperatures(reply or "", self.temperature.config.protocol)
         return SensorTestResponse(reply=reply, sensors=self.temperature.test_readings(found))
 
     def retry_temperature(self) -> None:
@@ -631,6 +727,8 @@ class PrinterSession:
         for its temperatures, and OSError if they can't be saved."""
         old = self.settings.current
         settings = old.model_copy(update={name: getattr(changes, name) for name in changes.model_fields_set})
+        if "temperature_channels" in changes.model_fields_set:
+            settings.temperature_channels = self._checked_channel_uses(changes.temperature_channels)
         protocol = settings.temperature_protocol or self.config.temperature.protocol
         protocol_changed = protocol != self.temperature.config.protocol
         if protocol_changed and self.worker.waiting_for_temperature:
@@ -640,7 +738,10 @@ class PrinterSession:
             self.serial.set_temperature_enabled(settings.temperature_sensors)
             self.temperature.enabled_changed()
         if protocol_changed:
+            self.serial.set_temperature_protocol(protocol)
             self.temperature.protocol_changed(protocol)
+        if settings.temperature_channels != old.temperature_channels:
+            self._apply_channel_uses()
         self._publish(SettingsEvent(**settings.model_dump()))
         return settings
 
@@ -947,6 +1048,14 @@ class PrinterSession:
         except BaseException:
             self.history.resume_failed()
             raise
+
+
+def check_feed(what: str, feed_rate: float) -> None:
+    """Raises NotReady for a jog or Go to Origin feed rate out of range."""
+    if not MIN_JOG_FEED <= feed_rate <= MAX_JOG_FEED:
+        raise NotReady(
+            f"{what} must be between {MIN_JOG_FEED:g} and {MAX_JOG_FEED:g} mm/min (not {feed_rate:g})"
+        )
 
 
 def split_lines(text: str) -> list[str]:

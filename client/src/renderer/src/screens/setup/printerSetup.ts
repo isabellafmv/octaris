@@ -1,12 +1,13 @@
 // The printer setup editor on the Setup screen: each syringe's name, axes
 // and offset, checked as the backend checks them (backend/printer.py), so
-// nothing invalid is ever sent, and the bed limits. Pure, for the tests.
+// nothing invalid is ever sent, the bed limits and the steps/mm. Pure, for
+// the tests.
 import type { CustomProfileRequest, PrinterProfile } from '../../types'
 
 // The letters a syringe's height motor or plunger can have: Marlin's axis
-// names except X/Y (the stage) and E (the slicer's extruder). As
-// printer.NOZZLE_AXIS_LETTERS in the backend.
-export const AXIS_LETTERS = ['Z', 'A', 'B', 'C', 'I', 'J', 'K', 'U', 'V', 'W']
+// names except X/Y (the stage) and E (the slicer's extruder), and D (the
+// Printess 2.0's fourth plunger). As printer.NOZZLE_AXIS_LETTERS in the backend.
+export const AXIS_LETTERS = ['Z', 'A', 'B', 'C', 'I', 'J', 'K', 'U', 'V', 'W', 'D']
 // As printer.MAX_NOZZLES
 export const MAX_SYRINGES = 6
 // The profile edited in the app (printer.CUSTOM_PROFILE_ID)
@@ -154,15 +155,35 @@ export function validateBed(bed: BedDraft): BedErrors {
   return errors
 }
 
+// --- steps/mm -----------------------------------------------------------------
+
+// The backend's default (printer.DEFAULT_STEPS_PER_MM)
+const DEFAULT_STEPS_PER_MM = 800
+
+// Steps/mm of every axis, X/Y included, as typed
+export function stepsDraftFrom(profile: PrinterProfile): string {
+  return String(profile.steps_per_mm ?? DEFAULT_STEPS_PER_MM)
+}
+
+// As the backend checks it (PrinterProfile.steps_per_mm): a number above 0
+export function validateSteps(text: string): string | undefined {
+  const steps = parseOffset(text)
+  if (Number.isNaN(steps)) return 'Enter a number'
+  if (steps <= 0) return 'Steps per mm must be above 0'
+  return undefined
+}
+
 // --- the request --------------------------------------------------------------
 
 // The body of PUT /printer/custom. `base`: the profile being edited, which
-// the Custom profile copies its build volume from.
+// the Custom profile copies its build volume from (and its steps/mm, without
+// `steps`).
 export function toRequest(
   drafts: SyringeDraft[],
   offsetsMeasured: boolean,
   base: string,
-  bed: BedDraft
+  bed: BedDraft,
+  steps?: string
 ): CustomProfileRequest {
   const range = (axis: BedAxis): { min: number; max: number } => ({
     min: parseOffset(bed[axis].min),
@@ -179,19 +200,28 @@ export function toRequest(
     })),
     nozzle_offset_measured: offsetsMeasured,
     base,
-    bed: { x: range('x'), y: range('y'), z: range('z') }
+    bed: { x: range('x'), y: range('y'), z: range('z') },
+    ...(steps !== undefined && { steps_per_mm: parseOffset(steps) })
   }
 }
 
-// The drafts, the offsets-measured box or the bed differ from `profile`
+// The drafts, the offsets-measured box, the bed or the steps/mm differ from `profile`
 export function isChanged(
   drafts: SyringeDraft[],
   offsetsMeasured: boolean,
   profile: PrinterProfile,
-  bed: BedDraft
+  bed: BedDraft,
+  steps?: string
 ): boolean {
   if (offsetsMeasured !== (profile.nozzle_offset_measured ?? false)) return true
-  const saved = toRequest(draftsFrom(profile), offsetsMeasured, profile.id, bedDraftFrom(profile))
-  const edited = toRequest(drafts, offsetsMeasured, profile.id, bed)
+  const savedSteps = steps === undefined ? undefined : stepsDraftFrom(profile)
+  const saved = toRequest(
+    draftsFrom(profile),
+    offsetsMeasured,
+    profile.id,
+    bedDraftFrom(profile),
+    savedSteps
+  )
+  const edited = toRequest(drafts, offsetsMeasured, profile.id, bed, steps)
   return JSON.stringify(saved) !== JSON.stringify(edited)
 }

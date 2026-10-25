@@ -53,6 +53,8 @@ export const useTemperature = create<TemperatureState>()((set) => ({
       const now = Date.now() / 1000
       for (const reading of status.sensors) {
         sensors[reading.sensor] = info(reading)
+        // Lab firmware: a disabled channel has no reading to chart
+        if (reading.actual === null) continue
         const h = history[reading.sensor] ?? { timestamps: [], actual: [], target: [] }
         // A status also goes out when only the state changed: same reading
         if (h.timestamps[h.timestamps.length - 1] >= reading.timestamp) continue

@@ -179,6 +179,19 @@ describe('absolute (G90)', () => {
     expect(segments(gcode('G91', 'G1 Z-1'), custom)).toEqual([])
   })
 
+  it("takes D as a plunger like any other (the Printess 2.0's fourth)", () => {
+    const last2: PreviewNozzle[] = [
+      { heightAxis: 'B', plungerAxis: 'W', offsetX: 0, offsetY: 0 },
+      { heightAxis: 'C', plungerAxis: 'D', offsetX: 30, offsetY: 0 }
+    ]
+    const result = segments(gcode('G91', 'G1 B0.3 C0.3', 'G1 X10 W-1 D-1'), last2)
+    expect(result.map((s) => [s.nozzle, s.kind, s.to])).toEqual([
+      ['left', 'travel', [0, 0, expect.closeTo(0.3)]],
+      ['left', 'extrude', [10, 0, expect.closeTo(0.3)]],
+      ['right', 'extrude', [40, 0, expect.closeTo(0.3)]]
+    ])
+  })
+
   it('extrudes with E in raw slicer files (M82 absolute)', () => {
     const result = segments(gcode('M82', 'G1 X10 E1', 'G1 X20 E2', 'G1 X30 E1.5'))
     expect(result.map((s) => s.kind)).toEqual(['extrude', 'extrude', 'travel'])

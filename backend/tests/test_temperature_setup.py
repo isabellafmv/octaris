@@ -12,7 +12,7 @@ import pytest
 
 from backend import serial_manager as serial_module
 from backend import virtual_printer
-from backend.config import ChannelConfig, load_config
+from backend.config import load_config
 from backend.database import init_db
 from backend.main import app, wire
 from backend.schemas import Settings
@@ -54,7 +54,11 @@ async def connect_virtual(client, **options) -> virtual_printer.VirtualPrinter:
 async def set_sensors(client, on: bool) -> None:
     resp = await client.put("/settings", json={"temperature_sensors": on})
     assert resp.status_code == 200
-    assert resp.json() == {"temperature_sensors": on, "temperature_protocol": None}
+    assert resp.json() == {
+        "temperature_sensors": on,
+        "temperature_protocol": None,
+        "temperature_channels": {},
+    }
 
 
 def temperature_commands(printer: virtual_printer.VirtualPrinter) -> list[str]:
@@ -72,10 +76,12 @@ async def test_off_by_default_and_kept_across_restarts(client, data_dir):
     assert (await client.get("/settings")).json() == {
         "temperature_sensors": False,
         "temperature_protocol": None,
+        "temperature_channels": {},
     }
     assert (await client.get("/status")).json()["settings"] == {
         "temperature_sensors": False,
         "temperature_protocol": None,
+        "temperature_channels": {},
     }
 
     await set_sensors(client, True)
@@ -90,6 +96,7 @@ async def test_off_by_default_and_kept_across_restarts(client, data_dir):
     assert (await client.get("/settings")).json() == {
         "temperature_sensors": True,
         "temperature_protocol": None,
+        "temperature_channels": {},
     }
     assert monitor() == "idle"
 
@@ -107,7 +114,12 @@ async def test_change_is_published(client):
     while not events.empty():
         published.append(events.get_nowait())
     app.state.event_bus.unsubscribe(sub_id)
-    assert {"type": "settings", "temperature_sensors": True, "temperature_protocol": None} in published
+    assert {
+        "type": "settings",
+        "temperature_sensors": True,
+        "temperature_protocol": None,
+        "temperature_channels": {},
+    } in published
     status = [e for e in published if e["type"] == "temperature_status"][-1]
     assert (status["state"], status["monitor"]) == ("disconnected", "idle")
 
@@ -322,26 +334,6 @@ async def test_test_sensors_shows_the_reply(client, dev_mode):
         ("C", "Chamber"),
     ]
     assert body["sensors"][0]["actual"] == pytest.approx(21.3, abs=0.5)
-
-
-async def test_test_sensors_shows_the_channels(client, dev_mode):
-    config = app.state.temperature.config
-    config.protocol = "printess"
-    config.channels = [
-        ChannelConfig(index=n, name=f"Heater {n}", reply_key=key)
-        for n, key in enumerate(["T1", "T0", "T3", "T2"])
-    ]
-    await connect_virtual(client, protocol="printess")
-
-    body = (await client.post("/temperature/test")).json()
-
-    assert body["reply"] == "ok T0:21.30 T1:21.10 T2:20.80 T3:21.60"
-    assert [(s["sensor"], s["name"], s["actual"], s["status"]) for s in body["sensors"]] == [
-        ("I0", "Heater 0", 21.1, "off"),
-        ("I1", "Heater 1", 21.3, "off"),
-        ("I2", "Heater 2", 21.6, "off"),
-        ("I3", "Heater 3", 20.8, "off"),
-    ]
 
 
 async def test_test_sensors_without_a_reply(client, dev_mode, monkeypatch):

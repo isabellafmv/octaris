@@ -59,7 +59,7 @@ def test_config_adds_and_selects_a_profile():
     config = Config(printer_profile="one", profiles={"one": LEFT_ONLY})
     assert config.profile.id == "one"
     assert config.profile.nozzle_ids == ["only"]
-    assert set(config.profiles) == {"printess-1", "one"}
+    assert set(config.profiles) == {"printess-1", "printess-2", "one"}
 
 
 @pytest.mark.parametrize(
@@ -114,7 +114,7 @@ async def test_list_profiles(client):
     with_second_profile()
     body = (await client.get("/printer/profiles")).json()
     assert body["selected"] == "printess-1"
-    assert [p["id"] for p in body["profiles"]] == ["printess-1", "one"]
+    assert [p["id"] for p in body["profiles"]] == ["printess-1", "printess-2", "one"]
 
 
 async def test_switching_profile_resets_calibration_checkpoint_and_print(client, printer):
