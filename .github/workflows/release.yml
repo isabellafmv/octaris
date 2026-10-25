@@ -29,7 +29,7 @@ jobs:
         working-directory: client
       # Builds only. To publish the GitHub release electron-updater reads,
       # pass --publish always and set GH_TOKEN (with contents: write).
-      # Unsigned: the runner has no Developer ID certificate (see README,
+      # Unsigned: the runner has no Developer ID certificate (see docs/DEVELOPMENT.md,
       # "Signed macOS build", for building a signed release locally).
       - name: Build
         run: ./build.sh --unsigned --publish never
@@ -68,7 +68,7 @@ jobs:
           pip install -e ".[dev]"
           pytest -q
         working-directory: backend
-      # Fails with a clear message until CuraEngine.exe is committed (see README)
+      # Fails with a clear message until CuraEngine.exe is committed (see docs/DEVELOPMENT.md)
       - name: Build
         run: python build.py --publish never
       - uses: actions/upload-artifact@v4

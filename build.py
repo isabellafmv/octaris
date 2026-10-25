@@ -23,7 +23,7 @@ GitHub release).
 macOS builds are signed with a "Developer ID Application" certificate from the
 keychain (CSC_NAME picks one) and notarized with APPLE_ID,
 APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID; see "Signed macOS build" in the
-README. --unsigned (or OCTARIS_UNSIGNED=1) builds an ad-hoc signed app instead,
+docs/DEVELOPMENT.md. --unsigned (or OCTARIS_UNSIGNED=1) builds an ad-hoc signed app instead,
 for local testing; other Macs only open that after `xattr -cr`.
 
 The installers end up in client/dist/.
@@ -103,9 +103,9 @@ def check_binaries(target: str, names: list[str]) -> None:
         if not path.is_file():
             hint = (
                 "Copy CuraEngine.exe (and the DLLs next to it) from an UltiMaker Cura 5 install, "
-                r"e.g. C:\Program Files\UltiMaker Cura 5.x.x\, into resources\bin\windows\. See README."
+                r"e.g. C:\Program Files\UltiMaker Cura 5.x.x\, into resources\bin\windows\. See docs/DEVELOPMENT.md."
                 if target == "windows"
-                else "See README."
+                else "See docs/DEVELOPMENT.md."
             )
             fail(f"Missing {path.relative_to(ROOT)}. {hint}")
         with path.open("rb") as f:
@@ -119,7 +119,7 @@ def check_load_paths(bin_dir: Path) -> None:
     """Fail on a binary that loads a library from outside the app: a library
     path or rpath that is absolute and not the system's. A CuraEngine built
     with conan points into ~/.conan2, which works only on the Mac that built
-    it (see README)."""
+    it (see docs/DEVELOPMENT.md)."""
     for path in sorted(bin_dir.iterdir()):
         if not path.is_file() or macho_kind(path) is None:
             continue
@@ -136,7 +136,7 @@ def check_load_paths(bin_dir: Path) -> None:
             fail(
                 f"{path.relative_to(ROOT)} loads libraries from outside the app:\n    "
                 + "\n    ".join(outside)
-                + "\n  Copy them next to it and use @executable_path / @loader_path (see README)."
+                + "\n  Copy them next to it and use @executable_path / @loader_path (see docs/DEVELOPMENT.md)."
             )
 
 
@@ -167,7 +167,7 @@ def find_identity() -> tuple[str, str]:
             f"Need exactly one '{DEVELOPER_ID.rstrip(':')}' certificate"
             + (f" matching CSC_NAME={wanted!r}" if wanted else "")
             + f", found:\n{found}\n"
-            "  Install it in the login keychain (see README, 'Signed macOS build'), set CSC_NAME\n"
+            "  Install it in the login keychain (see docs/DEVELOPMENT.md, 'Signed macOS build'), set CSC_NAME\n"
             "  to choose between several, or build unsigned with --unsigned."
         )
     return identities[0]
@@ -291,7 +291,7 @@ def main() -> None:
         print(f"Signing as: {identity_name}")
         missing = [name for name in NOTARY_ENV if not os.environ.get(name)]
         if missing:
-            fail(f"Set {', '.join(missing)} to notarize (see README), or build unsigned with --unsigned.")
+            fail(f"Set {', '.join(missing)} to notarize (see docs/DEVELOPMENT.md), or build unsigned with --unsigned.")
         # The exact certificate, so electron-builder can't pick another one
         builder_env["CSC_NAME"] = identity
     elif mac:
