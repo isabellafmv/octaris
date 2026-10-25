@@ -3,7 +3,8 @@ import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, execFileSync, ChildProcess } from 'child_process'
+import { readFileSync, writeFileSync, rmSync } from 'fs'
 import icon from '../../resources/icon.png?asset'
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,76 @@ function getBackendPath(): string {
   return join(resourcesPath, 'backend', 'octaris-backend', executable)
 }
 
-function startBackend(): void {
+// The backend this app started, so the next launch can find it if this one
+// ends without stopping it (crash, force quit): {"pid": 123, "path": "..."}
+function pidFilePath(): string {
+  return join(app.getPath('userData'), 'backend.pid')
+}
+
+/** The executable `pid` runs, or null if there is no such process. */
+function processExecutable(pid: number): string | null {
+  try {
+    if (process.platform === 'win32') {
+      // "octaris-backend.exe","1234",... (the image name only, no path)
+      const row = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+        encoding: 'utf8',
+        windowsHide: true
+      })
+      return row.startsWith('"') ? row.split('"')[1] : null
+    }
+    return (
+      execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).trim() || null
+    )
+  } catch {
+    return null // ps exits with an error when the process doesn't exist
+  }
+}
+
+/**
+ * Stop a backend an earlier launch started and didn't stop (it crashed or
+ * was force-quit). It would hold the port, and the printer's serial port,
+ * with a token this launch doesn't know. Its PID comes from the PID file,
+ * and it is only stopped if that PID still runs the backend executable (PIDs
+ * get reused). SIGTERM lets uvicorn close the serial port; on Windows,
+ * kill() terminates it outright.
+ */
+async function stopStaleBackend(backendPath: string): Promise<void> {
+  let stale: { pid: number; path: string }
+  try {
+    stale = JSON.parse(readFileSync(pidFilePath(), 'utf8'))
+  } catch {
+    return // no PID file: the last backend was stopped normally
+  }
+  rmSync(pidFilePath(), { force: true })
+  const running = processExecutable(stale.pid)
+  const ours =
+    running !== null &&
+    (process.platform === 'win32'
+      ? running.toLowerCase() === 'octaris-backend.exe'
+      : running === stale.path || running === backendPath)
+  if (!ours) return
+
+  console.log(`[main] Stopping a backend left over from an earlier launch (pid ${stale.pid})`)
+  try {
+    process.kill(stale.pid, 'SIGTERM')
+  } catch {
+    return
+  }
+  const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS
+  while (Date.now() < deadline && processExecutable(stale.pid) !== null) {
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  if (processExecutable(stale.pid) !== null) {
+    console.log('[main] Leftover backend did not exit in time, killing it')
+    try {
+      process.kill(stale.pid, 'SIGKILL')
+    } catch {
+      // exited just now
+    }
+  }
+}
+
+async function startBackend(): Promise<void> {
   if (is.dev) {
     // In development, assume the backend is started manually
     console.log('[main] Dev mode — skipping backend spawn (start it manually)')
@@ -34,6 +104,7 @@ function startBackend(): void {
   }
 
   const backendPath = getBackendPath()
+  await stopStaleBackend(backendPath)
   console.log(`[main] Starting backend: ${backendPath}`)
 
   backendProcess = spawn(backendPath, [], {
@@ -42,6 +113,10 @@ function startBackend(): void {
     windowsHide: true,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', OCTARIS_TOKEN: AUTH_TOKEN }
   })
+  const proc = backendProcess
+  if (proc.pid !== undefined) {
+    writeFileSync(pidFilePath(), JSON.stringify({ pid: proc.pid, path: backendPath }))
+  }
 
   backendProcess.stdout?.on('data', (data) => {
     console.log(`[backend] ${data.toString().trimEnd()}`)
@@ -53,7 +128,8 @@ function startBackend(): void {
 
   backendProcess.on('exit', (code, signal) => {
     console.log(`[main] Backend exited: code=${code} signal=${signal}`)
-    backendProcess = null
+    rmSync(pidFilePath(), { force: true })
+    if (backendProcess === proc) backendProcess = null
   })
 }
 
@@ -93,8 +169,15 @@ async function stopBackend(): Promise<void> {
 async function waitForBackend(timeoutMs = 15000): Promise<boolean> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
+    if (backendProcess === null) {
+      // Exited before it was ready, e.g. because another program has the port
+      console.error('[main] Backend exited during startup')
+      return false
+    }
     try {
-      const response = await fetch(`${BACKEND_URL}/`)
+      // A route that needs this launch's token: a server on the port that
+      // doesn't know it (not the backend this launch started) answers 401
+      const response = await backendRequest('/status', {}, 2000)
       if (response.ok) {
         console.log('[main] Backend is ready')
         return true
@@ -198,7 +281,7 @@ app.whenReady().then(async () => {
   ipcMain.on('ping', () => console.log('pong'))
 
   // Start the backend
-  startBackend()
+  await startBackend()
 
   // Wait for backend before showing the window
   if (!is.dev) {
@@ -206,7 +289,8 @@ app.whenReady().then(async () => {
     if (!ready) {
       dialog.showErrorBox(
         'Octaris Backend Error',
-        'The backend failed to start. Please check the logs and try again.'
+        `The backend failed to start. Is another program using port ${BACKEND_PORT}? ` +
+          'Please check the logs and try again.'
       )
       app.quit()
       return

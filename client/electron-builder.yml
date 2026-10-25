@@ -24,7 +24,22 @@ asarUnpack:
   - resources/**
 
 mac:
-  identity: null              # skip code signing (run xattr -cr on the .app to open)
+  # Signed with the "Developer ID Application" certificate in the login
+  # keychain (electron-builder finds it; set CSC_NAME to pick one, e.g. the
+  # SHA-1 hash `security find-identity -v -p codesigning` prints). Build with
+  # build.py, not `npm run build:mac` directly: build.py signs the backend
+  # first (see signIgnore), notarizes and staples the .dmg and checks the
+  # result. `build.py --unsigned` builds an ad-hoc signed app for local tests.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  # build.py has already signed the PyInstaller backend and CuraEngine with
+  # their own (smaller) entitlements; don't re-sign them with Electron's
+  signIgnore:
+    - /Contents/Resources/backend/
+  # Uses APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID from the
+  # environment; skipped (with a warning) when they aren't set
+  notarize: true
   target:
     - target: dmg
       arch:
@@ -35,7 +50,6 @@ mac:
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's camera for vision calibration.
-  notarize: false
 
 dmg:
   artifactName: Octaris-${version}-mac.${ext}

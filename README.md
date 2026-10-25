@@ -9,7 +9,9 @@ Grab the latest release from [Releases](../../releases): the `.dmg` for macOS (A
 
 ### macOS
 
-After installing, open Terminal and run:
+Open the `.dmg` and drag Octaris into Applications. Signed releases (see [Signed macOS build](#signed-macos-build)) then open with a double-click.
+
+An unsigned build (e.g. one built by CI) is blocked by macOS until you open Terminal and run:
 
 ```bash
 xattr -cr /Applications/Octaris.app
@@ -364,10 +366,74 @@ python build.py        # or ./build.sh on macOS
 
 This builds the Python backend into a standalone folder with PyInstaller, then packages everything with electron-builder: a `.dmg` and `.zip` on macOS, an NSIS installer (`Octaris-<version>-win-setup.exe`) on Windows. Each OS builds its own app; there's no cross-building. Output is in `client/dist/`. Arguments are passed on to electron-builder (e.g. `python build.py --publish never`).
 
+On macOS the build is signed and notarized unless you pass `--unsigned`; see [Signed macOS build](#signed-macos-build).
+
 The build bundles CuraEngine from `resources/bin/<target>/` and stops with an error if it's missing:
 
-- macOS: `resources/bin/macos/CuraEngine` and `UltiMaker-Cura` (in the repository).
+- macOS: `resources/bin/macos/CuraEngine` and `UltiMaker-Cura`, plus the libraries CuraEngine loads from its own folder: `libArcus.dylib`, `libpolyclipping.22.dylib`, `libtbb.12.dylib`, `libtbbmalloc.2.dylib`, `libtbbmalloc_proxy.2.dylib` (all in the repository). The build also stops if one of them loads a library from an absolute path outside macOS itself. A CuraEngine built with conan does that (its rpaths point into `~/.conan2`, so it only runs on the Mac that built it). When you replace it, copy its non-system libraries (`otool -L CuraEngine`) next to it, then:
+
+  ```bash
+  cd resources/bin/macos
+  otool -l CuraEngine | awk '/LC_RPATH/{getline;getline;print $2}' | xargs -I{} install_name_tool -delete_rpath {} CuraEngine
+  install_name_tool -add_rpath @executable_path CuraEngine
+  codesign --force --sign - CuraEngine     # install_name_tool invalidates the signature
+  ```
 - Windows: `resources/bin/windows/CuraEngine.exe` is **not** in the repository yet. Copy `CuraEngine.exe` from an UltiMaker Cura 5 install (`C:\Program Files\UltiMaker Cura 5.x.x\`) into `resources\bin\windows\`, together with any DLLs it needs from that folder (`CuraEngine.exe --help` from a plain command prompt in `resources\bin\windows\` should run). Commit it through Git LFS (already set up in `.gitattributes` for `resources/bin/**`) so the tag build on CI can bundle it; until then that job fails at this check.
+
+
+### Signed macOS build
+
+A signed, notarized and stapled `.dmg` opens on any Mac with a double-click, with no warning and no `xattr`. `build.py` signs every binary in the app (Electron, the PyInstaller backend, CuraEngine) with your Developer ID, the hardened runtime and a secure timestamp, has Apple notarize the app and the `.dmg`, staples the tickets, and checks the result.
+
+**One-time setup**
+
+1. **Certificate.** In Xcode → Settings → Accounts → (your Apple ID) → Manage Certificates → **+** → *Developer ID Application*, or create it at [developer.apple.com/account/resources/certificates](https://developer.apple.com/account/resources/certificates) and double-click the downloaded `.cer` (the private key has to be in the same keychain). Check:
+
+   ```bash
+   security find-identity -v -p codesigning
+   # 2) F797E8…  "Developer ID Application: Your Name (ABCDE12345)"
+   ```
+
+   With several Developer ID certificates, set `CSC_NAME` to the one to use: its SHA-1 hash or the part after `Developer ID Application: `.
+2. **App-specific password.** At [account.apple.com](https://account.apple.com) → Sign-In and Security → App-Specific Passwords, create one (e.g. "Octaris notarization"). It's shown once; keep it in your password manager.
+3. **Team ID.** The 10 characters in brackets after your name in the certificate (above), also under Membership details at [developer.apple.com/account](https://developer.apple.com/account).
+
+**Build**
+
+The three values come from the environment, never from the repository:
+
+```bash
+export APPLE_ID="you@example.com"                  # your Apple Developer account
+export APPLE_APP_SPECIFIC_PASSWORD="abcd-efgh-ijkl-mnop"
+export APPLE_TEAM_ID="ABCDE12345"
+./build.sh --publish never
+```
+
+(To keep the password out of your shell history, put the exports in a file outside the repository and `source` it, or `read -s APPLE_APP_SPECIFIC_PASSWORD; export APPLE_APP_SPECIFIC_PASSWORD`.)
+
+Notarization adds a few minutes (two submissions: the app, then the `.dmg`). The build stops with an error if the certificate or one of the variables is missing, if Apple rejects a submission (the notary log is printed), or if a check fails.
+
+**Check the result**
+
+At the end the build prints and checks:
+
+```bash
+codesign --verify --deep --strict --verbose=2 client/dist/mac-arm64/Octaris.app   # "valid on disk", "satisfies its Designated Requirement"
+spctl -a -vv -t exec client/dist/mac-arm64/Octaris.app                            # "accepted", "source=Notarized Developer ID"
+xcrun stapler validate client/dist/Octaris-<version>-mac.dmg                      # "The validate action worked!"
+```
+
+The real test is another Mac: download the `.dmg` from where you share it (so it gets the quarantine flag), drag Octaris to Applications and double-click it. It should open without a warning, connect to the printer and slice.
+
+If you publish a release, upload the `.dmg` from `client/dist/` after the build: with `--publish always` electron-builder uploads it before `build.py` has notarized and stapled it.
+
+**Unsigned build for local testing**
+
+```bash
+./build.sh --unsigned        # or OCTARIS_UNSIGNED=1 ./build.sh
+```
+
+No certificate or Apple ID needed. The app gets an ad-hoc signature (no hardened runtime, not notarized): it runs on the Mac that built it, and on other Macs only after `xattr -cr /Applications/Octaris.app`. CI builds this way.
 
 ---
 
