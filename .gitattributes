@@ -6,3 +6,4 @@ resources/bin/**/.gitkeep !filter !diff !merge !text
 # are migrated deliberately. Remove these lines when doing that migration.
 resources/bin/macos/CuraEngine !filter !diff !merge !text
 resources/bin/macos/UltiMaker-Cura !filter !diff !merge !text
+resources/bin/windows/* !filter !diff !merge !text

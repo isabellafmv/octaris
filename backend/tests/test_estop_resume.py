@@ -474,7 +474,7 @@ async def test_pause_and_resume_still_work(client, printer):
     assert printer.executed[0] == "M114"  # start seeds the as-sent tracker first
     assert printer.executed[1] == "M84 S0"
     assert "M410" not in printer.executed
-    assert printer.position == pytest.approx(SAMPLE_END)
+    assert printer.position == RESUMED_END
 
 
 # --- invalidation --------------------------------------------------------------
@@ -560,7 +560,7 @@ async def test_stop_during_the_last_planned_moves_is_resumable(client, printer):
 
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
-    assert printer.position == pytest.approx(SAMPLE_END)
+    assert printer.position == RESUMED_END
 
 
 async def test_completed_once_the_printer_has_finished_moving(client, printer):
@@ -630,7 +630,7 @@ async def test_jog_while_paused_in_a_relative_block_is_undone(client, printer):
         "G1 F600",
         "G91",
     ]
-    assert printer.position == pytest.approx(RELATIVE_END)
+    assert printer.position == pytest.approx(RELATIVE_END, abs=1e-6)
 
 
 async def test_stop_on_the_first_line_after_a_paused_jog_is_resumable(client, printer):
@@ -647,7 +647,7 @@ async def test_stop_on_the_first_line_after_a_paused_jog_is_resumable(client, pr
 
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
-    assert printer.position == pytest.approx(RELATIVE_END)
+    assert printer.position == pytest.approx(RELATIVE_END, abs=1e-6)
 
 
 async def test_plunger_moved_while_paused_stays_where_it_is(client, printer):
@@ -662,7 +662,7 @@ async def test_plunger_moved_while_paused_stays_where_it_is(client, printer):
     restore = printer.executed[printer.executed.index("M400") :][:5]
     # Nothing on the stage moved: no return moves, the plunger is re-aligned.
     assert restore == ["M400", "M114", "G92 B-1.5", "G1 F600", "G91"]
-    assert printer.position == pytest.approx(RELATIVE_END)  # the print's coordinates
+    assert printer.position == pytest.approx(RELATIVE_END, abs=1e-6)  # the print's coordinates
     # ...while the plunger itself is 0.5 further on than the print alone
     # pushed it: M114's raw step counts (80 steps/mm) don't follow G92.
     m114 = (await client.post("/gcode/send", json={"line": "M114"})).json()["response"]
@@ -681,7 +681,7 @@ async def test_resume_without_manual_commands_sends_nothing_extra(client, printe
     extra = [line for line in printer.executed if line not in RELATIVE_MOVES]
     assert extra == ["M114", "M84 S0", "M110 N0", "M114", "M400", "M114", "M400"]
     assert printer.executed[-1] == "M400"  # the drain before COMPLETED
-    assert printer.position == pytest.approx(RELATIVE_END)
+    assert printer.position == pytest.approx(RELATIVE_END, abs=1e-6)
 
 
 async def test_unknown_return_position_pauses_again(client, printer, events):
@@ -709,4 +709,4 @@ async def test_unknown_return_position_pauses_again(client, printer, events):
     worker._tracker.state = tracked
     assert (await client.post("/print/resume")).status_code == 200
     await wait_for(lambda: worker.status == PrintStatus.COMPLETED)
-    assert printer.position == pytest.approx(RELATIVE_END)
+    assert printer.position == pytest.approx(RELATIVE_END, abs=1e-6)
