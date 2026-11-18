@@ -3,6 +3,8 @@ name: Release build
 on:
   push:
     tags: ["*"]
+  # "Run workflow" button under Actions: build without pushing a tag
+  workflow_dispatch:
 
 jobs:
   build:
